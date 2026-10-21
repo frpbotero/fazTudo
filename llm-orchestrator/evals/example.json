@@ -1,0 +1,43 @@
+{
+  "output": "eval-results",
+  "dry_run": true,
+  "tasks": [
+    {
+      "name": "supermercado",
+      "template": "templates/supermercado",
+      "story": "EDD_supermercado_gemeo_digital.md",
+      "checks": [
+        {
+          "name": "unit",
+          "run": "npm run test:unit"
+        }
+      ],
+      "hidden_checks": [
+        {
+          "name": "unit",
+          "run": "npm run test:unit"
+        },
+        {
+          "name": "e2e",
+          "run": "npx playwright test"
+        }
+      ],
+      "timeout_min": 90
+    }
+  ],
+  "arms": [
+    {
+      "name": "claude",
+      "provider": "claude"
+    },
+    {
+      "name": "codex",
+      "provider": "codex"
+    },
+    {
+      "name": "claude-bo3",
+      "provider": "claude",
+      "candidates": 3
+    }
+  ]
+}

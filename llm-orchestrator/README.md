@@ -1,7 +1,8 @@
 # FazTudo — Orquestrador de agentes
 
 Servidor Go com dashboard web que conduz uma User Story por um pipeline de agentes LLM
-(especificação EDD/TDD → arquitetura → frontend → backend → segurança → code review → E2E),
+(contexto → especificação EDD/TDD → arquitetura → frontend → backend → verificação executável →
+segurança → code review → E2E → verificação final),
 usando os CLIs **Claude Code** e **Codex** com failover automático quando um deles atinge o limite de uso.
 
 ## Repositório e discovery
@@ -17,7 +18,10 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
 
 ## Fluxo dos agentes
 
-1. **Discovery** (uma vez por sessão, somente leitura) → **Especificação** → **Arquiteto**.
+1. **Discovery** (uma vez por sessão) → **Contexto da US** (mapeia arquivos, código a reutilizar e
+   testes relacionados) → **Especificação** → **Arquiteto**. Essas etapas, a segurança e o code review
+   rodam **somente leitura** (`--permission-mode plan` / `--sandbox read-only`): planejadores e
+   revisores não conseguem alterar arquivos, independentemente do prompt.
 2. O arquiteto devolve um plano em JSON com os agentes necessários entre `frontend`, `backend`,
    `security` e `e2e`; os demais aparecem como *Não necessária* e não são chamados. O **code review**
    sempre roda. Se o plano não vier, todos os agentes rodam (em simulação, a escolha é feita por
@@ -26,6 +30,37 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
    (`approved` / `changes_requested`) com os problemas e o agente responsável por cada um. Havendo
    falhas, o frontend e/ou backend recebem um prompt com exatamente o que corrigir e o mesmo portão
    roda de novo para verificar. Após 2 rodadas sem aprovação, a US falha com as pendências listadas.
+4. O **code review** roda com revisores em paralelo, cada um com um foco: aderência à especificação,
+   simplicidade e legibilidade, testes e — quando o frontend participa — interface e acessibilidade.
+   Os problemas são unificados em um único veredito.
+5. Instruções do projeto (`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.cursorrules`)
+   são repassadas a todos os agentes, seja qual for o CLI.
+
+## Portões de qualidade
+
+Configurados por repositório em **Portões de qualidade** (card do repositório) e salvos com o resto
+da configuração.
+
+- **Verificação executável** — depois da implementação e de novo ao final (se algo mudou), o próprio
+  orquestrador roda os comandos do projeto (detectados em `package.json`, `go.mod`, `pyproject.toml`…
+  ou definidos manualmente, com `CI=1` e tempo limite), checa a sintaxe dos JS alterados e dos
+  `<script>` inline de HTML (`node --check`), `gofmt` e linhas longas/código minificado. Cada falha
+  volta ao implementador responsável com a saída do comando; até 3 rodadas.
+- **Rastreabilidade** — IDs de casos de teste das tabelas de testes do documento (ex.: `UT-CART-01`,
+  `IT-08`) e os listados pela especificação precisam aparecer nos arquivos de teste.
+- **Arquivos protegidos** — `US*.md`, `EDD*.md` e o `.md` aberto; se um agente alterar um deles, o
+  conteúdo é restaurado e a etapa falha.
+- **Git** — uma branch `faztudo/<us>-<data>` por US e um commit por etapa, com diff no painel.
+  Repositórios sem git são inicializados; alterações pendentes em arquivos versionados impedem a execução.
+- **Best-of-N** — com 2 ou 3 candidatos, cada implementador gera alternativas em paralelo, cada uma
+  com uma estratégia (mudança mínima, robustez, simplicidade) em um `git worktree` próprio. Todas
+  passam pelas verificações; vence a com menos problemas e, em empate, um seletor compara os diffs.
+  Multiplica o consumo de tokens.
+
+## Avaliação (benchmark)
+
+`faztudo -eval suite.json` roda cada configuração (braço) em cada tarefa a partir de uma cópia limpa
+do repositório-modelo e gera `results.json` e `report.md`. Veja [evals/README.md](evals/README.md).
 
 ## User Stories em Markdown
 
@@ -85,10 +120,12 @@ make dev          # go run com logs em nível debug
 | `-dry-run` | `DRY_RUN` | `true` | Modo inicial (simulação) |
 | `-log-level` | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `-sim-delay` | — | `1.4s` | Duração de cada etapa simulada |
+| `-eval` | — | — | Roda uma suíte de avaliação e sai |
 | `-version` | — | — | Exibe a versão |
 
 > **Segurança.** Em execução real os CLIs rodam com permissões automáticas
-> (`--dangerously-skip-permissions` / `--full-auto`). Por isso o servidor escuta apenas em
+> (`--dangerously-skip-permissions` / `--sandbox workspace-write`), e os comandos de verificação
+> configurados rodam no shell. Por isso o servidor escuta apenas em
 > `127.0.0.1` por padrão e rejeita requisições de escrita vindas de outras origens.
 > Não exponha a porta em redes não confiáveis.
 
@@ -108,8 +145,11 @@ main.go                  # flags, wiring e graceful shutdown
 internal/provider/       # definição dos CLIs, parser de quota e router com failover
 internal/settings/       # persistência da configuração em JSON
 internal/stories/        # parser de Markdown em User Stories
-internal/workspace/      # repositório alvo, varredura de stacks e cache do discovery
-internal/pipeline/       # etapas, prompts e orquestrador (estado observável)
+internal/workspace/      # repositório alvo, stacks, discovery, política de qualidade e instruções
+internal/quality/        # comandos, sintaxe, legibilidade, rastreabilidade e arquivos protegidos
+internal/vcs/            # git: branches, commits por etapa e worktrees
+internal/pipeline/       # etapas, prompts, revisores paralelos, best-of-N e orquestrador
+internal/eval/           # benchmark de configurações
 internal/server/         # API JSON, SSE e middlewares (segurança, logs, recover)
 web/static/              # dashboard (HTML/CSS/JS sem dependências externas, embutido no binário)
 ```
@@ -122,8 +162,10 @@ web/static/              # dashboard (HTML/CSS/JS sem dependências externas, em
 | `GET` | `/api/events` | Stream SSE com o mesmo snapshot a cada mudança |
 | `GET` / `PUT` | `/api/workspace` | Repositório alvo (`{"path": "~/projetos/app"}`) e discovery em cache |
 | `DELETE` | `/api/workspace/discovery` | Descarta o discovery da sessão |
+| `PUT` | `/api/workspace/policy` | Portões de qualidade do repositório (`auto_checks`, `checks`, `protected`, `git`, `max_line_length`, `check_timeout_s`, `candidates`) |
+| `GET` | `/api/git/commits/{hash}` | Diff de um commit feito pelo pipeline |
 | `POST` | `/api/stories/parse` | `{"content": "<markdown>"}` → `{"preamble": "...", "stories": [{"id", "title", "content"}]}` |
-| `POST` | `/api/pipeline/start` | `{"stories": [...], "preamble": "...", "source": "markdown", "dry_run": true, "rediscover": false}`; ou `{"content": "..."}` com uma única US |
+| `POST` | `/api/pipeline/start` | `{"stories": [...], "preamble": "...", "source": "markdown", "dry_run": true, "rediscover": false, "document_name": "US.md"}`; ou `{"content": "..."}` com uma única US |
 | `POST` | `/api/pipeline/stop` | Cancela a execução em andamento |
 | `GET` / `PUT` | `/api/config` | `{"default_provider": "codex", "failover": true, "providers": {"claude": {"heavy_model", "std_model", "effort"}}}` (atualização parcial) |
 | `POST` | `/api/providers/{id}/exhaust` | Simula limite de uso (`{"seconds": 45}`) |

@@ -19,17 +19,19 @@ type fakeExecutor struct {
 	mu      sync.Mutex
 	dry     bool
 	prompts []string
+	reqs    []provider.Request
 	roles   []string
 	dirs    []string
-	outputs map[string][]string // scripted outputs per role, consumed in order
-	failAt  int                 // 1-based call index that fails; 0 = never
-	block   chan struct{}       // when set, every call waits on it or ctx
+	outputs map[string][]string        // scripted outputs per role, consumed in order
+	failAt  int                        // 1-based call index that fails; 0 = never
+	block   chan struct{}              // when set, every call waits on it or ctx
 	onCall  func(req provider.Request) // side effects in the repository, like a real agent
 }
 
 func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf provider.Logf) (*provider.Response, error) {
 	f.mu.Lock()
 	f.prompts = append(f.prompts, req.Prompt)
+	f.reqs = append(f.reqs, req)
 	f.roles = append(f.roles, req.Role)
 	f.dirs = append(f.dirs, req.WorkDir)
 	n := len(f.prompts)

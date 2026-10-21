@@ -26,6 +26,9 @@ type Policy struct {
 	MaxLineLength int `json:"max_line_length"`
 	// CheckTimeoutS bounds each command.
 	CheckTimeoutS int `json:"check_timeout_s"`
+	// Candidates is how many alternative implementations each implementer
+	// produces (best-of-N, in separate git worktrees); 1 disables it.
+	Candidates int `json:"candidates"`
 }
 
 const (
@@ -36,6 +39,7 @@ const (
 	maxLineLength   = 1000
 	minCheckTimeout = 10
 	maxCheckTimeout = 3600
+	maxCandidates   = 3
 )
 
 // DefaultPolicy is used for repositories without saved settings.
@@ -47,6 +51,7 @@ func DefaultPolicy() Policy {
 		Git:           true,
 		MaxLineLength: 160,
 		CheckTimeoutS: 600,
+		Candidates:    1,
 	}
 }
 
@@ -58,6 +63,9 @@ func (p Policy) Normalize() Policy {
 	}
 	if p.CheckTimeoutS == 0 {
 		p.CheckTimeoutS = def.CheckTimeoutS
+	}
+	if p.Candidates == 0 {
+		p.Candidates = def.Candidates
 	}
 	checks := make([]quality.Command, 0, len(p.Checks))
 	for _, c := range p.Checks {
@@ -92,6 +100,8 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("o limite de linha deve estar entre %d e %d", minLineLength, maxLineLength)
 	case p.CheckTimeoutS < minCheckTimeout || p.CheckTimeoutS > maxCheckTimeout:
 		return fmt.Errorf("o tempo limite deve estar entre %d e %d segundos", minCheckTimeout, maxCheckTimeout)
+	case p.Candidates < 1 || p.Candidates > maxCandidates:
+		return fmt.Errorf("o número de candidatos deve estar entre 1 e %d", maxCandidates)
 	case !p.AutoChecks && len(p.Checks) == 0:
 		return errors.New("informe ao menos um comando ou use os detectados automaticamente")
 	}

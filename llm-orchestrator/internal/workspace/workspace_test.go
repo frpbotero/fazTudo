@@ -95,3 +95,16 @@ func TestResolveRejectsInvalidPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestReadInstructions(t *testing.T) {
+	root := t.TempDir()
+	if ReadInstructions(root) != "" {
+		t.Fatal("no instruction files must yield empty text")
+	}
+	write(t, root, "AGENTS.md", "Use tabs.")
+	write(t, root, ".github/copilot-instructions.md", "Sem dependências novas.")
+	got := ReadInstructions(root)
+	if !strings.Contains(got, "### AGENTS.md\n\nUse tabs.") || !strings.Contains(got, "Sem dependências novas.") {
+		t.Fatalf("instructions = %q", got)
+	}
+}

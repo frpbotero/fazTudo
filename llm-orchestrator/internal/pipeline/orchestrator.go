@@ -83,6 +83,8 @@ type Step struct {
 	// Checks and Findings are the results of an executable gate.
 	Checks   []quality.Result  `json:"checks,omitempty"`
 	Findings []quality.Finding `json:"findings,omitempty"`
+	// Candidates are the alternatives compared by best-of-N.
+	Candidates []Candidate `json:"candidates,omitempty"`
 	// Commit records the changes the step made, when git is enabled.
 	Commit     *vcs.Commit `json:"commit,omitempty"`
 	Error      string      `json:"error,omitempty"`
@@ -301,6 +303,8 @@ type session struct {
 	guard  *quality.Guard
 	git    *vcs.Repo
 	report *workspace.Report
+	// instructions are the repository's agent instruction files.
+	instructions string
 }
 
 func (ss *session) rules() rules {
@@ -328,6 +332,9 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 		return
 	}
 	ss.report = report
+	if ss.policy.Candidates > 1 && !ss.dry && ss.git == nil {
+		o.logf(LevelWarn, "Best-of-N precisa de git; cada implementador fará uma única implementação.")
+	}
 
 	total := len(opts.Stories)
 	for si, story := range opts.Stories {
@@ -342,7 +349,7 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 			started: started,
 			sc: storyContext{
 				Preamble: opts.Preamble, Story: story, Delivered: opts.Stories[:si],
-				Position: si + 1, Total: total, Rules: ss.rules(),
+				Position: si + 1, Total: total, Rules: ss.rules(), Instructions: ss.instructions,
 			},
 		}
 		if !o.developStory(ctx, ss, st) {
@@ -362,7 +369,10 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 // commits never mix with the user's pending changes.
 func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptions) (*session, bool) {
 	policy := o.ws.Policy()
-	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks()}
+	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
+	if ss.instructions != "" {
+		o.logf(LevelInfo, "Instruções do projeto (AGENTS.md/CLAUDE.md) repassadas a todos os agentes.")
+	}
 
 	patterns := policy.Protected
 	if name := path.Base(filepath.ToSlash(strings.TrimSpace(opts.DocumentName))); name != "." && name != "/" {
@@ -424,13 +434,24 @@ func (o *Orchestrator) developStory(ctx context.Context, ss *session, st *storyS
 			continue
 		}
 
-		resp, ok := o.runStage(ctx, ref, provider.Request{
-			Role:    stage.Role,
-			System:  stage.System,
-			Prompt:  buildPrompt(stage, st.sc, ss.report, o.stepsBefore(ref)),
-			Tier:    stage.Tier,
-			WorkDir: ss.repo,
-		})
+		var resp *provider.Response
+		var ok bool
+		lenses := activeLenses(stage.Lenses, st.plan)
+		switch {
+		case len(lenses) > 1:
+			resp, ok = o.runLenses(ctx, ss, st, stage, lenses, ref)
+		case stage.Implementer && ss.policy.Candidates > 1 && ss.git != nil && !ss.dry:
+			resp, ok = o.runCandidates(ctx, ss, st, stage, ref)
+		default:
+			resp, ok = o.runStage(ctx, ref, provider.Request{
+				Role:     stage.Role,
+				System:   stage.System,
+				Prompt:   buildPrompt(stage, st.sc, ss.report, o.stepsBefore(ref)),
+				Tier:     stage.Tier,
+				WorkDir:  ss.repo,
+				ReadOnly: stage.ReadOnly,
+			})
+		}
 		if !ok || !o.afterAgent(ctx, ss, st, ref) {
 			return false
 		}
@@ -444,11 +465,12 @@ func (o *Orchestrator) developStory(ctx context.Context, ss *session, st *storyS
 		case stage.Gate:
 			recheck := func(ctx context.Context, ref stepRef, issues []Issue, fixes []Step, round int) (evaluation, bool) {
 				resp, ok := o.runStage(ctx, ref, provider.Request{
-					Role:    stage.Role,
-					System:  stage.System,
-					Prompt:  buildVerifyPrompt(stage, st.sc, ss.report, issues, fixes, round),
-					Tier:    stage.Tier,
-					WorkDir: ss.repo,
+					Role:     stage.Role,
+					System:   stage.System,
+					Prompt:   buildVerifyPrompt(stage, st.sc, ss.report, issues, fixes, round),
+					Tier:     stage.Tier,
+					WorkDir:  ss.repo,
+					ReadOnly: stage.ReadOnly,
 				})
 				if !ok || !o.afterAgent(ctx, ss, st, ref) {
 					return evaluation{}, false

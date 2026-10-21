@@ -33,6 +33,62 @@ type Stage struct {
 	// Verifier stages call no model: the orchestrator runs the project's
 	// commands and static checks, and failures go back to the implementers.
 	Verifier bool
+	// ReadOnly stages run the CLI in a mode that cannot change files, so
+	// planners and reviewers are kept from editing by the toolset, not only
+	// by the prompt.
+	ReadOnly bool
+	// Lenses split the stage into parallel reviews, each with its own focus;
+	// their verdicts are merged.
+	Lenses []Lens
+}
+
+// Lens is one focus of a parallel review.
+type Lens struct {
+	ID    string
+	Title string
+	Focus string
+	// Requires names an agent the plan must include for the lens to run.
+	Requires string
+}
+
+// reviewLenses are the perspectives of the code review, run in parallel.
+var reviewLenses = []Lens{
+	{
+		ID:    "spec",
+		Title: "Aderência à especificação",
+		Focus: "Cada requisito, critério de aceitação, contrato, estado e código de erro da US/EDD foi implementado exatamente como especificado? " +
+			"Defenda o usuário: aponte todo requisito ausente, parcial ou alterado.",
+	},
+	{
+		ID:    "simplicity",
+		Title: "Simplicidade e legibilidade",
+		Focus: "Código mínimo e legível: duplicação, código morto, funções longas, nomes ruins, abstrações ou try/catch desnecessários, " +
+			"código existente que deveria ter sido reutilizado e qualquer trecho minificado ou compactado.",
+	},
+	{
+		ID:    "tests",
+		Title: "Testes",
+		Focus: "Os testes cobrem cada critério de aceitação e caso de teste da especificação, com o ID no nome? " +
+			"Aponte expectativas que contrariam a especificação, testes frágeis e testes que não verificam nada.",
+	},
+	{
+		ID:    "ux",
+		Title: "Interface e acessibilidade",
+		Focus: "Acessibilidade (WCAG 2.2 AA: rótulos, foco, ARIA válido, contraste), responsividade no celular, elementos sobrepondo controles, " +
+			"estados de carregamento, erro e vazio, e consistência visual.",
+		Requires: "frontend",
+	},
+}
+
+// activeLenses returns the lenses whose required agent the plan selected.
+func activeLenses(lenses []Lens, plan Plan) []Lens {
+	var out []Lens
+	for _, l := range lenses {
+		if l.Requires == "" || plan.Includes(l.Requires) {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 const planInstructions = "\n\nAo final da resposta, inclua obrigatoriamente um bloco ```json com o plano de execução:\n" +
@@ -71,9 +127,23 @@ var DiscoveryStage = Stage{
 		"Seja objetivo; este relatório será o contexto fixo de todos os agentes desta sessão.",
 }
 
-// DefaultStages is the sequential EDD → architecture → implementation →
-// executable checks → review → E2E → final checks flow.
+// DefaultStages is the sequential context → EDD → architecture →
+// implementation → executable checks → review → E2E → final checks flow.
 var DefaultStages = []Stage{
+	{
+		ID:       "context",
+		Title:    "Contexto da US",
+		Role:     "Context Scout",
+		Tier:     provider.TierStandard,
+		ReadOnly: true,
+		System:   "Você mapeia o código existente antes de qualquer alteração. Apenas leia e pesquise; não modifique arquivos.",
+		Task: "Encontre no repositório o que é relevante para esta US e produza um relatório curto:\n" +
+			"1. Até 15 arquivos relevantes, com o caminho completo e, em uma linha, por que importam.\n" +
+			"2. Funções, componentes e utilitários existentes que devem ser reutilizados.\n" +
+			"3. Testes existentes relacionados e onde os novos testes devem ficar.\n" +
+			"4. Convenções de código a seguir.\n" +
+			"Não proponha a implementação; outros agentes farão isso com base no seu relatório.",
+	},
 	{
 		ID:    "spec",
 		Title: "Especificação EDD e contratos TDD",
@@ -83,13 +153,15 @@ var DefaultStages = []Stage{
 			"Gere a especificação técnica: diagramas textuais, schemas de dados, endpoints e casos de teste unitários e de integração.",
 		Task:      "Converta a User Story em contratos técnicos (EDD) e plano de testes (TDD), com um ID para cada caso de teste.",
 		Specifier: true,
+		ReadOnly:  true,
 	},
 	{
-		ID:      "arch",
-		Title:   "Arquitetura e plano de delegação",
-		Role:    "Chief Architect",
-		Tier:    provider.TierHeavy,
-		Planner: true,
+		ID:       "arch",
+		Title:    "Arquitetura e plano de delegação",
+		Role:     "Chief Architect",
+		Tier:     provider.TierHeavy,
+		Planner:  true,
+		ReadOnly: true,
 		System: "Você é o Arquiteto Principal de Soluções. " +
 			"Analise o EDD e detalhe a divisão de tarefas e dependências para os subagentes de Frontend, Backend, Data Science, Security e Testes.",
 		Task: "Distribua as responsabilidades técnicas e dependências entre os subagentes.",
@@ -130,17 +202,21 @@ var DefaultStages = []Stage{
 		Tier:       provider.TierHeavy,
 		Selectable: true,
 		Gate:       true,
+		ReadOnly:   true,
 		System: "Você é o subagente de Segurança (OWASP Top 10) e testes automatizados. " +
-			"Verifique sanitização de entradas, headers seguros, autenticação/autorização e execute a suíte de testes unitários.",
-		Task: "Analise vulnerabilidades e valide a suíte de testes unitários da implementação.",
+			"Verifique sanitização de entradas, headers seguros, autenticação/autorização e a qualidade dos testes unitários. " +
+			"Os comandos de teste já são executados pelo orquestrador; você apenas lê e analisa.",
+		Task: "Analise vulnerabilidades e avalie a suíte de testes unitários da implementação.",
 	},
 	{
-		ID:    "review",
-		Title: "Code review",
-		Role:  "Staff Reviewer",
-		Tier:  provider.TierHeavy,
-		Gate:  true,
-		System: "Você é um revisor de código sênior e rigoroso. " +
+		ID:       "review",
+		Title:    "Code review",
+		Role:     "Staff Reviewer",
+		Tier:     provider.TierHeavy,
+		Gate:     true,
+		ReadOnly: true,
+		Lenses:   reviewLenses,
+		System: "Você é um revisor de código sênior e rigoroso. Você não altera arquivos: apenas lê e aponta problemas. " +
 			"Avalie SOLID, DRY, Clean Code, concorrência, tratamento de erros e legibilidade com critérios objetivos.",
 		Task: "Faça o code review das implementações aplicando esta rubrica; cada violação vai para \"issues\" com arquivo:linha:\n" +
 			"1. Legibilidade: respeita o limite de linha, nada minificado ou compactado, funções curtas com uma responsabilidade, nomes descritivos.\n" +
@@ -188,6 +264,8 @@ type storyContext struct {
 	Position  int             // 1-based
 	Total     int
 	Rules     rules
+	// Instructions are the project's agent instruction files (AGENTS.md…).
+	Instructions string
 }
 
 // rules are the delivery requirements the orchestrator enforces, stated up
@@ -239,6 +317,7 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 		}
 		b.WriteString("Use este contexto; não refaça o discovery. Siga as stacks e convenções existentes.\n\n")
 	}
+	writeInstructions(&b, sc.Instructions)
 
 	if sc.Preamble != "" {
 		fmt.Fprintf(&b, "## Contexto do documento\n\n%s\n\n", clip(sc.Preamble, maxArtifactBytes))
@@ -292,6 +371,7 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 		fmt.Fprintf(b, "## Contexto do repositório\n\nRepositório: `%s`\n\nStacks detectadas:\n%s\n\n",
 			discovery.Path, workspace.FormatStacks(discovery.Stacks))
 	}
+	writeInstructions(b, sc.Instructions)
 	if sc.Preamble != "" {
 		fmt.Fprintf(b, "## Contexto do documento\n\n%s\n\n", clip(sc.Preamble, maxArtifactBytes))
 	}
@@ -299,6 +379,12 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 	b.WriteString(strings.TrimSpace(sc.Story.Content))
 	b.WriteString("\n\n")
 	writeRules(b, sc.Rules)
+}
+
+func writeInstructions(b *strings.Builder, text string) {
+	if text = strings.TrimSpace(text); text != "" {
+		fmt.Fprintf(b, "## Instruções do projeto (obrigatórias)\n\n%s\n\n", text)
+	}
 }
 
 func writeIssues(b *strings.Builder, issues []Issue) {

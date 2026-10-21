@@ -60,52 +60,12 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 		return evaluation{simulated: true}, true
 	}
 
-	var results []quality.Result
-	var issues []Issue
-	timeout := time.Duration(ss.policy.CheckTimeoutS) * time.Second
-	for _, c := range ss.checks {
-		o.logf(LevelInfo, "Executando %s: %s", c.Name, c.Run)
-		r := o.runCheck(ctx, ss.repo, c, timeout)
-		if ctx.Err() != nil {
-			o.cancelStep(ref, time.Since(started))
-			return evaluation{}, false
-		}
-		results = append(results, r)
-		snapshot := slices.Clone(results)
-		o.updateStep(ref, func(s *Step) { s.Checks = snapshot })
-		if r.Passed {
-			o.logf(LevelSuccess, "%s passou em %s.", c.Name, time.Duration(r.DurationMS)*time.Millisecond)
-			continue
-		}
-		o.logf(LevelWarn, "%s falhou (%s).", c.Name, exitLabel(r))
-		issues = append(issues, Issue{
-			Agent:       o.assignCommand(c, st.plan),
-			Severity:    "alta",
-			Description: commandIssue(c, r),
-			Location:    c.Name,
-		})
+	a, ok := o.assess(ctx, ss, st, ss.repo, o.changedFiles(ss, st.started))
+	if !ok {
+		o.cancelStep(ref, time.Since(started))
+		return evaluation{}, false
 	}
-
-	changed := o.changedFiles(ss, st.started)
-	var findings []quality.Finding
-	findings = append(findings, quality.Syntax(ctx, ss.repo, changed)...)
-	findings = append(findings, quality.Format(ctx, ss.repo, changed)...)
-	findings = append(findings, quality.Readability(ss.repo, changed, ss.policy.MaxLineLength)...)
-	for _, f := range findings {
-		severity := "média"
-		if f.Check == "syntax" {
-			severity = "alta"
-		}
-		issues = append(issues, Issue{
-			Agent:       o.assignFile(f.File, st.plan),
-			Severity:    severity,
-			Description: findingLabel(f.Check) + ": " + f.Message,
-			Location:    findingLocation(f),
-		})
-	}
-
-	traces := quality.TraceTests(ss.repo, st.reqs)
-	issues = append(issues, o.traceIssues(traces, st.plan)...)
+	results, findings, traces, issues := a.results, a.findings, a.traces, a.issues
 	if len(traces) > 0 {
 		o.updateStory(st.si, func(r *StoryRun) { r.Trace = traces })
 	}
@@ -124,6 +84,62 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 		s.DurationMS = elapsed.Milliseconds()
 	})
 	return evaluation{verdict: verdict, parsed: true, report: report}, true
+}
+
+// assessment is the outcome of the deterministic checks on one directory.
+type assessment struct {
+	results  []quality.Result
+	findings []quality.Finding
+	traces   []quality.Trace
+	issues   []Issue
+}
+
+func (a assessment) passed() bool { return len(a.issues) == 0 }
+
+// assess runs the project commands in dir, the static checks on the changed
+// files and the test traceability. It returns false when ctx was canceled.
+func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, dir string, changed []string) (assessment, bool) {
+	var a assessment
+	timeout := time.Duration(ss.policy.CheckTimeoutS) * time.Second
+	for _, c := range ss.checks {
+		o.logf(LevelInfo, "Executando %s: %s", c.Name, c.Run)
+		r := o.runCheck(ctx, dir, c, timeout)
+		if ctx.Err() != nil {
+			return a, false
+		}
+		a.results = append(a.results, r)
+		if r.Passed {
+			o.logf(LevelSuccess, "%s passou em %s.", c.Name, time.Duration(r.DurationMS)*time.Millisecond)
+			continue
+		}
+		o.logf(LevelWarn, "%s falhou (%s).", c.Name, exitLabel(r))
+		a.issues = append(a.issues, Issue{
+			Agent:       o.assignCommand(c, st.plan),
+			Severity:    "alta",
+			Description: commandIssue(c, r),
+			Location:    c.Name,
+		})
+	}
+
+	a.findings = append(a.findings, quality.Syntax(ctx, dir, changed)...)
+	a.findings = append(a.findings, quality.Format(ctx, dir, changed)...)
+	a.findings = append(a.findings, quality.Readability(dir, changed, ss.policy.MaxLineLength)...)
+	for _, f := range a.findings {
+		severity := "média"
+		if f.Check == "syntax" {
+			severity = "alta"
+		}
+		a.issues = append(a.issues, Issue{
+			Agent:       o.assignFile(f.File, st.plan),
+			Severity:    severity,
+			Description: findingLabel(f.Check) + ": " + f.Message,
+			Location:    findingLocation(f),
+		})
+	}
+
+	a.traces = quality.TraceTests(dir, st.reqs)
+	a.issues = append(a.issues, o.traceIssues(a.traces, st.plan)...)
+	return a, true
 }
 
 // changedFiles lists files modified since t, excluding protected inputs.

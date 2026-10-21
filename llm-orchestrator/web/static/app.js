@@ -65,7 +65,7 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qGit: $('qGit'), qualityError: $('qualityError'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qGit: $('qGit'), qualityError: $('qualityError'),
     diffDialog: $('diffDialog'), diffTitle: $('diffTitle'), diffMeta: $('diffMeta'), diffBody: $('diffBody'),
     toasts: $('toasts'),
   };
@@ -495,6 +495,7 @@ Critérios de aceitação:
         <dt>Protegidos</dt><dd class="wrap">${protectedList || '<span class="note">nenhum</span>'}</dd>
         <dt>Linhas</dt><dd>até ${esc(p.max_line_length)} caracteres</dd>
         <dt>Git</dt><dd>${p.git ? 'branch por US, commit por etapa' : 'desativado'}</dd>
+        <dt>Candidatos</dt><dd>${p.candidates > 1 ? `best-of-${esc(p.candidates)}` : '1 por implementação'}</dd>
       </dl>`;
   }
 
@@ -518,6 +519,7 @@ Critérios de aceitação:
     el.qProtected.value = (p.protected || []).join('\n');
     el.qMaxLine.value = p.max_line_length;
     el.qTimeout.value = p.check_timeout_s;
+    el.qCandidates.value = String(p.candidates || 1);
     el.qGit.checked = p.git;
     syncQualityForm();
     el.qualityDialog.showModal();
@@ -539,6 +541,7 @@ Critérios de aceitação:
       git: el.qGit.checked,
       max_line_length: Number(el.qMaxLine.value) || 0,
       check_timeout_s: Number(el.qTimeout.value) || 0,
+      candidates: Number(el.qCandidates.value) || 1,
     };
     try {
       await api('PUT', '/api/workspace/policy', policy);
@@ -729,6 +732,22 @@ Critérios de aceitação:
       </ul>`;
   }
 
+  function renderCandidates(list) {
+    if (!list?.length) return '';
+    return `
+      <ul class="candidates">${list.map((c) => {
+        let result = c.note || (c.passed ? 'passou nas verificações' : `${c.issues} problema${c.issues === 1 ? '' : 's'}`);
+        if (c.chosen) result += ' · escolhido';
+        return `
+        <li data-chosen="${Boolean(c.chosen)}" data-passed="${Boolean(c.passed)}">
+          <span class="cand-id">${esc(c.id)}</span>
+          <span class="cand-strategy">${esc(c.strategy)}</span>
+          <span class="cand-result">${esc(result)}</span>
+        </li>`;
+      }).join('')}
+      </ul>`;
+  }
+
   function renderCommit(s) {
     const c = s.commit;
     if (!c) return '';
@@ -848,7 +867,7 @@ Critérios de aceitação:
           <pre>${esc(s.output)}</pre>
         </details>` : '';
       const error = s.error ? `<div class="step-error">${esc(s.error)}</div>` : '';
-      let extra = renderChecks(s.checks);
+      let extra = renderChecks(s.checks) + renderCandidates(s.candidates);
       if (s.id === 'arch') extra = renderPlan(story.plan, story.steps || []);
       else if (s.kind === 'fix') extra = renderIssues(s.issues, 'Correções solicitadas');
       else if (s.issues?.length) extra += renderIssues(s.issues, s.status === 'failed' ? 'Problemas não resolvidos' : 'Problemas encontrados');

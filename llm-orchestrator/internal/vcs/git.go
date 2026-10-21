@@ -26,7 +26,8 @@ var ErrNoGit = errors.New("git não encontrado no PATH")
 // defaultExcludes keep dependencies and generated output out of commits in
 // repositories FazTudo initialises itself (which have no .gitignore yet).
 var defaultExcludes = []string{
-	"node_modules/", "vendor/", "dist/", "build/", "coverage/", ".venv/", "venv/", "__pycache__/",
+	// Dependency folders have no trailing slash so symlinks to them match too.
+	"node_modules", "vendor/", "dist/", "build/", "coverage/", ".venv", "venv", "__pycache__/",
 	"test-results/", "playwright-report/", ".DS_Store", "*.log",
 }
 
@@ -120,17 +121,22 @@ func (r *Repo) CreateBranch(ctx context.Context, name string) error {
 }
 
 // CommitAll stages every change under the directory and commits it. It
-// returns nil when there was nothing to commit.
-func (r *Repo) CommitAll(ctx context.Context, msg string) (*Commit, error) {
-	return r.commit(ctx, msg, false)
+// returns nil when there was nothing to commit. Paths in exclude (relative
+// to the directory) are left out.
+func (r *Repo) CommitAll(ctx context.Context, msg string, exclude ...string) (*Commit, error) {
+	return r.commit(ctx, msg, false, exclude...)
 }
 
-func (r *Repo) commit(ctx context.Context, msg string, allowEmpty bool) (*Commit, error) {
-	if _, err := r.git(ctx, "add", "-A", "--", "."); err != nil {
+func (r *Repo) commit(ctx context.Context, msg string, allowEmpty bool, exclude ...string) (*Commit, error) {
+	spec := []string{"--", "."}
+	for _, e := range exclude {
+		spec = append(spec, ":(exclude)"+e)
+	}
+	if _, err := r.git(ctx, append([]string{"add", "-A"}, spec...)...); err != nil {
 		return nil, err
 	}
 	if !allowEmpty {
-		if _, err := r.git(ctx, "diff", "--cached", "--quiet", "--", "."); err == nil {
+		if _, err := r.git(ctx, append([]string{"diff", "--cached", "--quiet"}, spec...)...); err == nil {
 			return nil, nil
 		}
 	}
@@ -138,7 +144,7 @@ func (r *Repo) commit(ctx context.Context, msg string, allowEmpty bool) (*Commit
 	if allowEmpty {
 		args = append(args, "--allow-empty")
 	} else {
-		args = append(args, "--", ".") // never sweep in staged files outside the directory
+		args = append(args, spec...) // never sweep in staged files outside the directory
 	}
 	if out, _ := r.git(ctx, "config", "user.email"); strings.TrimSpace(out) == "" {
 		args = append([]string{"-c", "user.name=" + commitName, "-c", "user.email=" + commitEmail}, args...)
@@ -155,6 +161,53 @@ func (r *Repo) commit(ctx context.Context, msg string, allowEmpty bool) (*Commit
 		c.Files = parseNumstat(stat)
 	}
 	return c, nil
+}
+
+// At returns a Repo for a directory already known to be inside a repository,
+// such as a worktree created by AddWorktree.
+func At(dir string) *Repo { return &Repo{dir: dir} }
+
+// Head returns the full hash of HEAD.
+func (r *Repo) Head(ctx context.Context) (string, error) {
+	out, err := r.git(ctx, "rev-parse", "HEAD")
+	return strings.TrimSpace(out), err
+}
+
+// Prefix returns the directory's path relative to the repository root, with
+// a trailing slash, or "" at the root.
+func (r *Repo) Prefix(ctx context.Context) (string, error) {
+	out, err := r.git(ctx, "rev-parse", "--show-prefix")
+	return strings.TrimSpace(out), err
+}
+
+// AddWorktree checks out HEAD, detached, in a new worktree at path.
+func (r *Repo) AddWorktree(ctx context.Context, path string) error {
+	_, err := r.git(ctx, "worktree", "add", "-q", "--detach", path, "HEAD")
+	return err
+}
+
+// RemoveWorktree deletes a worktree created by AddWorktree.
+func (r *Repo) RemoveWorktree(ctx context.Context, path string) error {
+	_, err := r.git(ctx, "worktree", "remove", "--force", path)
+	return err
+}
+
+// FastForward moves the current branch to hash, which must descend from HEAD.
+func (r *Repo) FastForward(ctx context.Context, hash string) error {
+	_, err := r.git(ctx, "merge", "-q", "--ff-only", hash)
+	return err
+}
+
+// Diff returns the patch between two commits, capped in size.
+func (r *Repo) Diff(ctx context.Context, from, to string, max int) (string, error) {
+	out, err := r.git(ctx, "diff", "--no-color", "--no-ext-diff", from, to, "--")
+	if err != nil {
+		return "", err
+	}
+	if len(out) > max {
+		out = strings.ToValidUTF8(out[:max], "") + "\n[… diff truncado]"
+	}
+	return out, nil
 }
 
 var reHash = regexp.MustCompile(`^[0-9a-f]{7,40}$`)

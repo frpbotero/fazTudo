@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"llm-orchestrator/internal/eval"
 	"llm-orchestrator/internal/pipeline"
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/server"
@@ -43,6 +44,7 @@ func run() error {
 	simDelay := flag.Duration("sim-delay", 1400*time.Millisecond, "duração de cada etapa simulada")
 	logLevel := flag.String("log-level", envOr("LOG_LEVEL", "info"), "debug, info, warn ou error (env LOG_LEVEL)")
 	configPath := flag.String("config", envOr("FAZTUDO_CONFIG", settings.DefaultPath()), `arquivo de configuração; "" desativa a persistência (env FAZTUDO_CONFIG)`)
+	evalPath := flag.String("eval", "", "executa a suíte de avaliação (JSON) e sai; veja evals/README.md")
 	showVersion := flag.Bool("version", false, "exibe a versão e sai")
 	flag.Parse()
 
@@ -86,6 +88,9 @@ func run() error {
 		logger.Info("configuração persistida", "path", store.Path())
 	}
 	warnUnknownModels(router, logger)
+	if *evalPath != "" {
+		return runEval(ctx, *evalPath, router, logger)
+	}
 	hub := server.NewHub()
 	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
 	srv := server.New(ctx, server.Deps{
@@ -131,6 +136,19 @@ func run() error {
 		logger.Warn("pipeline não finalizou a tempo", "err", err)
 	}
 	return httpSrv.Shutdown(shutdownCtx)
+}
+
+// runEval benchmarks the configurations of a suite and prints the report.
+func runEval(ctx context.Context, path string, router *provider.Router, logger *slog.Logger) error {
+	suite, err := eval.Load(path)
+	if err != nil {
+		return err
+	}
+	results, err := eval.Run(ctx, suite, router, logger)
+	if len(results) > 0 {
+		fmt.Println(eval.Report(results))
+	}
+	return err
 }
 
 // warnUnknownModels logs configured models that the installed CLI does not
