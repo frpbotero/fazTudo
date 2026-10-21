@@ -1,0 +1,358 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"llm-orchestrator/internal/pipeline"
+	"llm-orchestrator/internal/provider"
+	"llm-orchestrator/internal/settings"
+	"llm-orchestrator/internal/stories"
+	"llm-orchestrator/internal/workspace"
+)
+
+// lastStore is the settings store of the most recent test server.
+var lastStore *settings.Store
+
+func newTestServer(t *testing.T) (*httptest.Server, *pipeline.Orchestrator) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	router := provider.NewRouter(true, []provider.CLI{provider.ClaudeCLI, provider.CodexCLI},
+		provider.WithSimulationDelay(time.Millisecond))
+	hub := NewHub()
+	ws, err := workspace.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	store := settings.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	srv := New(ctx, Deps{
+		Orchestrator: orch, Router: router, Workspace: ws, Settings: store, Hub: hub,
+		Static: fstest.MapFS{"index.html": {Data: []byte("ok")}}, Version: "test", Logger: logger,
+	})
+	lastStore = store
+	go hub.Run(ctx, srv.SnapshotJSON)
+
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() {
+		cancel()
+		ts.Close()
+		waitCtx, done := context.WithTimeout(context.Background(), time.Second)
+		defer done()
+		_ = orch.Wait(waitCtx)
+	})
+	return ts, orch
+}
+
+func do(t *testing.T, ts *httptest.Server, method, path, body string, headers ...string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+func TestStartValidation(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	cases := []struct {
+		name, body string
+		want       int
+	}{
+		{"empty story", `{"content":"  ","source":"markdown"}`, http.StatusUnprocessableEntity},
+		{"bad source", `{"content":"x","source":"email"}`, http.StatusUnprocessableEntity},
+		{"unknown field", `{"content":"x","source":"markdown","evil":1}`, http.StatusBadRequest},
+		{"malformed", `{`, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := do(t, ts, "POST", "/api/pipeline/start", c.body).StatusCode; got != c.want {
+				t.Errorf("status = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestStartRunsPipelineAndRejectsConcurrentRun(t *testing.T) {
+	ts, orch := newTestServer(t)
+	body := `{"content":"US-1","source":"markdown","dry_run":true}`
+
+	if got := do(t, ts, "POST", "/api/pipeline/start", body).StatusCode; got != http.StatusAccepted {
+		t.Fatalf("start = %d", got)
+	}
+	if got := do(t, ts, "POST", "/api/pipeline/start", body).StatusCode; got != http.StatusConflict {
+		t.Errorf("concurrent start = %d, want 409", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := orch.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var snap Snapshot
+	if err := json.NewDecoder(do(t, ts, "GET", "/api/status", "").Body).Decode(&snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Run.Result != pipeline.ResultSucceeded || snap.Run.Source != "Markdown" {
+		t.Errorf("unexpected run: result=%s source=%s", snap.Run.Result, snap.Run.Source)
+	}
+}
+
+func TestCrossOriginWritesAreBlocked(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp := do(t, ts, "POST", "/api/pipeline/start", `{"content":"x","source":"markdown"}`, "Origin", "https://evil.example")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-origin start = %d, want 403", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest("POST", ts.URL+"/api/pipeline/start", strings.NewReader(`{"content":"x","source":"markdown"}`))
+	req.Header.Set("Content-Type", "text/plain")
+	r2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusUnsupportedMediaType {
+		t.Errorf("text/plain start = %d, want 415", r2.StatusCode)
+	}
+}
+
+func TestConfigRoundTrip(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	bad := do(t, ts, "PUT", "/api/config", `{"providers":{"claude":{"heavy_model":"opus","std_model":"sonnet","effort":"ultra"}}}`)
+	if bad.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("invalid effort = %d, want 422", bad.StatusCode)
+	}
+
+	ok := do(t, ts, "PUT", "/api/config", `{"default_provider":"codex","failover":false,"providers":{"claude":{"heavy_model":" opus ","std_model":"sonnet","effort":"max"}}}`)
+	if ok.StatusCode != http.StatusOK {
+		t.Fatalf("valid config = %d", ok.StatusCode)
+	}
+	var cfg provider.Config
+	_ = json.NewDecoder(ok.Body).Decode(&cfg)
+	if cfg.Providers[provider.Claude].HeavyModel != "opus" || cfg.DefaultProvider != provider.Codex || cfg.Failover {
+		t.Errorf("config not applied: %+v", cfg)
+	}
+
+	// Partial update: only the default provider changes.
+	part := do(t, ts, "PUT", "/api/config", `{"default_provider":"claude"}`)
+	_ = json.NewDecoder(part.Body).Decode(&cfg)
+	if cfg.DefaultProvider != provider.Claude || cfg.Failover || cfg.Providers[provider.Claude].HeavyModel != "opus" {
+		t.Errorf("partial update changed other fields: %+v", cfg)
+	}
+
+	if got := do(t, ts, "PUT", "/api/config", `{"default_provider":"gemini"}`).StatusCode; got != http.StatusUnprocessableEntity {
+		t.Errorf("unknown default provider = %d, want 422", got)
+	}
+}
+
+func TestExhaustAndRestore(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	if got := do(t, ts, "POST", "/api/providers/claude/exhaust", `{"seconds":60}`).StatusCode; got != http.StatusNoContent {
+		t.Fatalf("exhaust = %d", got)
+	}
+	if got := do(t, ts, "POST", "/api/providers/gemini/exhaust", "").StatusCode; got != http.StatusNotFound {
+		t.Errorf("unknown provider = %d, want 404", got)
+	}
+
+	var snap Snapshot
+	_ = json.NewDecoder(do(t, ts, "GET", "/api/status", "").Body).Decode(&snap)
+	if snap.Providers[0].Status != provider.StatusCooldown {
+		t.Errorf("claude status = %s", snap.Providers[0].Status)
+	}
+
+	if got := do(t, ts, "POST", "/api/providers/restore", "").StatusCode; got != http.StatusNoContent {
+		t.Fatalf("restore all = %d", got)
+	}
+	_ = json.NewDecoder(do(t, ts, "GET", "/api/status", "").Body).Decode(&snap)
+	if snap.Providers[0].Status == provider.StatusCooldown {
+		t.Error("claude should be restored")
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	ts, _ := newTestServer(t)
+	resp := do(t, ts, "GET", "/healthz", "")
+	if resp.Header.Get("Content-Security-Policy") == "" || resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("missing security headers: %v", resp.Header)
+	}
+}
+
+func TestWorkspaceEndpoints(t *testing.T) {
+	ts, orch := newTestServer(t)
+
+	if got := do(t, ts, "PUT", "/api/workspace", `{"path":"/definitely/not/here"}`).StatusCode; got != http.StatusUnprocessableEntity {
+		t.Errorf("invalid path = %d, want 422", got)
+	}
+
+	repo := t.TempDir()
+	resp := do(t, ts, "PUT", "/api/workspace", `{"path":"`+repo+`"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set workspace = %d", resp.StatusCode)
+	}
+
+	if got := do(t, ts, "POST", "/api/pipeline/start", `{"content":"US","source":"markdown","dry_run":true}`).StatusCode; got != http.StatusAccepted {
+		t.Fatalf("start = %d", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = orch.Wait(ctx)
+
+	var state workspace.State
+	_ = json.NewDecoder(do(t, ts, "GET", "/api/workspace", "").Body).Decode(&state)
+	if state.Path != repo || state.Discovery == nil {
+		t.Fatalf("discovery should be cached for %s: %+v", repo, state)
+	}
+
+	if got := do(t, ts, "DELETE", "/api/workspace/discovery", "").StatusCode; got != http.StatusNoContent {
+		t.Fatalf("reset discovery = %d", got)
+	}
+	var cleared workspace.State
+	_ = json.NewDecoder(do(t, ts, "GET", "/api/workspace", "").Body).Decode(&cleared)
+	if cleared.Discovery != nil {
+		t.Error("discovery should be cleared")
+	}
+}
+
+func TestParseAndStartSequence(t *testing.T) {
+	ts, orch := newTestServer(t)
+	md := "# Épico\n\n## US-1 A\nconteúdo A\n\n## US-2 B\nconteúdo B\n"
+	body, _ := json.Marshal(map[string]string{"content": md})
+
+	var doc stories.Document
+	if err := json.NewDecoder(do(t, ts, "POST", "/api/stories/parse", string(body)).Body).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Stories) != 2 || doc.Preamble != "# Épico" {
+		t.Fatalf("unexpected parse: %+v", doc)
+	}
+
+	start := map[string]any{"content": md, "source": "markdown", "dry_run": true}
+	b, _ := json.Marshal(start)
+	if got := do(t, ts, "POST", "/api/pipeline/start", string(b)).StatusCode; got != http.StatusUnprocessableEntity {
+		t.Errorf("multi-story content without a choice = %d, want 422", got)
+	}
+
+	start = map[string]any{"stories": doc.Stories, "preamble": doc.Preamble, "source": "markdown", "dry_run": true}
+	b, _ = json.Marshal(start)
+	if got := do(t, ts, "POST", "/api/pipeline/start", string(b)).StatusCode; got != http.StatusAccepted {
+		t.Fatalf("start sequence = %d", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = orch.Wait(ctx)
+
+	run := orch.Snapshot()
+	if run.Result != pipeline.ResultSucceeded || len(run.Stories) != 2 || run.Stories[1].Status != pipeline.StepDone {
+		t.Fatalf("sequence did not complete: %+v", run.Stories)
+	}
+
+	empty := `{"stories":[{"title":"x","content":"  "}],"source":"markdown"}`
+	if got := do(t, ts, "POST", "/api/pipeline/start", empty).StatusCode; got != http.StatusUnprocessableEntity {
+		t.Errorf("empty story = %d, want 422", got)
+	}
+}
+
+func TestConfigAndRepositoryArePersisted(t *testing.T) {
+	ts, _ := newTestServer(t)
+	store := lastStore
+	repo := t.TempDir()
+
+	do(t, ts, "PUT", "/api/config", `{"default_provider":"codex","failover":false,"providers":{"codex":{"heavy_model":"gpt-5.5-pro","std_model":"gpt-5.4","effort":"high"}}}`)
+	do(t, ts, "PUT", "/api/workspace", `{"path":"`+repo+`"}`)
+
+	f, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DefaultProvider != provider.Codex || f.Failover == nil || *f.Failover ||
+		f.Providers[provider.Codex].HeavyModel != "gpt-5.5-pro" || f.Repository != repo {
+		t.Errorf("file not persisted: %+v", f)
+	}
+
+	var snap Snapshot
+	_ = json.NewDecoder(do(t, ts, "GET", "/api/status", "").Body).Decode(&snap)
+	if !snap.Settings.Enabled || snap.Settings.SavedAt == nil || snap.Settings.Error != "" {
+		t.Errorf("settings status = %+v", snap.Settings)
+	}
+
+	// Rejected updates must not be written.
+	do(t, ts, "PUT", "/api/config", `{"default_provider":"gemini"}`)
+	if f2, _ := store.Load(); f2.DefaultProvider != provider.Codex {
+		t.Errorf("invalid update leaked to disk: %+v", f2)
+	}
+}
+
+func TestQualityPolicyIsValidatedAndPersisted(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	var st workspace.State
+	if err := json.NewDecoder(do(t, ts, "GET", "/api/workspace", "").Body).Decode(&st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Policy.AutoChecks || !st.Policy.Git || st.Policy.MaxLineLength != 160 || st.Suggested == nil {
+		t.Fatalf("default policy = %+v suggested = %v", st.Policy, st.Suggested)
+	}
+
+	bad := []string{
+		`{"auto_checks":false,"checks":[],"max_line_length":160,"check_timeout_s":60}`,
+		`{"auto_checks":true,"max_line_length":20,"check_timeout_s":60}`,
+		`{"auto_checks":false,"checks":[{"name":"x","run":"a\nb"}],"max_line_length":160,"check_timeout_s":60}`,
+	}
+	for _, body := range bad {
+		if resp := do(t, ts, "PUT", "/api/workspace/policy", body); resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status %d", body, resp.StatusCode)
+		}
+	}
+
+	body := `{"auto_checks":false,"checks":[{"name":" unit ","run":" npm test "}],"protected":["EDD*.md"," "],"git":false,"max_line_length":120,"check_timeout_s":90}`
+	resp := do(t, ts, "PUT", "/api/workspace/policy", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		t.Fatal(err)
+	}
+	if p := st.Policy; p.AutoChecks || len(p.Checks) != 1 || p.Checks[0].Run != "npm test" || len(p.Protected) != 1 || p.Git {
+		t.Fatalf("saved policy = %+v", p)
+	}
+
+	file, err := lastStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := file.Quality[st.Path]; !ok || p.MaxLineLength != 120 {
+		t.Fatalf("persisted quality = %+v", file.Quality)
+	}
+}
+
+func TestShowCommitRejectsInvalidRequests(t *testing.T) {
+	ts, _ := newTestServer(t)
+	if resp := do(t, ts, "GET", "/api/git/commits/abc1234", ""); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("repository without git: status %d", resp.StatusCode)
+	}
+}

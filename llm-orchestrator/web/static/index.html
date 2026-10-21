@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>FazTudo · Orquestrador de agentes</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M10 22V10h12M10 16h8' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <svg width="0" height="0" class="sprite" aria-hidden="true">
+    <defs>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M6 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L7.5 3.64A1 1 0 0 0 6 4.5Z"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M20 7h-9M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+      <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+      <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M8 13h8M8 17h5"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+      <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/><path d="m9 12 2 2 4-4"/></symbol>
+      <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-11 5.5"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="8"/>
+        <path d="M10 22V10h12M10 16h8"/>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-name">FazTudo</span>
+        <span class="brand-sub">Orquestrador de agentes</span>
+      </div>
+      <span class="chip" id="version">—</span>
+    </div>
+
+    <div class="topbar-actions">
+      <span class="conn" id="conn" data-state="connecting">
+        <span class="conn-dot"></span><span id="connText">Conectando…</span>
+      </span>
+      <button class="btn btn-icon" id="themeBtn" type="button" aria-label="Alternar tema" title="Alternar tema">
+        <svg class="icon icon-sun"><use href="#i-sun"/></svg>
+        <svg class="icon icon-moon"><use href="#i-moon"/></svg>
+      </button>
+      <button class="btn" id="configBtn" type="button">
+        <svg class="icon"><use href="#i-sliders"/></svg><span>Modelos</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div class="col-side">
+      <section class="card" aria-labelledby="repoTitle">
+        <div class="card-head">
+          <div>
+            <h2 id="repoTitle">Repositório</h2>
+            <p class="muted">Diretório local onde os agentes vão desenvolver.</p>
+          </div>
+          <span class="badge" id="discoveryBadge" data-tone="neutral">Não configurado</span>
+        </div>
+        <form id="repoForm" class="repo-form" novalidate>
+          <label for="repoPath" class="sr-only">Caminho do repositório</label>
+          <div class="input-icon">
+            <svg class="icon"><use href="#i-folder"/></svg>
+            <input type="text" id="repoPath" placeholder="~/projetos/minha-app" autocomplete="off" spellcheck="false">
+          </div>
+          <button class="btn" type="submit" id="repoSaveBtn">Salvar</button>
+        </form>
+        <div id="discovery" class="discovery"></div>
+        <div id="quality" class="quality" hidden></div>
+      </section>
+
+      <section class="card" aria-labelledby="newRunTitle">
+        <div class="card-head">
+          <div>
+            <h2 id="newRunTitle">Nova execução</h2>
+            <p class="muted">Discovery (uma vez por sessão); o arquiteto escolhe os agentes e falhas voltam para correção.</p>
+          </div>
+        </div>
+
+        <form id="runForm" class="stack" novalidate>
+          <div class="field">
+            <label for="source">Origem</label>
+            <select id="source">
+              <option value="markdown">Markdown</option>
+              <option value="jira" disabled>Jira (em breve)</option>
+              <option value="trello" disabled>Trello (em breve)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <div class="field-row">
+              <label for="story">User Story</label>
+              <div class="examples">
+                <button type="button" class="btn btn-sm" id="openMdBtn">
+                  <svg class="icon"><use href="#i-file"/></svg><span>Abrir .md</span>
+                </button>
+                <input type="file" id="mdFile" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
+                <span class="muted">Exemplos:</span>
+                <button type="button" class="link" data-template="checkout">Checkout</button>
+                <button type="button" class="link" data-template="auth">RBAC + MFA</button>
+              </div>
+            </div>
+            <textarea id="story" rows="10" spellcheck="false" placeholder="# US-123: Título&#10;Como …, quero …, para …&#10;&#10;Critérios de aceitação:&#10;- …"></textarea>
+            <div class="field-foot">
+              <span class="file-info" id="fileInfo" hidden></span>
+              <span class="field-hint"><span id="storyCount">0</span> / 200.000</span>
+            </div>
+          </div>
+
+          <fieldset class="field">
+            <legend>Modo</legend>
+            <div class="segmented" role="radiogroup">
+              <label><input type="radio" name="mode" value="dry" checked><span>Simulação</span></label>
+              <label><input type="radio" name="mode" value="real"><span>Execução real</span></label>
+            </div>
+            <p class="note" id="modeNote">Fluxo completo sem chamar os CLIs e sem consumir tokens.</p>
+          </fieldset>
+
+          <fieldset class="field">
+            <legend>Provedor padrão</legend>
+            <div class="segmented segmented-block" role="radiogroup" id="providerPicker"></div>
+            <div class="model-summary" id="modelSummary"></div>
+            <label class="check"><input type="checkbox" id="failoverToggle"> Failover automático para o outro provedor ao atingir limite de uso</label>
+          </fieldset>
+
+          <div class="actions">
+            <button class="btn btn-primary btn-block" id="startBtn" type="submit">
+              <svg class="icon"><use href="#i-play"/></svg><span id="startLabel">Iniciar execução</span>
+            </button>
+            <button class="btn btn-danger" id="stopBtn" type="button" disabled>
+              <svg class="icon"><use href="#i-stop"/></svg><span>Parar</span>
+            </button>
+          </div>
+          <p class="kbd-hint muted"><kbd>⌘</kbd> <kbd>Enter</kbd> inicia a execução</p>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="providersTitle">
+        <div class="card-head">
+          <div>
+            <h2 id="providersTitle">Provedores</h2>
+            <p class="muted">Failover automático com hand-off quando um limite de uso é atingido.</p>
+          </div>
+        </div>
+        <div id="providers" class="providers"></div>
+        <div class="card-foot">
+          <button class="btn btn-ghost btn-sm" id="restoreAllBtn" type="button">
+            <svg class="icon"><use href="#i-rotate"/></svg><span>Restaurar todas as cotas</span>
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div class="col-main">
+      <section class="card" aria-labelledby="pipelineTitle">
+        <div class="card-head">
+          <div>
+            <h2 id="pipelineTitle">Pipeline</h2>
+            <p class="muted" id="runMeta">Nenhuma execução iniciada.</p>
+          </div>
+          <span class="badge" id="runBadge" data-tone="neutral">Ocioso</span>
+        </div>
+        <div class="story-bar" id="storyBar" role="tablist" aria-label="User Stories da execução" hidden></div>
+        <div class="progress" role="progressbar" aria-labelledby="pipelineTitle" aria-valuemin="0" id="progress">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <ol class="steps" id="steps"></ol>
+      </section>
+
+      <section class="card" aria-labelledby="eventsTitle">
+        <div class="card-head">
+          <h2 id="eventsTitle">Eventos</h2>
+          <div class="toolbar">
+            <div class="segmented segmented-sm" role="radiogroup" aria-label="Filtrar eventos">
+              <label><input type="radio" name="logFilter" value="all" checked><span>Todos</span></label>
+              <label><input type="radio" name="logFilter" value="issues"><span>Avisos e erros</span></label>
+            </div>
+            <label class="check"><input type="checkbox" id="autoScroll" checked> Rolagem automática</label>
+            <button class="btn btn-ghost btn-sm" id="clearLogsBtn" type="button">Limpar</button>
+          </div>
+        </div>
+        <div class="log" id="log" role="log" aria-live="polite"></div>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="configDialog" class="dialog" aria-labelledby="configTitle">
+    <form id="configForm" class="dialog-body">
+      <div class="dialog-head">
+        <div>
+          <h2 id="configTitle">Provedores e modelos</h2>
+          <p class="muted">Etapas <strong>heavy</strong> (arquitetura, segurança, review) usam o modelo pesado; as demais usam o padrão.</p>
+        </div>
+        <button class="btn btn-icon btn-ghost" type="button" data-close aria-label="Fechar">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <div class="config-routing">
+        <div class="field">
+          <label for="cfgDefault">Provedor padrão</label>
+          <select id="cfgDefault"></select>
+        </div>
+        <label class="check"><input type="checkbox" id="cfgFailover"> Failover automático com hand-off</label>
+      </div>
+      <div id="configFields" class="config-grid"></div>
+      <p class="form-error" id="configError" hidden></p>
+      <div class="dialog-foot">
+        <span class="persist-info" id="persistInfo"></span>
+        <button class="btn btn-ghost" type="button" data-close>Cancelar</button>
+        <button class="btn btn-primary" type="submit">Salvar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="storyDialog" class="dialog dialog-md" aria-labelledby="storyDialogTitle">
+    <form id="storyForm" class="dialog-body">
+      <div class="dialog-head">
+        <div>
+          <h2 id="storyDialogTitle">User Stories encontradas</h2>
+          <p class="muted">O documento tem mais de uma US. Como deseja desenvolver?</p>
+        </div>
+        <button class="btn btn-icon btn-ghost" type="button" data-close aria-label="Fechar">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+
+      <div class="segmented segmented-block" role="radiogroup" aria-label="Modo de desenvolvimento">
+        <label><input type="radio" name="storyMode" value="sequence" checked><span>Desenvolvimento contínuo</span></label>
+        <label><input type="radio" name="storyMode" value="single"><span>Apenas uma US</span></label>
+      </div>
+      <p class="note" id="storyModeNote"></p>
+
+      <div class="story-list-head">
+        <span class="muted" id="storySelCount"></span>
+        <span class="story-bulk" id="storyBulk">
+          <button type="button" class="link" data-select="all">Todas</button>
+          <button type="button" class="link" data-select="none">Nenhuma</button>
+        </span>
+      </div>
+      <ol class="story-list" id="storyList"></ol>
+      <p class="note" id="storyPreamble" hidden></p>
+      <p class="form-error" id="storyError" hidden></p>
+
+      <div class="dialog-foot">
+        <button class="btn btn-ghost" type="button" data-close>Cancelar</button>
+        <button class="btn btn-primary" type="submit" id="storyStartBtn" autofocus>
+          <svg class="icon"><use href="#i-play"/></svg><span id="storyStartLabel">Iniciar</span>
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="qualityDialog" class="dialog dialog-md" aria-labelledby="qualityTitle">
+    <form id="qualityForm" class="dialog-body" novalidate>
+      <div class="dialog-head">
+        <div>
+          <h2 id="qualityTitle">Portões de qualidade</h2>
+          <p class="muted" id="qualityRepo">Valem para o repositório configurado.</p>
+        </div>
+        <button class="btn btn-icon btn-ghost" type="button" data-close aria-label="Fechar">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+
+      <fieldset class="field">
+        <legend>Comandos de verificação</legend>
+        <p class="note">Rodam depois da implementação e ao final da US. Uma falha volta para o agente responsável com a saída do comando.</p>
+        <label class="check"><input type="checkbox" id="qAuto"> Usar os comandos detectados nos manifestos do repositório</label>
+        <ul class="q-suggested" id="qSuggested"></ul>
+        <div id="qCustom" class="field">
+          <label for="qChecks" class="sr-only">Comandos personalizados</label>
+          <textarea id="qChecks" rows="5" spellcheck="false" placeholder="unitários: npm run test:unit&#10;e2e: npx playwright test"></textarea>
+          <p class="note">Um por linha, no formato <code>nome: comando</code>. Executados na raiz do repositório com <code>CI=1</code>.</p>
+        </div>
+      </fieldset>
+
+      <div class="field">
+        <label for="qProtected">Arquivos de entrada protegidos</label>
+        <textarea id="qProtected" rows="3" spellcheck="false"></textarea>
+        <p class="note">Padrões glob, um por linha (ex.: <code>EDD*.md</code>). O .md aberto na execução também é protegido. Se um agente alterar um deles, o arquivo é restaurado e a etapa falha.</p>
+      </div>
+
+      <div class="q-row">
+        <div class="field">
+          <label for="qMaxLine">Limite de caracteres por linha</label>
+          <input type="number" id="qMaxLine" min="80" max="1000" step="10">
+        </div>
+        <div class="field">
+          <label for="qTimeout">Tempo limite por comando (s)</label>
+          <input type="number" id="qTimeout" min="10" max="3600" step="10">
+        </div>
+      </div>
+
+      <label class="check"><input type="checkbox" id="qGit"> Versionar com git: uma branch por US e um commit por etapa (repositórios sem git são inicializados)</label>
+
+      <p class="form-error" id="qualityError" hidden></p>
+      <div class="dialog-foot">
+        <button class="btn btn-ghost" type="button" data-close>Cancelar</button>
+        <button class="btn btn-primary" type="submit">Salvar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="diffDialog" class="dialog dialog-wide" aria-labelledby="diffTitle">
+    <div class="dialog-body">
+      <div class="dialog-head">
+        <div>
+          <h2 id="diffTitle">Alterações</h2>
+          <p class="muted" id="diffMeta"></p>
+        </div>
+        <button class="btn btn-icon btn-ghost" type="button" data-close aria-label="Fechar">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <pre class="diff" id="diffBody"></pre>
+    </div>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>

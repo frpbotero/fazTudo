@@ -1,0 +1,4 @@
+bin/
+llm-orchestrator
+coverage.out
+.git

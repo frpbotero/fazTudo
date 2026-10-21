@@ -1,0 +1,9 @@
+# Build
+/bin/
+/llm-orchestrator
+coverage.out
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
