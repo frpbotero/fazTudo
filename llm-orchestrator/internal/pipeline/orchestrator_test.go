@@ -195,6 +195,58 @@ func TestSequenceStopsOnFailure(t *testing.T) {
 	}
 }
 
+func TestRetryFailedContinuesFromFailedStage(t *testing.T) {
+	exec := &fakeExecutor{failAt: 3} // discovery, A, then B fails
+	o, _ := newTest(t, exec)
+	if err := o.Start(one(true)); err != nil {
+		t.Fatal(err)
+	}
+	failed := waitDone(t, o)
+	if failed.Result != ResultFailed || failed.Stories[0].Steps[1].Status != StepFailed {
+		t.Fatalf("expected B to fail: %+v", failed.Stories[0].Steps)
+	}
+
+	if err := o.RetryFailed(0, "b"); err != nil {
+		t.Fatal(err)
+	}
+	done := waitDone(t, o)
+	if done.Result != ResultSucceeded || done.Stories[0].Status != StepDone {
+		t.Fatalf("retry result=%s story=%s", done.Result, done.Stories[0].Status)
+	}
+	if exec.count("ra") != 1 || exec.count("rb") != 2 || exec.count("rc") != 1 {
+		t.Fatalf("retry reran the wrong stages: roles=%v", exec.roles)
+	}
+	for _, s := range done.Stories[0].Steps {
+		if s.Status != StepDone {
+			t.Errorf("step %s = %s", s.ID, s.Status)
+		}
+	}
+}
+
+func TestRetryRejectsNonFailedStep(t *testing.T) {
+	o, _ := newTest(t, &fakeExecutor{})
+	if err := o.RetryFailed(0, "a"); !errors.Is(err, ErrNoFailedStep) {
+		t.Fatalf("retry without a failure = %v", err)
+	}
+}
+
+func TestRetryFailedDiscoveryStartsCleanRun(t *testing.T) {
+	exec := &fakeExecutor{failAt: 1}
+	o, _ := newTest(t, exec)
+	if err := o.Start(one(true)); err != nil {
+		t.Fatal(err)
+	}
+	if failed := waitDone(t, o); failed.Discovery.Status != StepFailed {
+		t.Fatalf("discovery = %s", failed.Discovery.Status)
+	}
+	if err := o.RetryFailed(-1, DiscoveryStage.ID); err != nil {
+		t.Fatal(err)
+	}
+	if done := waitDone(t, o); done.Result != ResultSucceeded {
+		t.Fatalf("retry result = %s", done.Result)
+	}
+}
+
 func TestStopCancelsRun(t *testing.T) {
 	exec := &fakeExecutor{block: make(chan struct{})}
 	o, _ := newTest(t, exec)

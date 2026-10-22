@@ -144,7 +144,7 @@ func TestGateTriggersFixesAndVerification(t *testing.T) {
 		t.Error("backend must only be assigned its own issues, without the raw verdict JSON")
 	}
 	verify := exec.prompts[len(exec.prompts)-1]
-	if !strings.Contains(verify, "Verificação (rodada 2)") || !strings.Contains(verify, "artifact-fe") {
+	if !strings.Contains(verify, "Verificação, rodada 2") || !strings.Contains(verify, "artifact-fe") {
 		t.Errorf("verification prompt must list applied fixes:\n%s", verify)
 	}
 	if review := run.Stories[0].Steps[4]; len(review.Issues) != 2 || review.Note == "" {

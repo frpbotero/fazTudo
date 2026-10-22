@@ -88,7 +88,7 @@
         <div class="card-head">
           <div>
             <h2 id="newRunTitle">Nova execução</h2>
-            <p class="muted">Discovery (uma vez por sessão); o arquiteto escolhe os agentes e falhas voltam para correção.</p>
+            <p class="muted">Descreva a entrega. O fluxo planeja, implementa e valida antes de concluir.</p>
           </div>
         </div>
 
@@ -182,20 +182,28 @@
         <ol class="steps" id="steps"></ol>
       </section>
 
-      <section class="card" aria-labelledby="eventsTitle">
-        <div class="card-head">
-          <h2 id="eventsTitle">Eventos</h2>
-          <div class="toolbar">
-            <div class="segmented segmented-sm" role="radiogroup" aria-label="Filtrar eventos">
-              <label><input type="radio" name="logFilter" value="all" checked><span>Todos</span></label>
-              <label><input type="radio" name="logFilter" value="issues"><span>Avisos e erros</span></label>
+      <details class="card events-card" aria-labelledby="eventsTitle">
+        <summary class="events-summary">
+          <span>
+            <h2 id="eventsTitle">Detalhes da execução</h2>
+            <span class="muted">Logs técnicos, avisos e erros</span>
+          </span>
+          <span class="events-summary-action"><span class="when-closed">Mostrar</span><span class="when-open">Ocultar</span></span>
+        </summary>
+        <div class="events-content">
+          <div class="card-head events-tools">
+            <div class="toolbar">
+              <div class="segmented segmented-sm" role="radiogroup" aria-label="Filtrar eventos">
+                <label><input type="radio" name="logFilter" value="all" checked><span>Todos</span></label>
+                <label><input type="radio" name="logFilter" value="issues"><span>Avisos e erros</span></label>
+              </div>
+              <label class="check"><input type="checkbox" id="autoScroll" checked> Rolagem automática</label>
+              <button class="btn btn-ghost btn-sm" id="clearLogsBtn" type="button">Limpar</button>
             </div>
-            <label class="check"><input type="checkbox" id="autoScroll" checked> Rolagem automática</label>
-            <button class="btn btn-ghost btn-sm" id="clearLogsBtn" type="button">Limpar</button>
           </div>
+          <div class="log" id="log" role="log" aria-live="polite"></div>
         </div>
-        <div class="log" id="log" role="log" aria-live="polite"></div>
-      </section>
+      </details>
     </div>
   </main>
 

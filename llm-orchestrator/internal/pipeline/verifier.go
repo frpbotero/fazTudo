@@ -214,8 +214,8 @@ func (o *Orchestrator) traceIssues(traces []quality.Trace, plan Plan) []Issue {
 		issues = append(issues, Issue{
 			Agent:    agent,
 			Severity: "alta",
-			Description: fmt.Sprintf("%d caso(s) de teste da especificação sem teste correspondente no repositório. "+
-				"Implemente-os citando o ID no nome do teste: %s", len(ids), strings.Join(ids, "; ")),
+			Description: fmt.Sprintf("%d caso(s) de teste da especificação sem teste no repositório. "+
+				"Escreva-os com o ID no nome: %s", len(ids), strings.Join(ids, "; ")),
 			Location: "rastreabilidade",
 		})
 	}
@@ -223,8 +223,8 @@ func (o *Orchestrator) traceIssues(traces []quality.Trace, plan Plan) []Issue {
 }
 
 func commandIssue(c quality.Command, r quality.Result) string {
-	return fmt.Sprintf("O comando `%s` (%s) %s. Corrija o código até ele passar; ajuste um teste apenas se ele contrariar a especificação, "+
-		"explicando o motivo. Final da saída:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(r.Output, maxIssueOutput))
+	return fmt.Sprintf("`%s` (%s) %s. Corrija o código até passar. Mude teste só se contrariar a especificação, com motivo. "+
+		"Fim da saída:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(r.Output, maxIssueOutput))
 }
 
 func exitLabel(r quality.Result) string {

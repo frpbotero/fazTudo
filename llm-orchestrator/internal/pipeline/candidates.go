@@ -33,9 +33,9 @@ type Candidate struct {
 // candidateStrategies steer each alternative implementation differently, so
 // the candidates explore distinct solutions instead of near-identical ones.
 var candidateStrategies = []string{
-	"Faça a menor mudança que atenda completamente à US, reutilizando ao máximo o código existente.",
-	"Priorize uma solução robusta e bem estruturada, com tratamento de erros e testes para cada caso da especificação.",
-	"Priorize legibilidade e simplicidade: funções pequenas, nomes claros e o mínimo de abstrações.",
+	"Menor mudança que atende toda a US. Máximo reuso do código existente.",
+	"Solução robusta: erros tratados, teste para cada caso da especificação.",
+	"Legibilidade primeiro: funções pequenas, nomes claros, mínimo de abstração.",
 }
 
 // SelectorStage compares the qualified candidates when the checks leave a tie.
@@ -45,8 +45,7 @@ var SelectorStage = Stage{
 	Role:     "Candidate Selector",
 	Tier:     provider.TierHeavy,
 	ReadOnly: true,
-	System: "Você compara implementações alternativas da mesma tarefa e escolhe a melhor. " +
-		"Critérios, em ordem: atende a todos os requisitos da US; correção; simplicidade e legibilidade; aderência às convenções do projeto.",
+	System:   "Compara implementações da mesma tarefa, escolhe a melhor. Ordem: atende toda a US; correta; simples e legível; segue convenções.",
 }
 
 // dependencyDirs are ignored directories linked into each worktree so the
@@ -132,7 +131,7 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 			resp, err := o.exec.Execute(ctx, provider.Request{
 				Role:    fmt.Sprintf("%s · candidato %s", stage.Role, c.ID),
 				System:  stage.System,
-				Prompt:  prompt + "\n\n## Estratégia desta implementação\n\n" + c.Strategy,
+				Prompt:  prompt + "\n\n## Estratégia\n\n" + c.Strategy,
 				Tier:    stage.Tier,
 				WorkDir: c.work,
 			}, o.providerLog)
@@ -160,13 +159,15 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 			c.Note = "commit falhou: " + err.Error()
 			continue
 		case commit == nil:
-			c.Note = "nenhuma alteração"
-			continue
+			// Still a valid outcome (the work may already be done), but it
+			// loses ties to candidates that changed something.
+			c.Note, c.hash = "nenhuma alteração", base
+		default:
+			c.hash, c.commit = commit.Hash, commit
+			c.Commit, c.Files = commit.Hash, len(commit.Files)
 		}
-		c.hash, c.commit = commit.Hash, commit
-		c.Commit, c.Files = commit.Hash, len(commit.Files)
-		changed := make([]string, 0, len(commit.Files))
-		for _, f := range commit.Files {
+		var changed []string
+		for _, f := range filesOf(c.commit) {
 			path := strings.TrimPrefix(f.Path, prefix)
 			if slices.Contains(protected, path) {
 				c.Note = "alterou arquivo de entrada protegido: " + path
@@ -174,7 +175,7 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 			}
 			changed = append(changed, path)
 		}
-		if c.Note != "" {
+		if c.Note != "" && c.commit != nil {
 			continue
 		}
 		o.logf(LevelInfo, "Verificando o candidato %s.", c.ID)
@@ -234,10 +235,18 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 	if len(valid) == 0 {
 		return nil, ""
 	}
-	best := slices.MinFunc(valid, func(a, b *candidate) int { return a.Issues - b.Issues })
+	// Fewest issues first; among equals, candidates that changed something.
+	rank := func(c *candidate) int {
+		r := c.Issues * 2
+		if c.commit == nil {
+			r++
+		}
+		return r
+	}
+	best := slices.MinFunc(valid, func(a, b *candidate) int { return rank(a) - rank(b) })
 	var tied []*candidate
 	for _, c := range valid {
-		if c.Issues == best.Issues {
+		if rank(c) == rank(best) {
 			tied = append(tied, c)
 		}
 	}
@@ -247,7 +256,7 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 	}
 
 	var b strings.Builder
-	b.WriteString("## Candidatos\n\nTodos tiveram o mesmo resultado nas verificações automáticas. Compare os diffs.\n\n")
+	b.WriteString("## Candidatos\n\nEmpate nas verificações automáticas. Compare os diffs.\n\n")
 	for _, c := range tied {
 		diff, err := ss.git.Diff(ctx, base, c.hash, maxCandidateDiff)
 		if err != nil {
@@ -255,7 +264,7 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 		}
 		fmt.Fprintf(&b, "### Candidato %s\n\nEstratégia: %s\n\n```diff\n%s\n```\n\n", c.ID, c.Strategy, diff)
 	}
-	b.WriteString("## Sua tarefa\n\nEscolha a melhor implementação. Ao final, inclua obrigatoriamente um bloco ```json:\n" +
+	b.WriteString("## Sua tarefa\n\nEscolha a melhor. Fim da resposta: bloco ```json obrigatório:\n" +
 		"```json\n{\"choice\": \"A\", \"reason\": \"motivo em uma frase\"}\n```")
 
 	resp, err := o.exec.Execute(ctx, provider.Request{
@@ -278,6 +287,13 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 		}
 	}
 	return tied[0], reason
+}
+
+func filesOf(c *vcs.Commit) []vcs.FileChange {
+	if c == nil {
+		return nil
+	}
+	return c.Files
 }
 
 // linkDependencies symlinks installed dependencies from the repository into a

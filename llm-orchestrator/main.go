@@ -1,3 +1,5 @@
+//go:build !desktop
+
 // Command llm-orchestrator serves the FazTudo dashboard and runs the
 // multi-agent pipeline on top of the Claude Code and Codex CLIs.
 package main
@@ -25,9 +27,6 @@ import (
 	"llm-orchestrator/internal/workspace"
 	"llm-orchestrator/web"
 )
-
-// version is set at build time via -ldflags "-X main.version=...".
-var version = "dev"
 
 func main() {
 	if err := run(); err != nil {

@@ -1,0 +1,27 @@
+# Pacotes .deb/.rpm do app desktop. Use via scripts/package-linux.sh.
+name: faztudo
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: devel
+maintainer: FazTudo <faztudo@users.noreply.github.com>
+description: Orquestrador desktop de agentes LLM (Claude Code e Codex CLI).
+license: Proprietary
+contents:
+  - src: build/bin/FazTudo
+    dst: /usr/bin/faztudo
+    file_info:
+      mode: 0755
+  - src: build/linux/faztudo.desktop
+    dst: /usr/share/applications/faztudo.desktop
+  - src: build/appicon.png
+    dst: /usr/share/pixmaps/faztudo.png
+overrides:
+  deb:
+    depends:
+      - libgtk-3-0
+      - libwebkit2gtk-4.1-0
+  rpm:
+    depends:
+      - gtk3
+      - webkit2gtk4.1

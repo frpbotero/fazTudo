@@ -639,6 +639,23 @@ Critérios de aceitação:
     if (e.target.open) openArtifacts.add(id); else openArtifacts.delete(id);
   }, true);
   el.steps.addEventListener('click', async (e) => {
+    const retry = e.target.closest('button[data-retry-step]');
+    if (retry) {
+      retry.disabled = true;
+      try {
+        await api('POST', '/api/pipeline/retry', {
+          story: Number(retry.dataset.retryStory),
+          step: retry.dataset.retryStep,
+        });
+        openArtifacts.clear();
+        viewStory = null;
+        toast('Etapa reiniciada. As validações seguintes serão executadas novamente.', 'success');
+      } catch (err) {
+        retry.disabled = false;
+        toast(err.message, 'error');
+      }
+      return;
+    }
     const diff = e.target.closest('button[data-diff]');
     if (diff) {
       openDiff(diff.dataset.diff, diff.dataset.title);
@@ -705,8 +722,8 @@ Critérios de aceitação:
   function renderIssues(issues, title) {
     if (!issues?.length) return '';
     return `
-      <div class="issues">
-        <div class="issues-title">${esc(title)}</div>
+      <details class="issues">
+        <summary class="issues-title"><span>${esc(title)}</span><span>${issues.length} item${issues.length === 1 ? '' : 's'}</span></summary>
         <ul>${issues.map((is) => `
           <li>
             ${is.severity ? `<span class="sev" data-sev="${esc(is.severity)}">${esc(is.severity)}</span>` : ''}
@@ -715,7 +732,7 @@ Critérios de aceitação:
             ${is.location ? `<code>${esc(is.location)}</code>` : ''}
           </li>`).join('')}
         </ul>
-      </div>`;
+      </details>`;
   }
 
   function renderChecks(checks) {
@@ -812,7 +829,9 @@ Critérios de aceitação:
     const current = Math.max(run.current ?? 0, 0);
     const shown = viewStory !== null && viewStory < list.length ? viewStory : current;
     const story = list[shown] || { steps: [] };
-    const steps = [run.discovery, ...(story.steps || [])].filter(Boolean);
+    const allSteps = [run.discovery, ...(story.steps || [])].filter(Boolean);
+    const hiddenSteps = allSteps.filter((s) => s.status === 'canceled' || s.status === 'omitted');
+    const steps = allSteps.filter((s) => s.status !== 'canceled' && s.status !== 'omitted');
 
     const finished = (s) => ['done', 'skipped', 'omitted'].includes(s.status);
     const total = 1 + list.reduce((n, st) => n + st.steps.length, 0);
@@ -886,12 +905,19 @@ Critérios de aceitação:
                 <div class="step-title">${esc(s.title)}</div>
                 <div class="step-meta">${kindTag}<span>${esc(s.role)}</span>${s.tier ? `<span class="tier">${esc(s.tier)}</span>` : ''}${s.note ? `<span>${esc(s.note)}</span>` : ''}</div>
               </div>
-              <div class="step-side">${model}${time}${s.status !== 'pending' ? badge(st) : ''}</div>
+              <div class="step-side">
+                ${model}${time}${s.status !== 'pending' ? badge(st) : ''}
+                ${s.status === 'failed' && !run.running ? `<button class="btn btn-sm" type="button" data-retry-step="${esc(s.id)}" data-retry-story="${i === 0 ? -1 : shown}">${icon('rotate')}Refazer etapa</button>` : ''}
+              </div>
             </div>
             ${error}${extra}${artifact}
           </div>
         </li>`;
-    }).join('');
+    }).join('') + (hiddenSteps.length ? `
+      <li class="step-summary">
+        <span class="summary-line"></span>
+        <span>${hiddenSteps.length} etapa${hiddenSteps.length === 1 ? '' : 's'} não executada${hiddenSteps.length === 1 ? '' : 's'}</span>
+      </li>` : '');
     // The CSP forbids inline style attributes; widths are set through the CSSOM.
     el.steps.querySelectorAll('[data-pct]').forEach((n) => { n.style.width = `${n.dataset.pct}%`; });
   }
@@ -1189,7 +1215,10 @@ Critérios de aceitação:
   function startPolling() {
     if (pollTimer) return;
     pollTimer = setInterval(async () => {
-      if (await fetchStatus()) setConn('polling', 'Reconectando…');
+      if (await fetchStatus()) {
+        if (snapshot?.desktop) setConn('live', 'Aplicativo local');
+        else setConn('polling', 'Reconectando…');
+      }
     }, POLL_MS);
   }
   function stopPolling() {
@@ -1216,7 +1245,16 @@ Critérios de aceitação:
     };
   }
 
-  updateModeNote();
-  fetchStatus();
-  connect();
+  async function boot() {
+    updateModeNote();
+    await fetchStatus();
+    if (snapshot?.desktop) {
+      setConn('live', 'Aplicativo local');
+      startPolling();
+      return;
+    }
+    connect();
+  }
+
+  boot();
 })();

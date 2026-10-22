@@ -27,6 +27,10 @@ var ErrAlreadyRunning = errors.New("já existe uma execução em andamento")
 // ErrNoStories is returned by Start when no story was given.
 var ErrNoStories = errors.New("nenhuma User Story informada")
 
+// ErrNoFailedStep is returned when there is no failed stage that can be
+// resumed from the last execution.
+var ErrNoFailedStep = errors.New("nenhuma etapa com falha para refazer")
+
 // StepStatus is the lifecycle state of a stage.
 type StepStatus string
 
@@ -171,6 +175,7 @@ type Orchestrator struct {
 
 	mu     sync.RWMutex
 	run    Run
+	last   StartOptions
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -248,6 +253,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		Stories:    runs,
 		Current:    -1,
 	}
+	o.last = opts
 	done := o.done
 	o.mu.Unlock()
 
@@ -264,6 +270,100 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		o.execute(ctx, repo, opts)
 	}()
 	return nil
+}
+
+// RetryFailed resumes the failed story at the stage that owns the failure.
+// Completed stages before it are kept as context; generated fix/verify steps
+// from that stage onward are discarded and will be rebuilt by the gate.
+func (o *Orchestrator) RetryFailed(story int, stepID string) error {
+	o.mu.Lock()
+	if o.run.Running {
+		o.mu.Unlock()
+		return ErrAlreadyRunning
+	}
+	if story == -1 && stepID == DiscoveryStage.ID && o.run.Result == ResultFailed && o.run.Discovery.Status == StepFailed && len(o.last.Stories) > 0 {
+		opts := o.last
+		o.mu.Unlock()
+		return o.Start(opts)
+	}
+	if o.run.Result != ResultFailed || story < 0 || story >= len(o.run.Stories) || len(o.last.Stories) != len(o.run.Stories) {
+		o.mu.Unlock()
+		return ErrNoFailedStep
+	}
+
+	failed := stepIndex(o.run.Stories[story].Steps, stepID)
+	if failed < 0 || o.run.Stories[story].Steps[failed].Status != StepFailed {
+		o.mu.Unlock()
+		return ErrNoFailedStep
+	}
+	baseID := retryStageID(o.run.Stories[story].Steps[failed])
+	stageAt := slices.IndexFunc(o.stages, func(s Stage) bool { return s.ID == baseID })
+	if stageAt < 0 {
+		o.mu.Unlock()
+		return ErrNoFailedStep
+	}
+
+	// Keep stable artifacts before the retry point and rebuild the rest of the
+	// observable plan. This also removes stale dynamic correction rounds.
+	previous := o.run.Stories[story]
+	fresh := o.freshSteps()
+	for i := 0; i < stageAt; i++ {
+		if old := stepIndex(previous.Steps, fresh[i].ID); old >= 0 {
+			fresh[i] = previous.Steps[old]
+		}
+	}
+	if previous.Plan != nil {
+		for i := stageAt; i < len(fresh); i++ {
+			if o.stages[i].Selectable && !previous.Plan.Includes(o.stages[i].ID) {
+				fresh[i].Status = StepOmitted
+				fresh[i].Note = "Não selecionado pelo arquiteto"
+			}
+		}
+	}
+	o.run.Stories[story].Steps = fresh
+	o.run.Stories[story].Status = StepRunning
+	started := time.Now()
+	o.run.Stories[story].StartedAt = &started
+	o.run.Stories[story].DurationMS = 0
+	for i := story + 1; i < len(o.run.Stories); i++ {
+		o.run.Stories[i].Status = StepPending
+		o.run.Stories[i].StartedAt = nil
+		o.run.Stories[i].DurationMS = 0
+		o.run.Stories[i].Plan = nil
+		o.run.Stories[i].Trace = nil
+		o.run.Stories[i].Steps = o.freshSteps()
+	}
+	o.run.Running = true
+	o.run.Result = ""
+	o.run.FinishedAt = nil
+	o.run.Current = story
+	ctx, cancel := context.WithCancel(context.Background())
+	o.cancel = cancel
+	o.done = make(chan struct{})
+	done := o.done
+	opts := o.last
+	o.mu.Unlock()
+	o.notify()
+	o.logf(LevelInfo, "Refazendo %q a partir de %s.", previous.Title, o.stages[stageAt].Title)
+
+	go func() {
+		defer close(done)
+		defer cancel()
+		o.retryExecute(ctx, opts, story, stageAt, started)
+	}()
+	return nil
+}
+
+func retryStageID(step Step) string {
+	if step.Gate != "" {
+		return step.Gate
+	}
+	if step.Kind == "verify" {
+		if at := strings.Index(step.ID, "-verify-"); at > 0 {
+			return step.ID[:at]
+		}
+	}
+	return step.ID
 }
 
 // Stop cancels the active run. It reports whether a run was active.
@@ -364,6 +464,82 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 	o.finish(ResultSucceeded, LevelSuccess, "Pipeline concluído. Todos os agentes entregaram seus artefatos.")
 }
 
+// retryExecute rebuilds the transient session around the repository as it was
+// left by the failed attempt, then continues the failed story and the queue.
+func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, story, stageAt int, started time.Time) {
+	repo := o.ws.Path()
+	ss := o.retrySession(ctx, repo, opts)
+	if ss == nil {
+		return
+	}
+	report := o.ws.Discovery()
+	if report == nil || report.Path != repo {
+		o.failStep(stepRef{story, o.stages[stageAt].ID}, 0, errors.New("discovery indisponível; inicie uma nova execução"))
+		return
+	}
+	ss.report = report
+
+	total := len(opts.Stories)
+	for si := story; si < total; si++ {
+		storyStarted := started
+		startAt := stageAt
+		if si > story {
+			storyStarted = time.Now()
+			startAt = 0
+			o.updateStory(si, func(r *StoryRun) { r.Status = StepRunning; r.StartedAt = &storyStarted })
+		}
+		st := o.restoreStoryState(si, storyStarted, opts, ss)
+		if !o.developStoryFrom(ctx, ss, st, startAt, si > story) {
+			return
+		}
+		o.updateStory(si, func(r *StoryRun) { r.Status = StepDone; r.DurationMS = time.Since(storyStarted).Milliseconds() })
+	}
+	o.finish(ResultSucceeded, LevelSuccess, "Pipeline concluído após refazer a etapa com falha.")
+}
+
+func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts StartOptions) *session {
+	o.exec.SetDryRun(opts.DryRun)
+	policy := o.ws.Policy()
+	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
+	patterns := policy.Protected
+	if name := path.Base(filepath.ToSlash(strings.TrimSpace(opts.DocumentName))); name != "." && name != "/" {
+		patterns = append(slices.Clone(patterns), name)
+	}
+	ss.guard = quality.NewGuard(repo, patterns)
+	if !opts.DryRun && policy.Git {
+		g, _, err := vcs.Open(ctx, repo)
+		if err != nil {
+			o.logf(LevelWarn, "Versionamento indisponível ao refazer a etapa: %v.", err)
+		} else {
+			ss.git = g
+		}
+	}
+	return ss
+}
+
+func (o *Orchestrator) restoreStoryState(si int, started time.Time, opts StartOptions, ss *session) *storyState {
+	st := &storyState{
+		si: si, started: started,
+		sc:   storyContext{Preamble: opts.Preamble, Story: opts.Stories[si], Delivered: opts.Stories[:si], Position: si + 1, Total: len(opts.Stories), Rules: ss.rules(), Instructions: ss.instructions},
+		plan: fullPlan(o.stages, "default"),
+		reqs: quality.ExtractRequirements(opts.Preamble + "\n\n" + opts.Stories[si].Content),
+	}
+	o.mu.RLock()
+	runStory := o.run.Stories[si]
+	if runStory.Plan != nil {
+		st.plan = *runStory.Plan
+	}
+	steps := slices.Clone(runStory.Steps)
+	o.mu.RUnlock()
+	if i := stepIndex(steps, "arch"); i >= 0 {
+		st.planText = steps[i].Output
+	}
+	if i := stepIndex(steps, "spec"); i >= 0 && steps[i].Output != "" {
+		o.applySpec(st, &provider.Response{Output: steps[i].Output})
+	}
+	return st
+}
+
 // prepare snapshots the protected input files and, in real runs, puts the
 // repository under git. A dirty working tree fails the run so the agents'
 // commits never mix with the user's pending changes.
@@ -420,9 +596,18 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 func (o *Orchestrator) developStory(ctx context.Context, ss *session, st *storyState) bool {
 	st.plan = fullPlan(o.stages, "default")
 	st.reqs = quality.ExtractRequirements(st.sc.Preamble + "\n\n" + st.sc.Story.Content)
-	o.startBranch(ctx, ss, st)
+	return o.developStoryFrom(ctx, ss, st, 0, true)
+}
 
-	for _, stage := range o.stages {
+func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *storyState, startAt int, createBranch bool) bool {
+	if createBranch {
+		o.startBranch(ctx, ss, st)
+	}
+
+	for stageIndex, stage := range o.stages {
+		if stageIndex < startAt {
+			continue
+		}
 		if stage.Selectable && !st.plan.Includes(stage.ID) {
 			continue // already marked as omitted when the plan was applied
 		}

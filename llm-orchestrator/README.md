@@ -98,17 +98,49 @@ continua valendo por sessão.
 
 ## Requisitos
 
-- Go 1.22+
+- Go 1.22+ (app desktop: CLI do Wails; Linux: libgtk-3-dev e libwebkit2gtk-4.1-dev)
 - Opcional, para execução real: [`claude`](https://docs.claude.com/claude-code) e/ou [`codex`](https://github.com/openai/codex) no `PATH`
 
 Sem os CLIs, a aplicação funciona em **modo simulação** (padrão), que percorre todo o fluxo sem consumir tokens.
 
-## Uso
+## App desktop
+
+FazTudo roda como aplicativo nativo ([Wails](https://wails.io)): janela própria com o
+WebView do sistema (WKWebView no macOS, WebView2 no Windows, WebKitGTK no Linux), sem
+navegador e sem porta TCP aberta. A API roda no mesmo processo.
+
+| Sistema | Instalador | Como gerar |
+|---------|------------|------------|
+| macOS 13+ (Intel e Apple Silicon) | `FazTudo-<versão>-macos-universal.dmg` | `make dmg` (local) ou CI |
+| Windows 10/11 x64 | `FazTudo-<versão>-windows-amd64-setup.exe` | CI (`make desktop-windows` exige `makensis`) |
+| Linux x64 | `.deb`, `.rpm`, `.tar.gz` | CI (`make desktop-linux` + `scripts/package-linux.sh` no Linux) |
+
+Publicar versão: `git tag v0.2.0 && git push origin v0.2.0`. O workflow
+[`desktop-release`](../.github/workflows/desktop-release.yml) compila nos três sistemas e anexa
+os instaladores à Release. Rodado manualmente (*Run workflow*), deixa os arquivos em *Artifacts*.
+
+```bash
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0   # uma vez
+make desktop-dev  # janela com recarga dos assets
+make dmg          # build/bin/FazTudo.app + dist/*.dmg
+../start.sh       # compila e abre o app (macOS); ../start.sh --web para o modo servidor
+```
+
+Notas:
+
+- Ao abrir pelo Finder/Dock/menu, o app carrega o `PATH` do shell de login, para achar
+  `claude`, `codex`, `node` e `npx` instalados via Homebrew, nvm ou `~/.local/bin`.
+- Sem assinatura Apple Developer, o macOS bloqueia o primeiro uso: clique com o botão direito
+  em FazTudo.app → *Abrir*, ou `xattr -dr com.apple.quarantine /Applications/FazTudo.app`.
+  No Windows, o SmartScreen pede *Mais informações → Executar assim mesmo*.
+- Linux depende de `libwebkit2gtk-4.1-0` (Ubuntu 22.04+/Debian 12+), instalada pelo `.deb`/`.rpm`.
+
+## Modo servidor (web/Docker)
 
 ```bash
 make run          # compila em bin/ e inicia em http://127.0.0.1:8081
 make dev          # go run com logs em nível debug
-../start.sh       # atalho a partir da raiz do repositório
+../start.sh --web # atalho a partir da raiz do repositório
 ```
 
 | Flag | Variável | Padrão | Descrição |

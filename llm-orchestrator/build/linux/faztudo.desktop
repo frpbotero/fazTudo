@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=FazTudo
+Comment=Orquestrador desktop de agentes LLM
+Exec=/usr/bin/faztudo
+Icon=faztudo
+Terminal=false
+Categories=Development;
+StartupWMClass=faztudo

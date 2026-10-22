@@ -8,3 +8,8 @@ coverage.out
 .idea/
 .vscode/
 eval-results/
+
+# Desktop (Wails)
+/build/bin/
+/build/wailsjs/
+/dist/

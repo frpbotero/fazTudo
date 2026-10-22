@@ -42,6 +42,7 @@ var sources = map[string]string{
 // Snapshot is the full state pushed to the UI.
 type Snapshot struct {
 	Version   string           `json:"version"`
+	Desktop   bool             `json:"desktop,omitempty"`
 	DryRun    bool             `json:"dry_run"`
 	Config    provider.Config  `json:"config"`
 	Settings  settings.Status  `json:"settings"`
@@ -60,6 +61,7 @@ type Server struct {
 	hub     *Hub
 	log     *slog.Logger
 	version string
+	desktop bool
 	handler http.Handler
 }
 
@@ -72,6 +74,7 @@ type Deps struct {
 	Hub          *Hub
 	Static       fs.FS
 	Version      string
+	Desktop      bool
 	Logger       *slog.Logger
 }
 
@@ -83,7 +86,7 @@ func New(ctx context.Context, d Deps) *Server {
 	}
 	s := &Server{
 		ctx: ctx, orch: d.Orchestrator, router: d.Router, ws: d.Workspace, store: d.Settings,
-		hub: d.Hub, log: d.Logger, version: d.Version,
+		hub: d.Hub, log: d.Logger, version: d.Version, desktop: d.Desktop,
 	}
 	static := d.Static
 
@@ -94,6 +97,7 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/stories/parse", s.handleParseStories)
 	mux.HandleFunc("POST /api/pipeline/start", s.handleStart)
 	mux.HandleFunc("POST /api/pipeline/stop", s.handleStop)
+	mux.HandleFunc("POST /api/pipeline/retry", s.handleRetry)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
 	mux.HandleFunc("PUT /api/workspace", s.handlePutWorkspace)
 	mux.HandleFunc("DELETE /api/workspace/discovery", s.handleResetDiscovery)
@@ -121,6 +125,7 @@ func (s *Server) SnapshotJSON() ([]byte, error) {
 func (s *Server) snapshot() Snapshot {
 	return Snapshot{
 		Version:   s.version,
+		Desktop:   s.desktop,
 		DryRun:    s.router.DryRun(),
 		Config:    s.router.Config(),
 		Settings:  s.store.Status(),
@@ -291,6 +296,25 @@ func (s *Server) handleStop(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+}
+
+func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Story int    `json:"story"`
+		Step  string `json:"step"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := s.orch.RetryFailed(body.Story, strings.TrimSpace(body.Step)); err != nil {
+		status := http.StatusUnprocessableEntity
+		if errors.Is(err, pipeline.ErrAlreadyRunning) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "retrying"})
 }
 
 func (s *Server) handleGetWorkspace(w http.ResponseWriter, _ *http.Request) {

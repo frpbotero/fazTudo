@@ -1,0 +1,106 @@
+# Builds the FazTudo desktop installers on native runners:
+#   macOS   -> .dmg (universal: Intel + Apple Silicon)
+#   Windows -> NSIS installer .exe (bootstraps WebView2 when missing)
+#   Linux   -> .deb, .rpm and .tar.gz
+# Push a tag like v0.2.0 to publish a GitHub Release, or run it manually to
+# just download the artifacts.
+name: desktop-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  WAILS_VERSION: v2.17.0
+
+defaults:
+  run:
+    working-directory: llm-orchestrator
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: mac
+          - os: windows-latest
+            target: windows
+          - os: ubuntu-24.04
+            target: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: llm-orchestrator/go.mod
+          cache-dependency-path: llm-orchestrator/go.sum
+
+      - name: Versão
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-${GITHUB_SHA::7}"; fi
+          echo "value=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+
+      - name: Testes
+        run: go test ./...
+
+      - name: Dependências Linux
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: macOS (.dmg)
+        if: matrix.target == 'mac'
+        run: make dmg VERSION=${{ steps.version.outputs.value }} APP_VERSION=${{ steps.version.outputs.value }}
+
+      - name: Windows (instalador .exe)
+        if: matrix.target == 'windows'
+        shell: bash
+        run: |
+          make desktop-windows VERSION=${{ steps.version.outputs.value }}
+          mkdir -p dist
+          cp build/bin/*-installer.exe "dist/FazTudo-${{ steps.version.outputs.value }}-windows-amd64-setup.exe"
+
+      - name: Linux (.deb, .rpm, .tar.gz)
+        if: matrix.target == 'linux'
+        run: |
+          make desktop-linux VERSION=${{ steps.version.outputs.value }}
+          ./scripts/package-linux.sh ${{ steps.version.outputs.value }} amd64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faztudo-${{ matrix.target }}
+          path: llm-orchestrator/dist/*
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

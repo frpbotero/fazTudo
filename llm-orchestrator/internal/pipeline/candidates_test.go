@@ -113,3 +113,17 @@ func TestBestOfNTieIsBrokenBySelector(t *testing.T) {
 		}
 	}
 }
+
+func TestBestOfNWithoutChangesIsNotAFailure(t *testing.T) {
+	exec := &fakeExecutor{}
+	o, _ := newCandidateTest(t, exec)
+	_ = o.Start(realStory("já implementado"))
+	run := waitDone(t, o)
+	if run.Result != ResultSucceeded {
+		t.Fatalf("result = %s, logs: %+v", run.Result, run.Logs)
+	}
+	front := run.Stories[0].Steps[0]
+	if front.Commit != nil || !front.Candidates[0].Chosen {
+		t.Errorf("unchanged candidates: commit = %+v, candidates = %+v", front.Commit, front.Candidates)
+	}
+}

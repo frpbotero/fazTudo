@@ -72,7 +72,7 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 }
 
 func lensFocus(l Lens) string {
-	return fmt.Sprintf("\n\n## Foco desta revisão: %s\n\n%s\nAvalie somente este foco; outros revisores cobrem os demais.", l.Title, l.Focus)
+	return fmt.Sprintf("\n\n## Foco: %s\n\n%s\nSó este foco; outros revisores cobrem o resto.", l.Title, l.Focus)
 }
 
 func lensTitles(lenses []Lens) string {

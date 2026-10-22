@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "FazTudo",
+  "outputfilename": "FazTudo",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "assetdir": "web/static",
+  "wailsjsdir": "build/wailsjs",
+  "author": {
+    "name": "FazTudo"
+  },
+  "info": {
+    "companyName": "FazTudo",
+    "productName": "FazTudo",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright © 2026 FazTudo",
+    "comments": "Orquestrador desktop de agentes LLM"
+  },
+  "frontend:dir": "web/static"
+}

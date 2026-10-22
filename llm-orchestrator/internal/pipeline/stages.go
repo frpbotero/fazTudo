@@ -56,26 +56,24 @@ var reviewLenses = []Lens{
 	{
 		ID:    "spec",
 		Title: "Aderência à especificação",
-		Focus: "Cada requisito, critério de aceitação, contrato, estado e código de erro da US/EDD foi implementado exatamente como especificado? " +
-			"Defenda o usuário: aponte todo requisito ausente, parcial ou alterado.",
+		Focus: "Todo requisito, critério, contrato, estado e código de erro da US/EDD implementado exatamente? " +
+			"Defenda o usuário: aponte requisito ausente, parcial ou alterado.",
 	},
 	{
 		ID:    "simplicity",
 		Title: "Simplicidade e legibilidade",
-		Focus: "Código mínimo e legível: duplicação, código morto, funções longas, nomes ruins, abstrações ou try/catch desnecessários, " +
-			"código existente que deveria ter sido reutilizado e qualquer trecho minificado ou compactado.",
+		Focus: "Duplicação, código morto, funções longas, nomes ruins, abstração ou try/catch sobrando, helper existente não reutilizado, " +
+			"import faltando, trecho apagado sem motivo, estilo diferente do projeto, código minificado.",
 	},
 	{
 		ID:    "tests",
 		Title: "Testes",
-		Focus: "Os testes cobrem cada critério de aceitação e caso de teste da especificação, com o ID no nome? " +
-			"Aponte expectativas que contrariam a especificação, testes frágeis e testes que não verificam nada.",
+		Focus: "Cada critério e caso de teste da especificação coberto, com ID no nome? Expectativa contrária à especificação, teste frágil ou vazio.",
 	},
 	{
-		ID:    "ux",
-		Title: "Interface e acessibilidade",
-		Focus: "Acessibilidade (WCAG 2.2 AA: rótulos, foco, ARIA válido, contraste), responsividade no celular, elementos sobrepondo controles, " +
-			"estados de carregamento, erro e vazio, e consistência visual.",
+		ID:       "ux",
+		Title:    "Interface e acessibilidade",
+		Focus:    "WCAG 2.2 AA (rótulos, foco, ARIA válido, contraste), celular, elemento cobrindo controle, estados de carregamento/erro/vazio, consistência visual.",
 		Requires: "frontend",
 	},
 }
@@ -91,40 +89,56 @@ func activeLenses(lenses []Lens, plan Plan) []Lens {
 	return out
 }
 
-const planInstructions = "\n\nAo final da resposta, inclua obrigatoriamente um bloco ```json com o plano de execução:\n" +
-	"```json\n{\"agents\": [\"frontend\", \"backend\", \"security\", \"e2e\"], \"reason\": \"por que cada agente é (ou não é) necessário\"}\n```\n" +
-	"Inclua em \"agents\" somente os agentes realmente necessários para esta US: \"frontend\" (interface), \"backend\" (APIs, dados, regras), " +
-	"\"security\" (auditoria OWASP e testes unitários: autenticação, dados sensíveis, pagamentos, entradas externas) e \"e2e\" (fluxos de tela com Playwright). " +
-	"Uma mudança só de frontend não chama backend; uma mudança simples não precisa de security nem e2e. O code review sempre roda."
+// Output contracts. They stay explicit: the orchestrator parses them.
+const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
+	"```json\n{\"agents\": [\"frontend\", \"backend\", \"security\", \"e2e\"], \"reason\": \"motivo de cada escolha\"}\n```\n" +
+	"\"agents\": só o necessário. frontend = interface; backend = API, dados, regras; " +
+	"security = auth, dados sensíveis, pagamento, entrada externa; e2e = fluxo de tela. " +
+	"Só interface: sem backend. Mudança simples: sem security nem e2e. Code review sempre roda."
 
-const specInstructions = "\n\nAo final da resposta, inclua obrigatoriamente um bloco ```json com os casos de teste exigidos:\n" +
-	"```json\n{\"tests\": [{\"id\": \"UT-CART-01\", \"description\": \"o que o teste verifica\", \"kind\": \"unit\" | \"integration\" | \"e2e\"}]}\n```\n" +
-	"Se o documento já define IDs de casos de teste, reutilize exatamente os mesmos IDs. " +
-	"O orquestrador verifica ao final que cada ID aparece nos arquivos de teste do repositório."
+const specInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
+	"```json\n{\"tests\": [{\"id\": \"UT-CART-01\", \"description\": \"o que verifica\", \"kind\": \"unit\" | \"integration\" | \"e2e\"}]}\n```\n" +
+	"Documento já tem IDs de teste: use os mesmos. Orquestrador confere cada ID nos arquivos de teste."
 
-const verdictInstructions = "\n\nAo final da resposta, inclua obrigatoriamente um bloco ```json com o veredito:\n" +
+const verdictInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"status\": \"approved\" | \"changes_requested\", \"issues\": [{\"agent\": \"frontend\" | \"backend\", \"severity\": \"alta\" | \"média\" | \"baixa\", " +
-	"\"description\": \"o que está errado e o que deve ser feito\", \"location\": \"arquivo:linha\"}]}\n```\n" +
-	"Use \"changes_requested\" apenas para problemas que impedem a entrega; atribua cada problema ao agente que deve corrigi-lo. " +
-	"Sugestões opcionais ficam fora de \"issues\"."
+	"\"description\": \"problema e correção\", \"location\": \"arquivo:linha\"}]}\n```\n" +
+	"changes_requested só para o que bloqueia entrega. Cada issue com o agente que corrige. Sugestão opcional fora de issues."
+
+// engineeringRules are the implementers' working rules, adapted from the
+// Codebuff/Freebuff orchestrator guidelines.
+const engineeringRules = "\n\nRegras:\n" +
+	"- Leia código vizinho, testes e config antes de editar. Siga convenções existentes.\n" +
+	"- Não assuma biblioteca: confirme no manifesto (package.json, go.mod…) antes de usar.\n" +
+	"- Mudança mínima, solução simples.\n" +
+	"- Reutilize helpers e componentes existentes. Não reimplemente.\n" +
+	"- Mudou símbolo exportado: atualize todas as referências.\n" +
+	"- Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.\n" +
+	"- Valide: rode testes, typecheck e lint da área alterada antes de terminar.\n" +
+	browserRule +
+	"- Resumo final curto: poucas palavras por mudança."
+
+// browserRule keeps agents off the system Chrome: launched inside the CLI
+// sandbox it aborts while registering with the window server, and macOS shows
+// a "Google Chrome quit unexpectedly" dialog for every attempt.
+const browserRule = "- Navegador de teste: Chromium do Playwright em headless (`npx playwright install chromium`). " +
+	"Nunca `channel: 'chrome'`/`msedge` nem Chrome do sistema; se a config usar, troque para o Chromium.\n"
 
 // DiscoveryStage maps the repository before any implementation. Its report is
 // cached per repository for the session and shared with every other stage.
 var DiscoveryStage = Stage{
-	ID:    "discovery",
-	Title: "Discovery do repositório",
-	Role:  "Staff Engineer (Discovery)",
-	Tier:  provider.TierStandard,
-	System: "Você é um Staff Engineer fazendo o discovery de um repositório existente antes de qualquer desenvolvimento. " +
-		"Apenas leia e analise; não modifique, crie nem apague arquivos.",
-	Task: "Analise o repositório no diretório atual e produza um relatório em Markdown com, para cada seção/módulo " +
-		"(raiz, frontend, backend, serviços, infra etc.):\n" +
-		"1. Linguagens, frameworks e versões relevantes.\n" +
-		"2. Comandos de instalação, build, testes, lint e execução local.\n" +
-		"3. Arquitetura, organização de pastas e convenções de código observadas.\n" +
-		"4. Onde ficam e como são escritos os testes (unitários, integração, E2E).\n" +
-		"5. Riscos ou pontos de atenção para quem for implementar novas funcionalidades.\n" +
-		"Seja objetivo; este relatório será o contexto fixo de todos os agentes desta sessão.",
+	ID:     "discovery",
+	Title:  "Discovery do repositório",
+	Role:   "Staff Engineer (Discovery)",
+	Tier:   provider.TierStandard,
+	System: "Discovery de repositório existente. Só leitura: não crie, edite nem apague arquivos.",
+	Task: "Relatório Markdown curto, por módulo (raiz, frontend, backend, infra…):\n" +
+		"1. Linguagens, frameworks, versões.\n" +
+		"2. Comandos: instalar, build, teste, lint, rodar.\n" +
+		"3. Arquitetura, pastas, convenções.\n" +
+		"4. Testes: onde ficam, como são escritos.\n" +
+		"5. Riscos para quem for implementar.\n" +
+		"Será o contexto fixo de todos os agentes.",
 }
 
 // DefaultStages is the sequential context → EDD → architecture →
@@ -136,22 +150,21 @@ var DefaultStages = []Stage{
 		Role:     "Context Scout",
 		Tier:     provider.TierStandard,
 		ReadOnly: true,
-		System:   "Você mapeia o código existente antes de qualquer alteração. Apenas leia e pesquise; não modifique arquivos.",
-		Task: "Encontre no repositório o que é relevante para esta US e produza um relatório curto:\n" +
-			"1. Até 15 arquivos relevantes, com o caminho completo e, em uma linha, por que importam.\n" +
-			"2. Funções, componentes e utilitários existentes que devem ser reutilizados.\n" +
-			"3. Testes existentes relacionados e onde os novos testes devem ficar.\n" +
-			"4. Convenções de código a seguir.\n" +
-			"Não proponha a implementação; outros agentes farão isso com base no seu relatório.",
+		System:   "Mapeia código existente antes de qualquer mudança. Só leitura.",
+		Task: "Relatório curto:\n" +
+			"1. Até 15 arquivos relevantes: caminho + por que importa (uma linha).\n" +
+			"2. Funções, componentes, utilitários a reutilizar.\n" +
+			"3. Testes relacionados e onde ficam os novos.\n" +
+			"4. Convenções a seguir.\n" +
+			"Não proponha implementação.",
 	},
 	{
-		ID:    "spec",
-		Title: "Especificação EDD e contratos TDD",
-		Role:  "Staff Spec Engineer",
-		Tier:  provider.TierStandard,
-		System: "Você é um Staff Software Engineer especialista em EDD (Engineering Design Document) e TDD. " +
-			"Gere a especificação técnica: diagramas textuais, schemas de dados, endpoints e casos de teste unitários e de integração.",
-		Task:      "Converta a User Story em contratos técnicos (EDD) e plano de testes (TDD), com um ID para cada caso de teste.",
+		ID:        "spec",
+		Title:     "Especificação EDD e contratos TDD",
+		Role:      "Staff Spec Engineer",
+		Tier:      provider.TierStandard,
+		System:    "Engenheiro de especificação (EDD + TDD). Só leitura.",
+		Task:      "US vira EDD: contratos, schemas, endpoints, estados, erros. Plano TDD: um ID por caso de teste. Sem código de implementação.",
 		Specifier: true,
 		ReadOnly:  true,
 	},
@@ -162,9 +175,8 @@ var DefaultStages = []Stage{
 		Tier:     provider.TierHeavy,
 		Planner:  true,
 		ReadOnly: true,
-		System: "Você é o Arquiteto Principal de Soluções. " +
-			"Analise o EDD e detalhe a divisão de tarefas e dependências para os subagentes de Frontend, Backend, Data Science, Security e Testes.",
-		Task: "Distribua as responsabilidades técnicas e dependências entre os subagentes.",
+		System:   "Arquiteto principal. Só leitura.",
+		Task:     "Divida o trabalho entre os agentes: o que cada um faz, arquivos, dependências e ordem. Curto e concreto.",
 	},
 	{
 		ID:          "frontend",
@@ -173,9 +185,9 @@ var DefaultStages = []Stage{
 		Tier:        provider.TierStandard,
 		Selectable:  true,
 		Implementer: true,
-		System: "Você é o subagente de Frontend e UI/UX. " +
-			"Produza código moderno, limpo, responsivo e acessível (WCAG 2.2 AA).",
-		Task: "Implemente a camada visual, os componentes e a integração de interface conforme o EDD e o plano do arquiteto.",
+		System: "Agente de frontend. Interface acessível (WCAG 2.2 AA), responsiva e caprichada: hierarquia, contraste, " +
+			"estados de hover/foco/erro/vazio, transições discretas." + engineeringRules,
+		Task: "Implemente interface e componentes conforme EDD e plano do arquiteto.",
 	},
 	{
 		ID:          "backend",
@@ -184,9 +196,8 @@ var DefaultStages = []Stage{
 		Tier:        provider.TierStandard,
 		Selectable:  true,
 		Implementer: true,
-		System: "Você é o subagente de Backend e Engenharia de Dados. " +
-			"Implemente APIs resilientes, regras de negócio determinísticas e estruturas de dados performáticas.",
-		Task: "Implemente endpoints, serviços e algoritmos de forma que todos os testes do plano TDD passem.",
+		System:      "Agente de backend e dados. APIs resilientes, regras determinísticas, entrada validada." + engineeringRules,
+		Task:        "Implemente endpoints, serviços e algoritmos até todos os testes do plano TDD passarem.",
 	},
 	{
 		ID:       "checks",
@@ -203,10 +214,8 @@ var DefaultStages = []Stage{
 		Selectable: true,
 		Gate:       true,
 		ReadOnly:   true,
-		System: "Você é o subagente de Segurança (OWASP Top 10) e testes automatizados. " +
-			"Verifique sanitização de entradas, headers seguros, autenticação/autorização e a qualidade dos testes unitários. " +
-			"Os comandos de teste já são executados pelo orquestrador; você apenas lê e analisa.",
-		Task: "Analise vulnerabilidades e avalie a suíte de testes unitários da implementação.",
+		System:     "Revisor de segurança (OWASP Top 10). Só leitura; orquestrador já roda os testes.",
+		Task:       "Procure: entrada sem validação/sanitização, XSS, injeção, auth/autorização falha, segredo exposto, header inseguro. Avalie também os testes unitários.",
 	},
 	{
 		ID:       "review",
@@ -216,15 +225,13 @@ var DefaultStages = []Stage{
 		Gate:     true,
 		ReadOnly: true,
 		Lenses:   reviewLenses,
-		System: "Você é um revisor de código sênior e rigoroso. Você não altera arquivos: apenas lê e aponta problemas. " +
-			"Avalie SOLID, DRY, Clean Code, concorrência, tratamento de erros e legibilidade com critérios objetivos.",
-		Task: "Faça o code review das implementações aplicando esta rubrica; cada violação vai para \"issues\" com arquivo:linha:\n" +
-			"1. Legibilidade: respeita o limite de linha, nada minificado ou compactado, funções curtas com uma responsabilidade, nomes descritivos.\n" +
-			"2. Aderência ao EDD: contratos, estados, códigos de erro e estrutura de pastas exatamente como especificados.\n" +
-			"3. Testes: cada critério de aceitação coberto, com o ID do caso de teste no nome; nenhum teste com expectativa contrária à especificação.\n" +
-			"4. Robustez: entradas validadas, erros tratados, sem duplicação relevante.\n" +
-			"5. Interface (quando houver): acessível, responsiva e sem elementos sobrepondo controles.\n" +
-			"Inclua um scorecard por critério.",
+		System:   "Revisor sênior rigoroso. Só leitura: aponta, não corrige. Só crítica, sem elogios. Nada a apontar: diga em uma frase.",
+		Task: "Revise as mudanças desta US. Cada violação vai em issues com arquivo:linha.\n" +
+			"1. Legível: limite de linha, nada minificado, funções curtas, nomes claros.\n" +
+			"2. EDD: contratos, estados, erros e pastas como especificado.\n" +
+			"3. Testes: cada critério coberto, ID no nome, expectativas corretas.\n" +
+			"4. Robustez: entrada validada, erro tratado, sem duplicação.\n" +
+			"5. Interface: acessível, responsiva, nada cobrindo controle.",
 	},
 	{
 		ID:         "e2e",
@@ -233,9 +240,8 @@ var DefaultStages = []Stage{
 		Tier:       provider.TierStandard,
 		Selectable: true,
 		Gate:       true,
-		System: "Você é um engenheiro de QA especialista em Playwright e testes E2E. " +
-			"Valide o comportamento da aplicação em navegador headless simulando fluxos reais.",
-		Task: "Suba a aplicação localmente, execute os testes Playwright e verifique as asserções de tela e rede.",
+		System:     "QA E2E com Playwright em navegador headless. Escreva testes E2E; não altere código da aplicação.\n\n" + browserRule,
+		Task:       "Suba a aplicação, escreva/rode os testes Playwright dos fluxos da US (ID do caso no nome) e verifique tela e rede.",
 	},
 	{
 		ID:       "final",
@@ -277,23 +283,21 @@ type rules struct {
 }
 
 func writeRules(b *strings.Builder, r rules) {
-	b.WriteString("## Regras de entrega (verificadas automaticamente pelo orquestrador)\n\n")
+	b.WriteString("## Regras de entrega (orquestrador verifica)\n\n")
 	if len(r.Protected) > 0 {
-		fmt.Fprintf(b, "- Arquivos de entrada, somente leitura: não edite, mova nem apague %s. Alterá-los reprova a etapa.\n",
-			strings.Join(quoteAll(r.Protected), ", "))
+		fmt.Fprintf(b, "- Somente leitura: %s. Alterou, etapa reprovada.\n", strings.Join(quoteAll(r.Protected), ", "))
 	}
 	if len(r.Checks) > 0 {
-		b.WriteString("- Antes de concluir, rode e faça passar os comandos do projeto (o orquestrador os executa e reprova falhas):\n")
+		b.WriteString("- Estes comandos precisam passar (orquestrador roda e reprova falha):\n")
 		for _, c := range r.Checks {
 			fmt.Fprintf(b, "  - %s: `%s`\n", c.Name, c.Run)
 		}
 	}
 	if r.MaxLine > 0 {
-		fmt.Fprintf(b, "- Código legível: linhas de no máximo %d caracteres, nada minificado ou compactado, "+
-			"funções curtas e nomes descritivos.\n", r.MaxLine)
+		fmt.Fprintf(b, "- Linha ≤ %d caracteres. Nada minificado.\n", r.MaxLine)
 	}
-	b.WriteString("- Cada teste automatizado cita no nome o ID do caso de teste da especificação (ex.: `UT-CART-01`).\n")
-	b.WriteString("- Não declare nada como concluído sem executar; termine com a saída resumida dos testes.\n\n")
+	b.WriteString("- Teste cita no nome o ID do caso (ex.: `UT-CART-01`).\n")
+	b.WriteString("- Só diga concluído depois de rodar. Termine com resumo da saída dos testes.\n\n")
 }
 
 func quoteAll(items []string) []string {
@@ -310,12 +314,11 @@ func quoteAll(items []string) []string {
 func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, previous []Step) string {
 	var b strings.Builder
 	if discovery != nil {
-		fmt.Fprintf(&b, "## Contexto do repositório (discovery da sessão)\n\nRepositório: `%s`\n\nStacks detectadas:\n%s\n\n",
+		fmt.Fprintf(&b, "## Repositório\n\n`%s`\n\nStacks:\n%s\n\n",
 			discovery.Path, workspace.FormatStacks(discovery.Stacks))
 		if summary := strings.TrimSpace(discovery.Summary); summary != "" {
-			fmt.Fprintf(&b, "### Relatório de discovery\n\n%s\n\n", clip(summary, maxArtifactBytes))
+			fmt.Fprintf(&b, "### Discovery (não refaça)\n\n%s\n\n", clip(summary, maxArtifactBytes))
 		}
-		b.WriteString("Use este contexto; não refaça o discovery. Siga as stacks e convenções existentes.\n\n")
 	}
 	writeInstructions(&b, sc.Instructions)
 
@@ -323,9 +326,9 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 		fmt.Fprintf(&b, "## Contexto do documento\n\n%s\n\n", clip(sc.Preamble, maxArtifactBytes))
 	}
 	if sc.Total > 1 {
-		fmt.Fprintf(&b, "## Sequência de desenvolvimento\n\nEsta é a US %d de %d.", sc.Position, sc.Total)
+		fmt.Fprintf(&b, "## Sequência de desenvolvimento\n\nUS %d de %d.", sc.Position, sc.Total)
 		if len(sc.Delivered) > 0 {
-			b.WriteString(" As US abaixo já foram implementadas no repositório nesta sequência; reutilize e preserve o que foi entregue:\n")
+			b.WriteString(" Já entregues no repositório (reutilize, não quebre):\n")
 			for _, d := range sc.Delivered {
 				fmt.Fprintf(&b, "- %s\n", d.Title)
 			}
@@ -338,7 +341,7 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 	b.WriteString("\n\n")
 
 	if len(previous) > 0 {
-		b.WriteString("## Artefatos das etapas anteriores desta US\n\n")
+		b.WriteString("## Etapas anteriores\n\n")
 		for _, s := range previous {
 			fmt.Fprintf(&b, "### %s (%s)\n\n%s\n\n", s.Title, s.Role, clip(strings.TrimSpace(s.Output), maxArtifactBytes))
 		}
@@ -368,7 +371,7 @@ func stageInstructions(stage Stage) string {
 // every prompt of a story.
 func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Report) {
 	if discovery != nil {
-		fmt.Fprintf(b, "## Contexto do repositório\n\nRepositório: `%s`\n\nStacks detectadas:\n%s\n\n",
+		fmt.Fprintf(b, "## Repositório\n\n`%s`\n\nStacks:\n%s\n\n",
 			discovery.Path, workspace.FormatStacks(discovery.Stacks))
 	}
 	writeInstructions(b, sc.Instructions)
@@ -383,7 +386,7 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 
 func writeInstructions(b *strings.Builder, text string) {
 	if text = strings.TrimSpace(text); text != "" {
-		fmt.Fprintf(b, "## Instruções do projeto (obrigatórias)\n\n%s\n\n", text)
+		fmt.Fprintf(b, "## Instruções do projeto (obrigatório)\n\n%s\n\n", text)
 	}
 }
 
@@ -411,9 +414,8 @@ func buildFixPrompt(stage, gate Stage, sc storyContext, discovery *workspace.Rep
 	fmt.Fprintf(&b, "## Relatório de %s (rodada %d)\n\n%s\n\n", gate.Title, round, clip(stripJSONBlocks(report), maxArtifactBytes))
 	b.WriteString("## Correções obrigatórias atribuídas a você\n\n")
 	writeIssues(&b, issues)
-	fmt.Fprintf(&b, "\n## Sua tarefa\n\nComo %s, corrija no repositório exclusivamente os problemas listados acima, "+
-		"sem alterar comportamentos não relacionados. Outros problemas do relatório estão atribuídos a outros agentes; não os corrija. "+
-		"Rode os testes afetados e, ao final, liste o que foi alterado em cada item.", stage.Role)
+	b.WriteString("\n## Sua tarefa\n\nCorrija só os itens acima. Não mexa em comportamento não relacionado. " +
+		"Itens de outros agentes no relatório: ignore. Rode os testes afetados. Termine com uma linha por item: o que mudou.")
 	return b.String()
 }
 
@@ -427,8 +429,7 @@ func buildVerifyPrompt(gate Stage, sc storyContext, discovery *workspace.Report,
 	for _, f := range fixes {
 		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), maxArtifactBytes))
 	}
-	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação (rodada %d): confirme no repositório se cada problema acima foi resolvido e se as correções "+
-		"não introduziram novas falhas. %s", round, gate.Task)
+	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação, rodada %d: cada problema acima resolvido? Correção quebrou algo? %s", round, gate.Task)
 	b.WriteString(verdictInstructions)
 	return b.String()
 }
