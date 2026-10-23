@@ -161,6 +161,42 @@ func (r *Repo) DirtyPaths(ctx context.Context) ([]string, error) {
 	return dirty, nil
 }
 
+// BranchPrefix starts the name of every branch FazTudo creates.
+const BranchPrefix = "faztudo/"
+
+// SaveInterrupted commits the pending changes of the dirty repositories
+// (paths as returned by DirtyPaths) that sit on a FazTudo branch: they are
+// work of an interrupted run. Repositories on the user's own branches are
+// returned in left, untouched.
+func (r *Repo) SaveInterrupted(ctx context.Context, dirty []string, msg string) (saved, left []string, err error) {
+	parent := false
+	for _, p := range dirty {
+		if p == "." {
+			parent = true
+			continue
+		}
+		sub := r.sub(p)
+		if !strings.HasPrefix(sub.Branch(ctx), BranchPrefix) {
+			left = append(left, p)
+			continue
+		}
+		if _, err := sub.commit(ctx, msg, false); err != nil {
+			return saved, left, fmt.Errorf("%s: %w", p, err)
+		}
+		saved = append(saved, p)
+	}
+	if parent {
+		if !strings.HasPrefix(r.Branch(ctx), BranchPrefix) {
+			return saved, append(left, "."), nil
+		}
+		if _, err := r.commit(ctx, msg, false); err != nil {
+			return saved, left, err
+		}
+		saved = append(saved, ".")
+	}
+	return saved, left, nil
+}
+
 // SyncNested commits nested repositories that moved to another commit
 // (e.g. work committed inside them by hand), so the pipeline's own commits
 // only hold the agents' changes. It returns nil when nothing moved.
@@ -403,5 +439,5 @@ func BranchName(storyID string, at time.Time) string {
 	if slug == "" {
 		slug = "us"
 	}
-	return fmt.Sprintf("faztudo/%s-%s", slug, at.Format("20060102-150405"))
+	return fmt.Sprintf("%s%s-%s", BranchPrefix, slug, at.Format("20060102-150405"))
 }

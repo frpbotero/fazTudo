@@ -620,7 +620,16 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 	if initialised {
 		o.logf(LevelInfo, "Repositório git inicializado; o estado atual virou o commit inicial.")
 	}
-	if dirty, err := g.DirtyPaths(ctx); err != nil || len(dirty) > 0 {
+	dirty, err := g.DirtyPaths(ctx)
+	if err == nil && len(dirty) > 0 {
+		var saved []string
+		saved, dirty, err = g.SaveInterrupted(ctx, dirty, "faztudo: salva trabalho de execução interrompida")
+		if len(saved) > 0 {
+			o.logf(LevelWarn, "Alterações de uma execução interrompida salvas em commit (%s); a execução continua a partir delas.",
+				strings.Join(dirtyLabels(saved), ", "))
+		}
+	}
+	if err != nil || len(dirty) > 0 {
 		if err == nil {
 			err = fmt.Errorf("%w (%s)", vcs.ErrDirty, strings.Join(dirtyLabels(dirty), ", "))
 		}

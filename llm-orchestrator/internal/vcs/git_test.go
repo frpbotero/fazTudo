@@ -166,4 +166,17 @@ func TestNestedRepositoriesAreBranchedAndCommitted(t *testing.T) {
 	if out, _ := r.Show(ctx, c.Hash); !strings.Contains(out, "+v3") {
 		t.Errorf("show must include the nested diff:\n%s", out)
 	}
+
+	// An interrupted run leaves edits on its own branch: they are saved.
+	// Edits on a user branch are left alone.
+	write(t, front, "app.js", "v4\n")
+	write(t, root, "README.md", "editado\n")
+	run(root, "switch", "-q", "main")
+	saved, left, err := r.SaveInterrupted(ctx, []string{".", "front"}, "salva")
+	if err != nil || strings.Join(saved, ",") != "front" || strings.Join(left, ",") != "." {
+		t.Fatalf("SaveInterrupted = %v, %v, %v; want [front] saved, [.] left", saved, left, err)
+	}
+	if dirty, _ := r.DirtyPaths(ctx); strings.Join(dirty, ",") != "." {
+		t.Fatalf("dirty after save = %v, want only the parent", dirty)
+	}
 }

@@ -278,11 +278,30 @@ func TestGitBranchAndCommitPerStep(t *testing.T) {
 		t.Fatalf("frontend commit = %+v", c)
 	}
 
-	// Pending changes to tracked files block the next run.
-	writeFile(t, repo, "index.html", "edição manual")
+	base := run.BaseBranch
+
+	// Pending changes left on a FazTudo branch (an interrupted run) are
+	// committed and the next run goes on from them.
+	writeFile(t, repo, "index.html", "trabalho interrompido")
 	_ = o.Start(realStory("y"))
+	if run = waitDone(t, o); run.Result != ResultSucceeded {
+		t.Fatalf("interrupted work must be saved, not block: %s, logs: %+v", run.Result, run.Logs)
+	}
+
+	// Pending changes on the user's own branch block the next run.
+	git := func(args ...string) {
+		t.Helper()
+		cmd := osexec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("switch", "-q", base)
+	writeFile(t, repo, "README.md", "edição manual")
+	_ = o.Start(realStory("z"))
 	run = waitDone(t, o)
 	if run.Result != ResultFailed || run.Discovery.Status != StepCanceled {
-		t.Fatalf("dirty repository must fail before discovery: %s / %s", run.Result, run.Discovery.Status)
+		t.Fatalf("dirty user branch must fail before discovery: %s / %s", run.Result, run.Discovery.Status)
 	}
 }
