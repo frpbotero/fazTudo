@@ -330,11 +330,14 @@ kbd {
 .kind-tag { font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 4px; }
 .kind-tag[data-kind="fix"] { background: var(--warn-soft); color: var(--warn); }
 .kind-tag[data-kind="verify"] { background: var(--accent-soft); color: var(--accent); }
+.kind-tag[data-kind="stream"] { background: var(--success-soft); color: var(--success); }
+.kind-tag[data-kind="merge"] { background: var(--warn-soft); color: var(--warn); }
 
 .plan-box { margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
 .plan-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .plan-label { font-size: 12px; font-weight: 600; color: var(--text-2); }
 .plan-reason { font-size: 12.5px; color: var(--text-2); }
+.plan-streams ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
 
 .issues { margin-top: 8px; padding: 0; border-radius: var(--radius-sm); background: var(--warn-soft); }
 .step[data-status="failed"] .issues { background: var(--danger-soft); }
@@ -455,6 +458,7 @@ kbd {
 .story-tab:hover { background: var(--surface-2); }
 .story-tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .story-tab .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.story-tab .tab-wave { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
 .story-tab .icon { width: 13px; height: 13px; stroke-width: 2.5; }
 .story-tab .spinner { width: 11px; height: 11px; color: var(--accent); }
 .story-tab[data-status="done"] .icon { color: var(--success); }

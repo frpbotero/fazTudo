@@ -362,6 +362,71 @@ func (r *Repo) FastForward(ctx context.Context, hash string) error {
 	return err
 }
 
+// Merge merges hash into the current branch, fast-forwarding when possible.
+// A conflicting merge is aborted, leaving the branch as it was.
+func (r *Repo) Merge(ctx context.Context, hash, msg string) error {
+	conflicts, err := r.StartMerge(ctx, hash, msg)
+	if len(conflicts) > 0 {
+		r.AbortMerge(ctx)
+		return fmt.Errorf("git merge: conflito em %s", strings.Join(conflicts, ", "))
+	}
+	return err
+}
+
+// StartMerge merges rev into the current branch. On conflict the merge is
+// left in progress and the conflicted paths are returned; any other failure
+// is aborted.
+func (r *Repo) StartMerge(ctx context.Context, rev, msg string) ([]string, error) {
+	_, err := r.git(ctx, r.withIdentity(ctx, "merge", "-q", "--no-edit", "-m", msg, rev)...)
+	if err == nil {
+		return nil, nil
+	}
+	out, _ := r.git(ctx, "diff", "--name-only", "--diff-filter=U")
+	if conflicts := strings.Fields(out); len(conflicts) > 0 {
+		return conflicts, nil
+	}
+	r.AbortMerge(ctx)
+	return nil, err
+}
+
+// AbortMerge cancels a merge in progress.
+func (r *Repo) AbortMerge(ctx context.Context) {
+	_, _ = r.git(context.WithoutCancel(ctx), "merge", "--abort")
+}
+
+// FinishMerge stages the resolved files and concludes the merge in progress.
+func (r *Repo) FinishMerge(ctx context.Context) (*Commit, error) {
+	if _, err := r.git(ctx, "add", "-A", "--", "."); err != nil {
+		return nil, err
+	}
+	if _, err := r.git(ctx, r.withIdentity(ctx, "commit", "-q", "--no-verify", "--no-edit")...); err != nil {
+		return nil, err
+	}
+	hash, err := r.git(ctx, "rev-parse", "--short", "HEAD")
+	return &Commit{Hash: strings.TrimSpace(hash)}, err
+}
+
+// withIdentity prefixes args with FazTudo's identity when git has none.
+func (r *Repo) withIdentity(ctx context.Context, args ...string) []string {
+	if out, _ := r.git(ctx, "config", "user.email"); strings.TrimSpace(out) == "" {
+		return append([]string{"-c", "user.name=" + commitName, "-c", "user.email=" + commitEmail}, args...)
+	}
+	return args
+}
+
+// AddBranchWorktree creates branch from HEAD and checks it out in a new
+// worktree at path.
+func (r *Repo) AddBranchWorktree(ctx context.Context, path, branch string) error {
+	_, err := r.git(ctx, "worktree", "add", "-q", "-b", branch, path, "HEAD")
+	return err
+}
+
+// AddExistingWorktree checks out an existing branch in a new worktree at path.
+func (r *Repo) AddExistingWorktree(ctx context.Context, path, branch string) error {
+	_, err := r.git(ctx, "worktree", "add", "-q", path, branch)
+	return err
+}
+
 // Diff returns the patch between two commits, capped in size.
 func (r *Repo) Diff(ctx context.Context, from, to string, max int) (string, error) {
 	out, err := r.git(ctx, "diff", "--no-color", "--no-ext-diff", from, to, "--")

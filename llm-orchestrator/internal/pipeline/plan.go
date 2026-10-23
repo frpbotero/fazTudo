@@ -10,7 +10,13 @@ import (
 // Plan is the architect's decision about which agents a story needs.
 type Plan struct {
 	Agents []string `json:"agents"`
-	Reason string   `json:"reason,omitempty"`
+	// Pattern is the design pattern the implementers follow: the project's
+	// own or, without one, the architect's choice.
+	Pattern string `json:"pattern,omitempty"`
+	// Streams split the implementation into development fronts; fronts
+	// without dependencies between them run in parallel.
+	Streams []Stream `json:"streams,omitempty"`
+	Reason  string   `json:"reason,omitempty"`
 	// Source tells how the plan was obtained: "architect", "heuristic"
 	// (simulation) or "fallback" (architect output could not be parsed).
 	Source string `json:"source"`
@@ -71,13 +77,20 @@ func parsePlan(output string, stages []Stage) (Plan, bool) {
 	if !ok {
 		return Plan{}, false
 	}
-	plan := Plan{Reason: strings.TrimSpace(raw.Reason), Source: "architect"}
+	plan := Plan{Reason: strings.TrimSpace(raw.Reason), Pattern: strings.TrimSpace(raw.Pattern), Source: "architect"}
+	plan.Streams = validStreams(raw.Streams, stages)
+	requested := normalize(raw.Agents)
+	for _, st := range plan.Streams {
+		requested = append(requested, st.Agent)
+	}
 	for _, s := range stages {
-		if s.Selectable && slices.Contains(normalize(raw.Agents), s.ID) {
+		if s.Selectable && slices.Contains(requested, s.ID) {
 			plan.Agents = append(plan.Agents, s.ID)
 		}
 	}
-	return ensureImplementer(plan, stages), true
+	plan = ensureImplementer(plan, stages)
+	plan.Streams = coverAgents(plan.Streams, plan, stages)
+	return plan, true
 }
 
 // parseVerdict extracts a gate verdict. Issues are reassigned to a valid
@@ -119,6 +132,7 @@ var heuristics = map[string][]string{
 	"backend":  {"api", "endpoint", "banco", "backend", "serviço", "servico", "regra de negócio", "persist", "integração", "server", "jwt", "autentica", "dados", "fila"},
 	"security": {"auth", "autentica", "senha", "token", "jwt", "permiss", "rbac", "mfa", "pagamento", "pii", "lgpd", "segurança", "owasp", "criptograf", "antifraude"},
 	"e2e":      {"e2e", "playwright", "fluxo", "jornada", "ponta a ponta"},
+	"docs":     {"documenta", "manual", "readme", "tutorial", "changelog", "guia de uso"},
 }
 
 // heuristicPlan approximates the architect in simulation mode, where no model
@@ -137,7 +151,24 @@ func heuristicPlan(story string, stages []Stage) Plan {
 			p.Agents = append(p.Agents, s.ID)
 		}
 	}
-	return ensureImplementer(p, stages)
+	p = ensureImplementer(p, stages)
+	p.Streams = heuristicStreams(p, stages)
+	return p
+}
+
+// heuristicStreams gives each selected implementer its own front, so the
+// parallel flow is exercised in simulation when a story spans several.
+func heuristicStreams(p Plan, stages []Stage) []Stream {
+	var streams []Stream
+	for _, s := range stages {
+		if s.Implementer && p.Includes(s.ID) {
+			streams = append(streams, Stream{ID: s.ID, Agent: s.ID, Title: s.Title})
+		}
+	}
+	if len(streams) < 2 {
+		return nil
+	}
+	return streams
 }
 
 func ensureImplementer(p Plan, stages []Stage) Plan {

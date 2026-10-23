@@ -8,7 +8,7 @@ import (
 )
 
 func TestPlannersAndReviewersAreReadOnly(t *testing.T) {
-	writers := map[string]bool{"frontend": true, "backend": true, "e2e": true}
+	writers := map[string]bool{"frontend": true, "backend": true, "e2e": true, "docs": true}
 	for _, s := range DefaultStages {
 		if s.Verifier {
 			continue

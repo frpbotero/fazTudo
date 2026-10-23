@@ -715,6 +715,8 @@ Critérios de aceitação:
     }
   }
 
+  const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', stream: 'Frente', merge: 'Integração' };
+
   const PLAN_SOURCE = {
     architect: '',
     heuristic: 'Simulação: escolha por palavras-chave da US.',
@@ -729,9 +731,20 @@ Critérios de aceitação:
     return `
       <div class="plan-box">
         <div class="plan-head"><span class="plan-label">Agentes selecionados</span><span class="stack-chips">${chips}</span></div>
+        ${plan.pattern ? `<p class="plan-reason"><span class="plan-label">Padrão de projeto</span> ${esc(plan.pattern)}</p>` : ''}
+        ${renderStreams(plan.streams, titles)}
         ${plan.reason ? `<p class="plan-reason">${esc(plan.reason)}</p>` : ''}
         ${note ? `<p class="note">${esc(note)}</p>` : ''}
       </div>`;
+  }
+
+  function renderStreams(streams, titles) {
+    if (!streams?.length) return '';
+    const items = streams.map((st) => {
+      const deps = st.depends_on?.length ? ` · depende de ${st.depends_on.map(esc).join(', ')}` : '';
+      return `<li><span class="stack-chip">${esc(titles.get(st.agent) || st.agent)}</span> ${esc(st.title)}<span class="note">${deps}</span></li>`;
+    }).join('');
+    return `<div class="plan-streams"><span class="plan-label">Frentes de desenvolvimento</span><ul>${items}</ul></div>`;
   }
 
   // Command output quoted in a fenced block is collapsed under the summary.
@@ -845,9 +858,28 @@ Critérios de aceitação:
     if (list.length < 2) return;
     el.storyBar.innerHTML = list.map((st, i) => `
       <button type="button" class="story-tab" role="tab" data-story="${i}" data-status="${esc(st.status)}"
-              aria-selected="${i === shown}" title="${esc(st.title)}">
+              aria-selected="${i === shown}" title="${esc(storyTabTitle(st))}">
         ${storyTabIcon(st.status)}<span class="tab-title">${esc(st.id || st.title)}</span>
+        ${st.wave && run.waves?.length > 1 ? `<span class="tab-wave">onda ${esc(st.wave)}</span>` : ''}
       </button>`).join('');
+  }
+
+  function storyTabTitle(st) {
+    const deps = st.depends_on?.length ? ` · depende de ${st.depends_on.join(', ')}` : '';
+    return `${st.title}${st.wave ? ` · onda ${st.wave}` : ''}${deps}`;
+  }
+
+  // Waves of stories developed in parallel, as the dependency analysis found them.
+  function renderWaves(run) {
+    const waves = run.waves || [];
+    if (!waves.length) return '';
+    const label = (i) => esc(run.stories[i]?.id || run.stories[i]?.title || `#${i + 1}`);
+    const items = waves.map((w, n) => `
+      <li><span class="plan-label">Onda ${n + 1}</span> <span class="stack-chips">${w.map((i) => `<span class="stack-chip">${label(i)}</span>`).join('')}</span>
+        ${w.length > 1 ? '<span class="note">em paralelo</span>' : ''}</li>`).join('');
+    const merged = run.integrations?.length
+      ? `<p class="plan-reason"><span class="plan-label">Integração</span> ${run.integrations.map((b) => `<code>${esc(b)}</code>`).join(' ')}</p>` : '';
+    return `<div class="plan-box plan-streams"><span class="plan-label">Ondas de desenvolvimento</span><ul>${items}</ul>${merged}</div>`;
   }
 
   function renderRun(run) {
@@ -855,13 +887,15 @@ Critérios de aceitação:
     const current = Math.max(run.current ?? 0, 0);
     const shown = viewStory !== null && viewStory < list.length ? viewStory : current;
     const story = list[shown] || { steps: [] };
-    const allSteps = [run.discovery, ...(story.steps || [])].filter(Boolean);
+    const runSteps = [run.discovery, run.analysis].filter(Boolean);
+    const isRunStep = (s) => runSteps.includes(s);
+    const allSteps = [...runSteps, ...(story.steps || [])];
     const hiddenSteps = allSteps.filter((s) => s.status === 'canceled' || s.status === 'omitted');
     const steps = allSteps.filter((s) => s.status !== 'canceled' && s.status !== 'omitted');
 
     const finished = (s) => ['done', 'skipped', 'omitted', 'warning'].includes(s.status);
-    const total = 1 + list.reduce((n, st) => n + st.steps.length, 0);
-    const done = (run.discovery && finished(run.discovery) ? 1 : 0) +
+    const total = runSteps.length + list.reduce((n, st) => n + st.steps.length, 0);
+    const done = runSteps.filter(finished).length +
       list.reduce((n, st) => n + st.steps.filter(finished).length, 0);
     el.progressBar.style.width = `${total ? (done / total) * 100 : 0}%`;
     el.progress.setAttribute('aria-valuemax', String(total));
@@ -895,32 +929,33 @@ Critérios de aceitação:
 
     artifacts = new Map();
     let lastVerifier = -1;
-    steps.forEach((s, i) => { if (i > 0 && isVerifier(s) && s.status !== 'pending' && s.status !== 'omitted') lastVerifier = i; });
+    steps.forEach((s, i) => { if (!isRunStep(s) && isVerifier(s) && s.status !== 'pending' && s.status !== 'omitted') lastVerifier = i; });
+    const firstStoryStep = steps.findIndex((s) => !isRunStep(s));
     const html = steps.map((s, i) => {
-      const key = i === 0 ? 'discovery' : `${shown}:${s.id}`;
+      const key = isRunStep(s) ? s.id : `${shown}:${s.id}`;
       if (s.output) artifacts.set(key, s.output);
-      const st = s.status === 'skipped' && i > 0 ? { label: 'Dispensada', tone: 'neutral' } : STEP_STATUS[s.status] || STEP_STATUS.pending;
+      const st = s.status === 'skipped' && !isRunStep(s) ? { label: 'Dispensada', tone: 'neutral' } : STEP_STATUS[s.status] || STEP_STATUS.pending;
       let time = '';
       if (s.status === 'running' && s.started_at) time = `<span class="time" data-elapsed="${esc(s.started_at)}"></span>`;
       else if (s.duration_ms) time = `<span class="time">${esc(fmtDuration(s.duration_ms))}</span>`;
       const model = s.model ? `<span class="model" title="${esc(s.provider)}">${esc(s.provider)} · ${esc(s.model)}</span>` : '';
       const artifact = s.output ? `
         <details class="artifact">
-          <summary>${icon('chevron')}${i === 0 ? 'Relatório de discovery' : 'Artefato'}
+          <summary>${icon('chevron')}${s === run.discovery ? 'Relatório de discovery' : s === run.analysis ? 'Análise de dependências' : 'Artefato'}
             <button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(key)}">${icon('copy')}Copiar</button>
           </summary>
           <pre>${esc(s.output)}</pre>
         </details>` : '';
       const error = s.error ? `<div class="step-error">${esc(s.error)}</div>` : '';
       let extra = renderChecks(s.checks) + renderCandidates(s.candidates);
-      if (s.id === 'arch') extra = renderPlan(story.plan, story.steps || []);
+      if (s === run.analysis) extra = renderWaves(run);
+      else if (s.id === 'arch') extra = renderPlan(story.plan, story.steps || []);
       else if (s.kind === 'fix') extra = renderIssues(s.issues, 'Correções solicitadas');
       else if (s.issues?.length) extra += renderIssues(s.issues, ['failed', 'warning'].includes(s.status) ? 'Problemas não resolvidos' : 'Problemas encontrados');
       if (i === lastVerifier) extra += renderTrace(story.trace);
       extra += renderCommit(s);
-      const kindTag = s.kind === 'fix' ? '<span class="kind-tag" data-kind="fix">Correção</span>'
-        : s.kind === 'verify' ? '<span class="kind-tag" data-kind="verify">Verificação</span>' : '';
-      const storyNote = i === 1 && list.length > 1 && story.title ? `<li class="step-story" aria-hidden="true">${esc(story.title)}</li>` : '';
+      const kindTag = KIND_TAGS[s.kind] ? `<span class="kind-tag" data-kind="${esc(s.kind)}">${KIND_TAGS[s.kind]}</span>` : '';
+      const storyNote = i === firstStoryStep && list.length > 1 && story.title ? `<li class="step-story" aria-hidden="true">${esc(story.title)}</li>` : '';
       return `
         ${storyNote}
         <li class="step" data-status="${esc(s.status)}" data-kind="${esc(s.kind || '')}" data-id="${esc(key)}">
@@ -933,7 +968,7 @@ Critérios de aceitação:
               </div>
               <div class="step-side">
                 ${model}${time}${s.status !== 'pending' ? badge(st) : ''}
-                ${s.status === 'failed' && !run.running ? `<button class="btn btn-sm" type="button" data-retry-step="${esc(s.id)}" data-retry-story="${i === 0 ? -1 : shown}">${icon('rotate')}Refazer etapa</button>` : ''}
+                ${s.status === 'failed' && !run.running ? `<button class="btn btn-sm" type="button" data-retry-step="${esc(s.id)}" data-retry-story="${isRunStep(s) ? -1 : shown}">${icon('rotate')}Refazer etapa</button>` : ''}
               </div>
             </div>
             ${error}${extra}${artifact}

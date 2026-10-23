@@ -86,7 +86,8 @@ type Step struct {
 	Effort   string        `json:"effort,omitempty"`
 	Output   string        `json:"output,omitempty"`
 	Note     string        `json:"note,omitempty"`
-	Kind     string        `json:"kind,omitempty"`  // "" (stage), "fix" or "verify"
+	Kind     string        `json:"kind,omitempty"`  // "" (stage), "fix", "verify" or "stream"
+	Agent    string        `json:"agent,omitempty"` // implementer running a stream
 	Round    int           `json:"round,omitempty"` // fix/verification round
 	Gate     string        `json:"gate,omitempty"`  // gate that requested a fix
 	Issues   []Issue       `json:"issues,omitempty"`
@@ -118,6 +119,10 @@ type StoryRun struct {
 	DurationMS int64      `json:"duration_ms,omitempty"`
 	Plan       *Plan      `json:"plan,omitempty"`
 	Branch     string     `json:"branch,omitempty"`
+	// Wave is the 1-based group of stories developed in parallel; DependsOn
+	// lists the stories it waits for, as the dependency analysis found them.
+	Wave      int      `json:"wave,omitempty"`
+	DependsOn []string `json:"depends_on,omitempty"`
 	// Trace links the tests the specification requires to the test files.
 	Trace []quality.Trace `json:"trace,omitempty"`
 	Steps []Step          `json:"steps"`
@@ -136,9 +141,16 @@ type Run struct {
 	BaseBranch string     `json:"base_branch,omitempty"`
 	Protected  []string   `json:"protected,omitempty"` // input files guarded during the run
 	Discovery  Step       `json:"discovery"`
-	Stories    []StoryRun `json:"stories"`
-	Current    int        `json:"current"` // index into Stories; -1 while discovering
-	Logs       []LogEntry `json:"logs"`
+	// Analysis maps the dependencies between the stories of a document; it
+	// runs only when there are several.
+	Analysis *Step `json:"analysis,omitempty"`
+	// Waves group the story indexes developed in parallel, in order.
+	Waves [][]int `json:"waves,omitempty"`
+	// Integrations are the branches that merged the stories of each wave.
+	Integrations []string   `json:"integrations,omitempty"`
+	Stories      []StoryRun `json:"stories"`
+	Current      int        `json:"current"` // index into Stories; -1 while discovering
+	Logs         []LogEntry `json:"logs"`
 }
 
 // StartOptions configures a run.
@@ -212,14 +224,36 @@ func (o *Orchestrator) Snapshot() Run {
 		r.Stories[i].Steps = slices.Clone(r.Stories[i].Steps)
 	}
 	r.Logs = slices.Clone(o.run.Logs)
+	if o.run.Analysis != nil {
+		analysis := *o.run.Analysis
+		r.Analysis = &analysis
+	}
+	r.Integrations = slices.Clone(o.run.Integrations)
 	return r
+}
+
+// busyLocked reports whether a run is active or still winding down: parallel
+// stories may be stopping after the run already finished.
+func (o *Orchestrator) busyLocked() bool {
+	if o.run.Running {
+		return true
+	}
+	if o.done == nil {
+		return false
+	}
+	select {
+	case <-o.done:
+		return false
+	default:
+		return true
+	}
 }
 
 // SetRepository changes the target repository. It is refused during a run.
 func (o *Orchestrator) SetRepository(path string) (string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.run.Running {
+	if o.busyLocked() {
 		return "", ErrAlreadyRunning
 	}
 	return o.ws.SetPath(path)
@@ -232,7 +266,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		return ErrNoStories
 	}
 	o.mu.Lock()
-	if o.run.Running {
+	if o.busyLocked() {
 		o.mu.Unlock()
 		return ErrAlreadyRunning
 	}
@@ -263,6 +297,10 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		Stories:    runs,
 		Current:    -1,
 	}
+	if len(runs) > 1 {
+		analysis := newStep(AnalysisStage)
+		o.run.Analysis = &analysis
+	}
 	o.last = opts
 	done := o.done
 	o.mu.Unlock()
@@ -287,11 +325,11 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 // from that stage onward are discarded and will be rebuilt by the gate.
 func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	o.mu.Lock()
-	if o.run.Running {
+	if o.busyLocked() {
 		o.mu.Unlock()
 		return ErrAlreadyRunning
 	}
-	if story == -1 && stepID == DiscoveryStage.ID && o.run.Result == ResultFailed && o.run.Discovery.Status == StepFailed && len(o.last.Stories) > 0 {
+	if story == -1 && o.run.Result == ResultFailed && len(o.last.Stories) > 0 && o.runStepFailed(stepID) {
 		opts := o.last
 		o.mu.Unlock()
 		return o.Start(opts)
@@ -335,12 +373,16 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	started := time.Now()
 	o.run.Stories[story].StartedAt = &started
 	o.run.Stories[story].DurationMS = 0
-	for i := story + 1; i < len(o.run.Stories); i++ {
+	for i := range o.run.Stories {
+		if i == story || isFinished(o.run.Stories[i].Status) {
+			continue // delivered stories of a parallel wave are kept
+		}
 		o.run.Stories[i].Status = StepPending
 		o.run.Stories[i].StartedAt = nil
 		o.run.Stories[i].DurationMS = 0
 		o.run.Stories[i].Plan = nil
 		o.run.Stories[i].Trace = nil
+		o.run.Stories[i].Branch = ""
 		o.run.Stories[i].Steps = o.freshSteps()
 	}
 	o.run.Running = true
@@ -364,7 +406,22 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	return nil
 }
 
+// runStepFailed reports whether the run-level step id (discovery or
+// analysis) failed; retrying it starts the run again.
+func (o *Orchestrator) runStepFailed(id string) bool {
+	switch {
+	case id == DiscoveryStage.ID:
+		return o.run.Discovery.Status == StepFailed
+	case id == AnalysisStage.ID && o.run.Analysis != nil:
+		return o.run.Analysis.Status == StepFailed
+	}
+	return false
+}
+
 func retryStageID(step Step) string {
+	if step.Kind == "stream" {
+		return step.Agent
+	}
 	if step.Gate != "" {
 		return step.Gate
 	}
@@ -409,10 +466,12 @@ type session struct {
 	repo   string
 	dry    bool
 	policy workspace.Policy
-	checks []quality.Command
-	guard  *quality.Guard
-	git    *vcs.Repo
-	report *workspace.Report
+	// patterns are the protected-file patterns, kept for worktree guards.
+	patterns []string
+	checks   []quality.Command
+	guard    *quality.Guard
+	git      *vcs.Repo
+	report   *workspace.Report
 	// instructions are the repository's agent instruction files.
 	instructions string
 }
@@ -448,27 +507,9 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 		o.logf(LevelWarn, "Best-of-N precisa de git sem repositórios aninhados; cada implementador fará uma única implementação.")
 	}
 
-	total := len(opts.Stories)
-	for si, story := range opts.Stories {
-		started := time.Now()
-		o.updateStory(si, func(r *StoryRun) { r.Status = StepRunning; r.StartedAt = &started })
-		if total > 1 {
-			o.logf(LevelInfo, "Iniciando %s (%d de %d).", story.Title, si+1, total)
-		}
-
-		st := &storyState{
-			si:      si,
-			started: started,
-			sc: storyContext{
-				Preamble: opts.Preamble, Story: story, Delivered: opts.Stories[:si],
-				Position: si + 1, Total: total, Rules: ss.rules(), Instructions: ss.instructions,
-			},
-		}
-		if !o.developStory(ctx, ss, st) {
-			return
-		}
-
-		o.closeStory(st, total)
+	waves, ok := o.analyzeSequence(ctx, ss, opts)
+	if !ok || !o.runWaves(ctx, ss, opts, waves, nil) {
+		return
 	}
 	o.finishSucceeded("Pipeline concluído. Todos os agentes entregaram seus artefatos.")
 }
@@ -523,20 +564,14 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 	}
 	ss.report = report
 
-	total := len(opts.Stories)
-	for si := story; si < total; si++ {
-		storyStarted := started
-		startAt := stageAt
-		if si > story {
-			storyStarted = time.Now()
-			startAt = 0
-			o.updateStory(si, func(r *StoryRun) { r.Status = StepRunning; r.StartedAt = &storyStarted })
-		}
-		st := o.restoreStoryState(si, storyStarted, opts, ss)
-		if !o.developStoryFrom(ctx, ss, st, startAt, si > story) {
-			return
-		}
-		o.closeStory(st, total)
+	waves := o.Snapshot().Waves
+	if len(waves) == 0 {
+		waves = sequentialWaves(len(opts.Stories))
+	}
+	from := slices.IndexFunc(waves, func(w []int) bool { return slices.Contains(w, story) })
+	resume := &resumePoint{si: story, stageAt: stageAt, started: started}
+	if !o.runWaves(ctx, ss, opts, waves[max(from, 0):], resume) {
+		return
 	}
 	o.finishSucceeded("Pipeline concluído após refazer a etapa com falha.")
 }
@@ -545,11 +580,8 @@ func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts Start
 	o.exec.SetDryRun(opts.DryRun)
 	policy := o.ws.Policy()
 	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
-	patterns := policy.Protected
-	if name := path.Base(filepath.ToSlash(strings.TrimSpace(opts.DocumentName))); name != "." && name != "/" {
-		patterns = append(slices.Clone(patterns), name)
-	}
-	ss.guard = quality.NewGuard(repo, patterns)
+	ss.patterns = protectedPatterns(policy, opts)
+	ss.guard = quality.NewGuard(repo, ss.patterns)
 	if !opts.DryRun && policy.Git {
 		g, _, err := vcs.Open(ctx, repo)
 		if err != nil {
@@ -561,10 +593,20 @@ func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts Start
 	return ss
 }
 
+// protectedPatterns adds the loaded story document to the policy's
+// protected patterns.
+func protectedPatterns(policy workspace.Policy, opts StartOptions) []string {
+	patterns := policy.Protected
+	if name := path.Base(filepath.ToSlash(strings.TrimSpace(opts.DocumentName))); name != "." && name != "/" {
+		patterns = append(slices.Clone(patterns), name)
+	}
+	return patterns
+}
+
 func (o *Orchestrator) restoreStoryState(si int, started time.Time, opts StartOptions, ss *session) *storyState {
 	st := &storyState{
 		si: si, started: started,
-		sc:   storyContext{Preamble: opts.Preamble, Story: opts.Stories[si], Delivered: opts.Stories[:si], Position: si + 1, Total: len(opts.Stories), Rules: ss.rules(), Instructions: ss.instructions},
+		sc:   o.newStoryContext(si, opts, ss),
 		plan: fullPlan(o.stages, "default"),
 		reqs: quality.ExtractRequirements(opts.Preamble + "\n\n" + opts.Stories[si].Content),
 	}
@@ -594,11 +636,8 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 		o.logf(LevelInfo, "Instruções do projeto (AGENTS.md/CLAUDE.md) repassadas a todos os agentes.")
 	}
 
-	patterns := policy.Protected
-	if name := path.Base(filepath.ToSlash(strings.TrimSpace(opts.DocumentName))); name != "." && name != "/" {
-		patterns = append(slices.Clone(patterns), name)
-	}
-	ss.guard = quality.NewGuard(repo, patterns)
+	ss.patterns = protectedPatterns(policy, opts)
+	ss.guard = quality.NewGuard(repo, ss.patterns)
 	if files := ss.guard.Files(); len(files) > 0 {
 		o.mu.Lock()
 		o.run.Protected = files
@@ -633,7 +672,7 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 		if err == nil {
 			err = fmt.Errorf("%w (%s)", vcs.ErrDirty, strings.Join(dirtyLabels(dirty), ", "))
 		}
-		o.abortRemaining(StepCanceled)
+		o.abortRemaining(-1, StepCanceled)
 		o.finish(ResultFailed, LevelError, err.Error())
 		return nil, false
 	}
@@ -663,19 +702,15 @@ func dirtyLabels(paths []string) []string {
 	return out
 }
 
-// developStory runs the stages for one story: planner first, then only the
-// selected agents, with fix rounds whenever a gate requests changes.
-func (o *Orchestrator) developStory(ctx context.Context, ss *session, st *storyState) bool {
-	st.plan = fullPlan(o.stages, "default")
-	st.reqs = quality.ExtractRequirements(st.sc.Preamble + "\n\n" + st.sc.Story.Content)
-	return o.developStoryFrom(ctx, ss, st, 0, true)
-}
-
+// developStoryFrom runs the stages for one story from startAt: planner first,
+// then only the selected agents, with fix rounds whenever a gate requests
+// changes.
 func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *storyState, startAt int, createBranch bool) bool {
 	if createBranch {
 		o.startBranch(ctx, ss, st)
 	}
 
+	streamed := false
 	for stageIndex, stage := range o.stages {
 		if stageIndex < startAt {
 			continue
@@ -684,6 +719,14 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			continue // already marked as omitted when the plan was applied
 		}
 		ref := stepRef{st.si, stage.ID}
+		if waves := st.plan.parallelWaves(); stage.Implementer && waves != nil {
+			// The first implementer runs every front; the others are covered.
+			if !streamed && !o.runStreams(ctx, ss, st, ref, waves) {
+				return false
+			}
+			streamed = true
+			continue
+		}
 		if stage.Verifier {
 			if !o.runVerifier(ctx, ss, st, stage) {
 				return false
@@ -1112,18 +1155,32 @@ func (o *Orchestrator) discover(ctx context.Context, repo string) (*workspace.Re
 // attempt, or on cancellation, it finishes the run and returns false.
 func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.Request) (*provider.Response, bool) {
 	started := time.Now()
+	o.markRunning(ref, started)
+	resp, err := o.executeRetrying(ctx, ref, req)
+	elapsed := time.Since(started)
+	if err != nil {
+		o.stopOnError(ctx, ref, elapsed, err)
+		return nil, false
+	}
+	o.recordDone(ref, resp, elapsed)
+	return resp, true
+}
+
+func (o *Orchestrator) markRunning(ref stepRef, started time.Time) {
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepRunning
 		s.StartedAt = &started
 	})
+}
 
+// executeRetrying calls the provider, retrying failures until the attempts
+// run out or ctx is canceled.
+func (o *Orchestrator) executeRetrying(ctx context.Context, ref stepRef, req provider.Request) (*provider.Response, error) {
 	prompt := req.Prompt
-	var resp *provider.Response
-	var err error
 	for attempt := 1; ; attempt++ {
-		resp, err = o.exec.Execute(ctx, req, o.providerLog)
+		resp, err := o.exec.Execute(ctx, req, o.providerLog)
 		if err == nil || ctx.Err() != nil || attempt >= o.attempts {
-			break
+			return resp, err
 		}
 		wait := o.retryDelay * time.Duration(attempt)
 		o.logf(LevelWarn, "%s falhou (tentativa %d de %d): %s. Nova tentativa em %s.",
@@ -1135,16 +1192,9 @@ func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.R
 		}
 		req.Prompt = prompt + resumeNote
 	}
-	elapsed := time.Since(started)
-	if err != nil {
-		if ctx.Err() != nil {
-			o.cancelStep(ref, elapsed)
-			return nil, false
-		}
-		o.failStep(ref, elapsed, err)
-		return nil, false
-	}
+}
 
+func (o *Orchestrator) recordDone(ref stepRef, resp *provider.Response, elapsed time.Duration) {
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
 		s.Provider = resp.Name
@@ -1154,7 +1204,16 @@ func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.R
 		s.DurationMS = elapsed.Milliseconds()
 	})
 	resp.Duration = elapsed
-	return resp, true
+}
+
+// stopOnError ends the run after a failed step: canceled when ctx was,
+// failed otherwise.
+func (o *Orchestrator) stopOnError(ctx context.Context, ref stepRef, elapsed time.Duration, err error) {
+	if ctx.Err() != nil {
+		o.cancelStep(ref, elapsed)
+		return
+	}
+	o.failStep(ref, elapsed, err)
 }
 
 // resumeNote tells a retried agent that a previous attempt may have left work
@@ -1164,7 +1223,7 @@ const resumeNote = "\n\n[RETOMADA] A tentativa anterior desta tarefa falhou ou e
 
 func (o *Orchestrator) cancelStep(ref stepRef, elapsed time.Duration) {
 	o.updateStep(ref, func(s *Step) { s.Status = StepCanceled; s.DurationMS = elapsed.Milliseconds() })
-	o.abortRemaining(StepCanceled)
+	o.abortRemaining(ref.story, StepCanceled)
 	o.finish(ResultCanceled, LevelWarn, "Execução cancelada pelo usuário.")
 }
 
@@ -1180,13 +1239,19 @@ func (o *Orchestrator) failStep(ref stepRef, elapsed time.Duration, err error) {
 		}
 		title = s.Title
 	})
-	o.abortRemaining(StepFailed)
+	o.abortRemaining(ref.story, StepFailed)
 	o.finish(ResultFailed, LevelError, fmt.Sprintf("Falha na etapa \"%s\": %v", title, err))
 }
 
+// finish ends the run; when parallel stories stop one after the other, the
+// first outcome is kept.
 func (o *Orchestrator) finish(result Result, level, msg string) {
 	now := time.Now()
 	o.mu.Lock()
+	if !o.run.Running {
+		o.mu.Unlock()
+		return
+	}
 	o.run.Running = false
 	o.run.Result = result
 	o.run.FinishedAt = &now
@@ -1222,12 +1287,8 @@ func (o *Orchestrator) insertSteps(si int, afterID string, steps ...Step) {
 func (o *Orchestrator) stepTitle(ref stepRef) string {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	if ref.story < 0 {
-		return o.run.Discovery.Title
-	}
-	steps := o.run.Stories[ref.story].Steps
-	if i := stepIndex(steps, ref.id); i >= 0 {
-		return steps[i].Title
+	if step := o.stepLocked(ref); step != nil {
+		return step.Title
 	}
 	return ref.id
 }
@@ -1236,12 +1297,15 @@ func stepIndex(steps []Step, id string) int {
 	return slices.IndexFunc(steps, func(s Step) bool { return s.ID == id })
 }
 
-// abortRemaining marks every pending step as canceled and closes the story
-// in progress with the given status; later stories are canceled.
-func (o *Orchestrator) abortRemaining(current StepStatus) {
+// abortRemaining marks every pending step as canceled and closes story si
+// with the given status; other stories in progress or pending are canceled.
+func (o *Orchestrator) abortRemaining(si int, current StepStatus) {
 	o.mu.Lock()
 	if o.run.Discovery.Status == StepPending {
 		o.run.Discovery.Status = StepCanceled
+	}
+	if a := o.run.Analysis; a != nil && a.Status == StepPending {
+		a.Status = StepCanceled
 	}
 	for i := range o.run.Stories {
 		st := &o.run.Stories[i]
@@ -1252,7 +1316,10 @@ func (o *Orchestrator) abortRemaining(current StepStatus) {
 		}
 		switch st.Status {
 		case StepRunning:
-			st.Status = current
+			st.Status = StepCanceled
+			if i == si {
+				st.Status = current
+			}
 			if st.StartedAt != nil {
 				st.DurationMS = time.Since(*st.StartedAt).Milliseconds()
 			}
@@ -1266,21 +1333,45 @@ func (o *Orchestrator) abortRemaining(current StepStatus) {
 
 func (o *Orchestrator) updateStep(ref stepRef, fn func(*Step)) {
 	o.mu.Lock()
-	if ref.story < 0 {
-		fn(&o.run.Discovery)
-	} else {
-		o.run.Current = ref.story
-		if i := stepIndex(o.run.Stories[ref.story].Steps, ref.id); i >= 0 {
-			fn(&o.run.Stories[ref.story].Steps[i])
-		}
+	if step := o.stepLocked(ref); step != nil {
+		fn(step)
+	}
+	if ref.story >= 0 {
+		o.focusLocked(ref.story)
 	}
 	o.mu.Unlock()
 	o.notify()
 }
 
+// stepLocked finds the step ref addresses; story -1 holds the run-level
+// discovery and analysis steps.
+func (o *Orchestrator) stepLocked(ref stepRef) *Step {
+	switch {
+	case ref == analysisRef:
+		return o.run.Analysis
+	case ref.story < 0:
+		return &o.run.Discovery
+	}
+	steps := o.run.Stories[ref.story].Steps
+	if i := stepIndex(steps, ref.id); i >= 0 {
+		return &steps[i]
+	}
+	return nil
+}
+
+// focusLocked makes story i the current one, unless another story is still
+// running beside it.
+func (o *Orchestrator) focusLocked(i int) {
+	c := o.run.Current
+	if c >= 0 && c < len(o.run.Stories) && c != i && o.run.Stories[c].Status == StepRunning {
+		return
+	}
+	o.run.Current = i
+}
+
 func (o *Orchestrator) updateStory(i int, fn func(*StoryRun)) {
 	o.mu.Lock()
-	o.run.Current = i
+	o.focusLocked(i)
 	fn(&o.run.Stories[i])
 	o.mu.Unlock()
 	o.notify()

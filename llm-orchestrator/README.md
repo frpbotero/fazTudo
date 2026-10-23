@@ -1,8 +1,8 @@
 # FazTudo — Orquestrador de agentes
 
 Servidor Go com dashboard web que conduz uma User Story por um pipeline de agentes LLM
-(Passo 0 → especificação EDD/TDD → arquitetura → frontend → backend → verificação executável →
-segurança → code review → E2E),
+(Passo 0 → especificação EDD/TDD → arquitetura → frontend/backend em frentes paralelas →
+verificação executável → segurança → code review → E2E → documentação),
 usando os CLIs **Claude Code** e **Codex** com failover automático quando um deles atinge o limite de uso.
 
 ## Repositório e discovery
@@ -18,6 +18,16 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
 
 ## Fluxo dos agentes
 
+0. **US em paralelo** — com mais de uma US no documento, uma **análise de dependências** (somente
+   leitura, logo após o discovery) decide quais US dependem de quais e agrupa as independentes em
+   **ondas**. As US da mesma onda rodam ao mesmo tempo, cada uma na sua branch e worktree git; cada
+   agente sabe quais US correm ao lado e não invade o escopo delas. No fim da onda, uma branch
+   `faztudo/integra-…` recebe o merge de todas e a onda seguinte parte dela. Conflito entre US vai
+   para um agente de **integração**, que resolve os marcadores e roda os testes; se não resolver, o
+   merge é desfeito e a US fica *Com pendências* na própria branch. Falha numa US cancela as demais da
+   onda (o trabalho interrompido fica salvo em commit na branch); **Refazer etapa** retoma a US na
+   própria branch, sem refazer as que já foram entregues. Sem git (ou com repositórios aninhados) as
+   US rodam em sequência; sem resposta legível da análise, também.
 1. **Discovery** (uma vez por sessão) → **Passo 0** (verifica o que o repositório já implementa,
    critério a critério, e decide: `reuse` encerra a US sem implementar; `block` pula a US apontando a
    dependência ou decisão que falta; `extend`/`refactor`/`implement` seguem, implementando só o delta)
@@ -25,18 +35,30 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
    rodam **somente leitura** (`--permission-mode plan` / `--sandbox read-only`): planejadores e
    revisores não conseguem alterar arquivos, independentemente do prompt.
 2. O arquiteto devolve um plano em JSON com os agentes necessários entre `frontend`, `backend`,
-   `security` e `e2e`; os demais aparecem como *Não necessária* e não são chamados. O **code review**
+   `security`, `e2e` e `docs`; os demais aparecem como *Não necessária* e não são chamados. O **code review**
    sempre roda. Se o plano não vier, todos os agentes rodam (em simulação, a escolha é feita por
-   palavras-chave da US).
-3. **Segurança**, **code review** e **E2E** são portões de qualidade: devolvem um veredito JSON
+   palavras-chave da US). O plano traz também o **padrão de projeto**: o do projeto (identificado no
+   discovery) ou, sem um, o mais adequado (componentes no frontend, Clean Architecture no backend).
+   Implementadores e revisores seguem esse padrão e regras de clean code (nomes que revelam intenção,
+   funções de uma responsabilidade com até ~20 linhas e 3 argumentos, guard clauses).
+3. **Frentes paralelas** — o arquiteto mapeia as atividades em `streams` (agente, arquivos,
+   dependências). Frentes sem dependência entre si e com arquivos disjuntos formam uma onda e rodam
+   em paralelo, cada uma em uma worktree git própria; no fim da onda são integradas por merge na
+   branch da US. Frente que conflita com outra é refeita sobre o código integrado. Sem git (ou com
+   repositórios aninhados) as frentes rodam em sequência. Sem nada a paralelizar, o fluxo segue
+   com frontend e backend como etapas comuns.
+4. **Segurança**, **code review** e **E2E** são portões de qualidade: devolvem um veredito JSON
    (`approved` / `changes_requested`) com os problemas e o agente responsável por cada um. Havendo
    falhas, o frontend e/ou backend recebem um prompt com exatamente o que corrigir e o mesmo portão
    roda de novo para verificar. Após 2 rodadas sem aprovação, a etapa fica *Com pendências* (listadas) e o pipeline segue para as
    próximas etapas e US, sem parar a execução.
-4. O **code review** roda com revisores em paralelo, cada um com um foco: aderência à especificação,
+5. O **code review** roda com revisores em paralelo, cada um com um foco: aderência à especificação,
    simplicidade e legibilidade, testes e — quando o frontend participa — interface e acessibilidade.
    Os problemas são unificados em um único veredito.
-5. Instruções do projeto (`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.cursorrules`)
+6. **Documentação do fluxo** (`docs`, quando o arquiteto julga necessária) roda por último:
+   guia de uso para o cliente final e/ou fluxo, contratos e pontos de extensão para quem fará
+   manutenção, no lugar onde o projeto já documenta (README, `docs/`, ADR) ou em `docs/<us>.md`.
+7. Instruções do projeto (`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.cursorrules`)
    são repassadas a todos os agentes, seja qual for o CLI.
 
 ## Portões de qualidade

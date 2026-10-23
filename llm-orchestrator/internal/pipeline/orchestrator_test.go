@@ -22,10 +22,11 @@ type fakeExecutor struct {
 	reqs    []provider.Request
 	roles   []string
 	dirs    []string
-	outputs map[string][]string        // scripted outputs per role, consumed in order
-	failAt  int                        // 1-based call index that fails; 0 = never
-	block   chan struct{}              // when set, every call waits on it or ctx
-	onCall  func(req provider.Request) // side effects in the repository, like a real agent
+	outputs map[string][]string             // scripted outputs per role, consumed in order
+	failAt  int                             // 1-based call index that fails; 0 = never
+	block   chan struct{}                   // when set, every call waits on it or ctx
+	onCall  func(req provider.Request)      // side effects in the repository, like a real agent
+	failIf  func(req provider.Request) bool // fails the call after its side effects
 }
 
 func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf provider.Logf) (*provider.Response, error) {
@@ -49,6 +50,9 @@ func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf p
 	}
 	if f.onCall != nil {
 		f.onCall(req)
+	}
+	if f.failIf != nil && f.failIf(req) {
+		return nil, errors.New("boom")
 	}
 	f.mu.Lock()
 	out := "artifact-" + req.Role
@@ -162,11 +166,14 @@ func TestSequenceDevelopsStoriesInOrder(t *testing.T) {
 	if exec.count(DiscoveryStage.Role) != 1 {
 		t.Error("discovery must run once per sequence")
 	}
-	if want := 1 + 2*len(testStages); len(exec.prompts) != want {
+	if want := 2 + 2*len(testStages); len(exec.prompts) != want { // discovery, analysis, stages
 		t.Fatalf("calls = %d, want %d", len(exec.prompts), want)
 	}
+	if run.Analysis == nil || run.Analysis.Status != StepDone || run.Stories[1].Wave != 2 {
+		t.Errorf("an analysis without JSON keeps the order: %+v, waves %v", run.Analysis, run.Waves)
+	}
 
-	second := exec.prompts[1+len(testStages)] // first stage of US-2
+	second := exec.prompts[2+len(testStages)] // first stage of US-2
 	for _, want := range []string{"US 2 de 2", "- US-1 Checkout", "conteúdo 2", "Épico de pagamentos"} {
 		if !strings.Contains(second, want) {
 			t.Errorf("US-2 prompt missing %q:\n%s", want, second)
@@ -178,8 +185,8 @@ func TestSequenceDevelopsStoriesInOrder(t *testing.T) {
 }
 
 func TestSequenceStopsOnFailure(t *testing.T) {
-	// call 1 = discovery, 2..4 = US-1, 5 = first stage of US-2 fails
-	o, _ := newTest(t, &fakeExecutor{failAt: 5})
+	// call 1 = discovery, 2 = analysis, 3..5 = US-1, 6 = first stage of US-2 fails
+	o, _ := newTest(t, &fakeExecutor{failAt: 6})
 	_ = o.Start(StartOptions{Stories: []stories.Story{{Title: "1"}, {Title: "2"}, {Title: "3"}}, DryRun: true})
 	run := waitDone(t, o)
 

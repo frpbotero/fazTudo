@@ -65,8 +65,11 @@ var reviewLenses = []Lens{
 	{
 		ID:    "simplicity",
 		Title: "Simplicidade e legibilidade",
-		Focus: "Duplicação, código morto, funções longas, nomes ruins, abstração ou try/catch sobrando, helper existente não reutilizado, " +
-			"import faltando, trecho apagado sem motivo, estilo diferente do projeto, código minificado.",
+		Focus: "Duplicação, código morto, abstração ou try/catch sobrando, helper existente não reutilizado, " +
+			"import faltando, trecho apagado sem motivo, estilo diferente do projeto, código minificado. " +
+			"Padrão de projeto do plano ignorado; componente acoplado. Nome que não revela intenção ou abreviado; " +
+			"boolean sem forma de pergunta (is/has), lista no singular, função sem verbo. " +
+			"Função com mais de uma responsabilidade, > 20 linhas, > 3 argumentos, if/else aninhado sem guard clause.",
 	},
 	{
 		ID:    "tests",
@@ -94,10 +97,18 @@ func activeLenses(lenses []Lens, plan Plan) []Lens {
 
 // Output contracts. They stay explicit: the orchestrator parses them.
 const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
-	"```json\n{\"agents\": [\"frontend\", \"backend\", \"security\", \"e2e\"], \"reason\": \"motivo de cada escolha\"}\n```\n" +
+	"```json\n{\"agents\": [\"frontend\", \"backend\", \"security\", \"e2e\", \"docs\"], " +
+	"\"pattern\": \"padrão de projeto e por quê\", " +
+	"\"streams\": [{\"id\": \"api-carrinho\", \"agent\": \"backend\", \"title\": \"API do carrinho\", \"scope\": \"o que entrega\", " +
+	"\"files\": [\"src/cart/\"], \"depends_on\": []}], \"reason\": \"motivo de cada escolha\"}\n```\n" +
 	"\"agents\": só o necessário. frontend = interface; backend = API, dados, regras; " +
-	"security = auth, dados sensíveis, pagamento, entrada externa; e2e = fluxo de tela. " +
-	"Só interface: sem backend. Mudança simples: sem security nem e2e. Code review sempre roda."
+	"security = auth, dados sensíveis, pagamento, entrada externa; e2e = fluxo de tela; " +
+	"docs = documentação para cliente final (uso mudou) ou mantenedor (fluxo, integração, configuração novos). " +
+	"Só interface: sem backend. Mudança simples: sem security, e2e nem docs. Code review sempre roda.\n" +
+	"\"streams\": frentes de implementação (agent frontend ou backend). Frentes sem depends_on entre si e com files disjuntos " +
+	"rodam em paralelo, cada uma em cópia isolada do repositório, e são integradas no fim. " +
+	"depends_on só se a frente precisa do código pronto de outra; contrato do EDD basta para frontend e backend andarem juntos. " +
+	"Nada a paralelizar: omita streams."
 
 const assessInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"decision\": \"reuse\" | \"extend\" | \"refactor\" | \"implement\" | \"block\", \"reason\": \"evidência curta\"}\n```\n" +
@@ -119,6 +130,8 @@ const verdictInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n"
 // Codebuff/Freebuff orchestrator guidelines.
 const engineeringRules = "\n\nRegras:\n" +
 	"- Leia código vizinho, testes e config antes de editar. Siga convenções existentes.\n" +
+	"- Use as skills de desenvolvimento da sua CLI adequadas à stack e à tarefa (framework, testes, acessibilidade).\n" +
+	designRules +
 	"- Não assuma biblioteca: confirme no manifesto (package.json, go.mod…) antes de usar.\n" +
 	"- Mudança mínima, solução simples.\n" +
 	"- Reutilize helpers e componentes existentes. Não reimplemente.\n" +
@@ -128,6 +141,16 @@ const engineeringRules = "\n\nRegras:\n" +
 	"- Valide: rode testes, typecheck e lint da área alterada antes de terminar.\n" +
 	browserRule + processRule +
 	"- Resumo final curto: poucas palavras por mudança."
+
+// designRules state the design pattern and clean-code conventions the
+// implementers follow, in the idiom of the project's language.
+const designRules = "- Padrão de projeto: o do projeto; sem padrão, o do plano do arquiteto. " +
+	"Componentes e módulos independentes, reutilizáveis, desacoplados; regra de negócio não depende de UI nem de banco.\n" +
+	"- Nomes revelam intenção, sem abreviação (userRepository, não uRep), no estilo da linguagem. " +
+	"Variável = substantivo; boolean = pergunta (isActive, hasPermission); coleção no plural (products, userIds); " +
+	"função = verbo + substantivo (calculateTotal). Um verbo por conceito no projeto (get, não get/fetch/retrieve).\n" +
+	"- Funções: uma responsabilidade (precisou de \"e\" para descrever, divida), até ~20 linhas, até 3 argumentos " +
+	"(mais que isso: objeto de configuração). Guard clauses e retorno antecipado em vez de if/else aninhado.\n"
 
 // browserRule keeps agents off the system Chrome: launched inside the CLI
 // sandbox it aborts while registering with the window server, and macOS shows
@@ -152,15 +175,17 @@ var DiscoveryStage = Stage{
 	Task: "Relatório Markdown curto, por módulo (raiz, frontend, backend, infra…):\n" +
 		"1. Linguagens, frameworks, versões.\n" +
 		"2. Comandos: instalar, build, teste, lint, rodar.\n" +
-		"3. Arquitetura, pastas, convenções.\n" +
+		"3. Arquitetura e padrão de projeto em uso (componentes, Clean Architecture, MVC, microsserviços…), pastas, " +
+		"convenções de nomes. Sem padrão claro: diga.\n" +
 		"4. Testes: onde ficam, como são escritos.\n" +
 		"5. Riscos para quem for implementar.\n" +
 		"Será o contexto fixo de todos os agentes.",
 }
 
-// DefaultStages is the sequential Passo 0 → EDD → architecture →
-// implementation → executable checks → review → E2E flow. Fixes requested by
-// the reviewers re-run the project checks inside their own fix loop.
+// DefaultStages is the Passo 0 → EDD → architecture → implementation →
+// executable checks → review → E2E → documentation flow. The architect may
+// split the implementation into fronts that run in parallel. Fixes requested
+// by the reviewers re-run the project checks inside their own fix loop.
 var DefaultStages = []Stage{
 	{
 		ID:       "context",
@@ -197,7 +222,13 @@ var DefaultStages = []Stage{
 		Planner:  true,
 		ReadOnly: true,
 		System:   "Arquiteto principal. Só leitura.",
-		Task:     "Divida o trabalho entre os agentes: o que cada um faz, arquivos, dependências e ordem. Curto e concreto.",
+		Task: "Curto e concreto:\n" +
+			"1. Padrão de projeto: o do projeto (Discovery); sem padrão, o mais adequado — componentes independentes e reutilizáveis " +
+			"no frontend, Clean Architecture (regra de negócio no centro, UI e banco na borda) no backend; " +
+			"microfrontends/microsserviços só se o projeto já separa deployables por domínio. Diga onde cada peça fica.\n" +
+			"2. Mapeie as atividades e quais podem rodar em paralelo: frentes com arquivos disjuntos e sem depender do código da outra.\n" +
+			"3. Por frente: agente, o que faz, arquivos, dependências.\n" +
+			"4. Documentação necessária (cliente final ou mantenedor)? Se sim, inclua docs.",
 	},
 	{
 		ID:          "frontend",
@@ -248,7 +279,7 @@ var DefaultStages = []Stage{
 		Lenses:   reviewLenses,
 		System:   "Revisor sênior rigoroso. Só leitura: aponta, não corrige. Só crítica, sem elogios. Nada a apontar: diga em uma frase.",
 		Task: "Revise as mudanças desta US. Cada violação vai em issues com arquivo:linha.\n" +
-			"1. Legível: limite de linha, nada minificado, funções curtas, nomes claros.\n" +
+			"1. Legível: limite de linha, nada minificado, funções curtas de uma responsabilidade, nomes claros, padrão de projeto do plano.\n" +
 			"2. EDD: contratos, estados, erros e pastas como especificado.\n" +
 			"3. Testes: cada critério coberto, ID no nome, expectativas corretas.\n" +
 			"4. Robustez: entrada validada, erro tratado, sem duplicação.\n" +
@@ -263,6 +294,21 @@ var DefaultStages = []Stage{
 		Gate:       true,
 		System:     "QA E2E com Playwright em navegador headless. Escreva testes E2E; não altere código da aplicação.\n\n" + browserRule + processRule,
 		Task:       "Suba a aplicação, escreva/rode os testes Playwright dos fluxos da US (ID do caso no nome) e verifique tela e rede.",
+	},
+	{
+		ID:         "docs",
+		Title:      "Documentação do fluxo",
+		Role:       "Technical Writer",
+		Tier:       provider.TierStandard,
+		Selectable: true,
+		System: "Documenta o fluxo entregue. Edita só documentação (README, docs/, CHANGELOG, guia de uso); não altera código. " +
+			"Texto curto, exemplos reais do código, nada inventado. Sem git commit/push/branch (orquestrador versiona).",
+		Task: "Documente o que esta US entregou, só para quem precisa:\n" +
+			"1. Cliente final (uso, tela ou fluxo mudou): passo a passo de uso, mensagens de erro e o que fazer.\n" +
+			"2. Desenvolvedor de manutenção: fluxo ponta a ponta (entrada, camadas, saída), padrão de projeto, " +
+			"contratos, configuração, pontos de extensão, como testar.\n" +
+			"Siga onde o projeto já documenta (README, docs/, ADR, CHANGELOG); sem lugar, crie docs/<id-da-us>.md. " +
+			"Nada a documentar: diga em uma frase e não crie arquivo.",
 	},
 }
 
@@ -280,7 +326,8 @@ func buildDiscoveryPrompt(repo string, stacks []workspace.Stack) string {
 type storyContext struct {
 	Preamble  string
 	Story     stories.Story
-	Delivered []stories.Story // earlier stories of this sequence, already implemented
+	Delivered []stories.Story // stories of earlier waves, already implemented
+	Parallel  []stories.Story // stories developed at the same time, on other branches
 	Position  int             // 1-based
 	Total     int
 	Rules     rules
@@ -345,6 +392,12 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 			b.WriteString(" Já entregues no repositório (reutilize, não quebre):\n")
 			for _, d := range sc.Delivered {
 				fmt.Fprintf(&b, "- %s\n", d.Title)
+			}
+		}
+		if len(sc.Parallel) > 0 {
+			b.WriteString("\nEm desenvolvimento em paralelo, em outras branches (não implemente o escopo delas):\n")
+			for _, p := range sc.Parallel {
+				fmt.Fprintf(&b, "- %s\n", p.Title)
 			}
 		}
 		b.WriteString("\n\n")

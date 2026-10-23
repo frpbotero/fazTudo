@@ -180,3 +180,46 @@ func TestNestedRepositoriesAreBranchedAndCommitted(t *testing.T) {
 		t.Fatalf("dirty after save = %v, want only the parent", dirty)
 	}
 }
+
+func TestMergeCombinesWorktreesAndAbortsConflicts(t *testing.T) {
+	requireGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	write(t, dir, "README.md", "loja\n")
+	r, _, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitIn := func(name, file, content string) string {
+		wt := filepath.Join(t.TempDir(), name)
+		if err := r.AddWorktree(ctx, wt); err != nil {
+			t.Fatal(err)
+		}
+		write(t, wt, file, content)
+		c, err := At(wt).CommitAll(ctx, name)
+		if err != nil || c == nil {
+			t.Fatalf("commit %s: %v", name, err)
+		}
+		return c.Hash
+	}
+	ui, api := commitIn("ui", "ui.txt", "ui\n"), commitIn("api", "api.txt", "api\n")
+	clash := commitIn("clash", "ui.txt", "outro\n")
+
+	if err := r.Merge(ctx, ui, "merge ui"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Merge(ctx, api, "merge api"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Merge(ctx, clash, "merge clash"); err == nil {
+		t.Fatal("conflicting merge must fail")
+	}
+	if dirty, _ := r.Dirty(ctx); dirty {
+		t.Error("a conflicting merge must be aborted")
+	}
+	for _, f := range []string{"ui.txt", "api.txt"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("%s must be merged: %v", f, err)
+		}
+	}
+}
