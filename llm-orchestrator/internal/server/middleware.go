@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bufio"
+	"errors"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -16,6 +19,21 @@ func chain(h http.Handler, mws ...middleware) http.Handler {
 		h = mws[i](h)
 	}
 	return h
+}
+
+// emptyBody reports whether a request of unknown length (-1, as the desktop
+// webview sends body-less POSTs) carries no body, keeping it readable.
+func emptyBody(r *http.Request) bool {
+	if r.ContentLength > 0 || r.Body == nil || r.Body == http.NoBody {
+		return r.ContentLength <= 0
+	}
+	br := bufio.NewReader(r.Body)
+	_, err := br.Peek(1)
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{br, r.Body}
+	return errors.Is(err, io.EOF)
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -45,7 +63,7 @@ func sameOrigin(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if r.ContentLength != 0 {
+		if r.ContentLength != 0 && !emptyBody(r) {
 			// Requiring JSON forces a CORS preflight for cross-site requests.
 			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			if mt != contentTypeJSON {

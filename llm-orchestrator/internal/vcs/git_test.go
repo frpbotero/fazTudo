@@ -94,3 +94,76 @@ func TestOpenInitialisesAndCommitsPerStep(t *testing.T) {
 		t.Errorf("reopening must not re-initialise: %v %v", init2, err)
 	}
 }
+
+func TestNestedRepositoriesAreBranchedAndCommitted(t *testing.T) {
+	requireGit(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	// Parent repository with front/ as a gitlink (added without .gitmodules).
+	front := filepath.Join(root, "front")
+	write(t, front, "app.js", "v1\n")
+	run(front, "init", "-q")
+	run(front, "add", "-A")
+	run(front, "commit", "-q", "-m", "front v1")
+	write(t, root, "README.md", "pai\n")
+	run(root, "init", "-q")
+	run(root, "add", "-A")
+	run(root, "commit", "-q", "-m", "pai")
+
+	// Work committed by hand inside front moves its HEAD: not a pending change.
+	write(t, front, "app.js", "v2\n")
+	run(front, "commit", "-q", "-am", "front v2")
+
+	r, _, err := Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Nested(); len(got) != 1 || got[0] != "front" {
+		t.Fatalf("nested = %v", got)
+	}
+	if dirty, err := r.DirtyPaths(ctx); err != nil || len(dirty) != 0 {
+		t.Fatalf("moved gitlink must not count as dirty: %v %v", dirty, err)
+	}
+	if c, err := r.SyncNested(ctx); err != nil || c == nil {
+		t.Fatalf("SyncNested = %v, %v", c, err)
+	}
+
+	// Uncommitted edits inside the nested repository do block a run.
+	write(t, front, "app.js", "v3\n")
+	if dirty, _ := r.DirtyPaths(ctx); len(dirty) != 1 || dirty[0] != "front" {
+		t.Fatalf("dirty = %v, want [front]", dirty)
+	}
+
+	if err := r.CreateBranch(ctx, "faztudo/us-1"); err != nil {
+		t.Fatal(err)
+	}
+	if b := r.sub("front").Branch(ctx); b != "faztudo/us-1" {
+		t.Fatalf("nested branch = %q", b)
+	}
+	write(t, root, "docker-compose.yml", "x\n")
+	c, err := r.CommitAll(ctx, "passo")
+	if err != nil || c == nil {
+		t.Fatalf("CommitAll = %v, %v", c, err)
+	}
+	var paths []string
+	for _, f := range c.Files {
+		paths = append(paths, f.Path)
+	}
+	if got := strings.Join(paths, ","); got != "docker-compose.yml,front/app.js" {
+		t.Fatalf("files = %s", got)
+	}
+	if dirty, _ := r.DirtyPaths(ctx); len(dirty) != 0 {
+		t.Fatalf("everything must be committed, dirty = %v", dirty)
+	}
+	if out, _ := r.Show(ctx, c.Hash); !strings.Contains(out, "+v3") {
+		t.Errorf("show must include the nested diff:\n%s", out)
+	}
+}

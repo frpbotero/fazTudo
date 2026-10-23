@@ -356,3 +356,26 @@ func TestShowCommitRejectsInvalidRequests(t *testing.T) {
 		t.Errorf("repository without git: status %d", resp.StatusCode)
 	}
 }
+
+func TestSameOriginAcceptsBodylessRequestOfUnknownLength(t *testing.T) {
+	ok := sameOrigin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_, _ = w.Write(b)
+	}))
+	cases := []struct {
+		name, body string
+		want       int
+	}{
+		{"empty body, as the desktop webview sends Stop", "", http.StatusOK},
+		{"text body without JSON content type", "x", http.StatusUnsupportedMediaType},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest("POST", "/api/pipeline/stop", strings.NewReader(c.body))
+		req.ContentLength = -1
+		rec := httptest.NewRecorder()
+		ok.ServeHTTP(rec, req)
+		if rec.Code != c.want {
+			t.Errorf("%s: status = %d, want %d", c.name, rec.Code, c.want)
+		}
+	}
+}

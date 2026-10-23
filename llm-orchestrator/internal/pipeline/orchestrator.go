@@ -444,8 +444,8 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 		return
 	}
 	ss.report = report
-	if ss.policy.Candidates > 1 && !ss.dry && ss.git == nil {
-		o.logf(LevelWarn, "Best-of-N precisa de git; cada implementador fará uma única implementação.")
+	if ss.policy.Candidates > 1 && !ss.dry && (ss.git == nil || len(ss.git.Nested()) > 0) {
+		o.logf(LevelWarn, "Best-of-N precisa de git sem repositórios aninhados; cada implementador fará uma única implementação.")
 	}
 
 	total := len(opts.Stories)
@@ -620,19 +620,38 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 	if initialised {
 		o.logf(LevelInfo, "Repositório git inicializado; o estado atual virou o commit inicial.")
 	}
-	if dirty, err := g.Dirty(ctx); err != nil || dirty {
+	if dirty, err := g.DirtyPaths(ctx); err != nil || len(dirty) > 0 {
 		if err == nil {
-			err = vcs.ErrDirty
+			err = fmt.Errorf("%w (%s)", vcs.ErrDirty, strings.Join(dirtyLabels(dirty), ", "))
 		}
 		o.abortRemaining(StepCanceled)
 		o.finish(ResultFailed, LevelError, err.Error())
 		return nil, false
+	}
+	if nested := g.Nested(); len(nested) > 0 {
+		o.logf(LevelInfo, "Repositórios aninhados versionados junto: %s.", strings.Join(nested, ", "))
+		if c, err := g.SyncNested(ctx); err != nil {
+			o.logf(LevelWarn, "Não foi possível registrar os commits dos repositórios aninhados: %v.", err)
+		} else if c != nil {
+			o.logf(LevelInfo, "Commit %s: commits feitos dentro dos repositórios aninhados registrados no repositório principal.", c.Hash)
+		}
 	}
 	ss.git = g
 	o.mu.Lock()
 	o.run.BaseBranch = g.Branch(ctx)
 	o.mu.Unlock()
 	return ss, true
+}
+
+func dirtyLabels(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		if p == "." {
+			p = "repositório principal"
+		}
+		out[i] = p
+	}
+	return out
 }
 
 // developStory runs the stages for one story: planner first, then only the
@@ -669,7 +688,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		switch {
 		case len(lenses) > 1:
 			resp, ok = o.runLenses(ctx, ss, st, stage, lenses, ref)
-		case stage.Implementer && ss.policy.Candidates > 1 && ss.git != nil && !ss.dry:
+		case stage.Implementer && ss.policy.Candidates > 1 && ss.git != nil && len(ss.git.Nested()) == 0 && !ss.dry:
 			resp, ok = o.runCandidates(ctx, ss, st, stage, ref)
 		default:
 			resp, ok = o.runStage(ctx, ref, provider.Request{

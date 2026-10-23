@@ -113,6 +113,9 @@ Critérios de aceitação:
 
   async function api(method, path, body) {
     const opts = { method, headers: {} };
+    // State-changing calls always carry JSON: the desktop webview sends a
+    // body-less POST with unknown length, which the server would refuse.
+    if (body === undefined && method !== 'GET') body = {};
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);

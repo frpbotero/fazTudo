@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,9 +39,12 @@ const (
 )
 
 // Repo runs git inside a directory. The directory may be a subfolder of a
-// larger repository; commits are then limited to it.
+// larger repository; commits are then limited to it. Repositories nested in
+// it (gitlinks, e.g. a front and an api cloned inside a parent repository)
+// are branched and committed together with it.
 type Repo struct {
-	dir string
+	dir    string
+	nested []string // relative paths of nested repositories
 }
 
 // FileChange is one file touched by a commit.
@@ -65,6 +69,7 @@ func Open(ctx context.Context, dir string) (r *Repo, initialised bool, err error
 	}
 	r = &Repo{dir: dir}
 	if _, err := r.git(ctx, "rev-parse", "--git-dir"); err == nil {
+		r.nested = r.findNested(ctx)
 		return r, false, nil
 	}
 	if _, err := r.git(ctx, "init", "-q"); err != nil {
@@ -96,13 +101,74 @@ func Find(ctx context.Context, dir string) (*Repo, error) {
 	if _, err := r.git(ctx, "rev-parse", "--git-dir"); err != nil {
 		return nil, ErrNotRepo
 	}
+	r.nested = r.findNested(ctx)
 	return r, nil
 }
 
+// findNested lists the gitlinks under the directory whose repository is
+// checked out (submodules or repositories added without .gitmodules).
+func (r *Repo) findNested(ctx context.Context) []string {
+	out, err := r.git(ctx, "ls-files", "--stage", "--", ".")
+	if err != nil {
+		return nil
+	}
+	var nested []string
+	for _, line := range strings.Split(out, "\n") {
+		meta, path, ok := strings.Cut(line, "\t")
+		if !ok || !strings.HasPrefix(meta, "160000 ") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(r.dir, path, ".git")); err == nil {
+			nested = append(nested, path)
+		}
+	}
+	return nested
+}
+
+// Nested returns the relative paths of the nested repositories.
+func (r *Repo) Nested() []string { return r.nested }
+
+func (r *Repo) sub(path string) *Repo { return &Repo{dir: filepath.Join(r.dir, path)} }
+
 // Dirty reports whether tracked files under the directory have changes.
 func (r *Repo) Dirty(ctx context.Context) (bool, error) {
-	out, err := r.git(ctx, "status", "--porcelain", "--untracked-files=no", "--", ".")
-	return strings.TrimSpace(out) != "", err
+	paths, err := r.DirtyPaths(ctx)
+	return len(paths) > 0, err
+}
+
+// DirtyPaths lists the repositories ("." for the directory itself, or a
+// nested repository's path) whose tracked files have changes. A nested
+// repository that only moved to another commit is not a change: SyncNested
+// records it.
+func (r *Repo) DirtyPaths(ctx context.Context) ([]string, error) {
+	var dirty []string
+	out, err := r.git(ctx, "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all", "--", ".")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out) != "" {
+		dirty = append(dirty, ".")
+	}
+	for _, n := range r.nested {
+		out, err := r.sub(n).git(ctx, "status", "--porcelain", "--untracked-files=no")
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", n, err)
+		}
+		if strings.TrimSpace(out) != "" {
+			dirty = append(dirty, n)
+		}
+	}
+	return dirty, nil
+}
+
+// SyncNested commits nested repositories that moved to another commit
+// (e.g. work committed inside them by hand), so the pipeline's own commits
+// only hold the agents' changes. It returns nil when nothing moved.
+func (r *Repo) SyncNested(ctx context.Context) (*Commit, error) {
+	if len(r.nested) == 0 {
+		return nil, nil
+	}
+	return r.commitPaths(ctx, "FazTudo: sincroniza repositórios aninhados", r.nested)
 }
 
 // Branch returns the current branch name ("" when detached).
@@ -114,17 +180,79 @@ func (r *Repo) Branch(ctx context.Context) string {
 	return strings.TrimSpace(out)
 }
 
-// CreateBranch creates and switches to a new branch from HEAD.
+// CreateBranch creates and switches to a new branch from HEAD, in the
+// nested repositories too.
 func (r *Repo) CreateBranch(ctx context.Context, name string) error {
+	for _, n := range r.nested {
+		if _, err := r.sub(n).git(ctx, "switch", "-q", "-c", name); err != nil {
+			return fmt.Errorf("%s: %w", n, err)
+		}
+	}
 	_, err := r.git(ctx, "switch", "-q", "-c", name)
 	return err
 }
 
 // CommitAll stages every change under the directory and commits it. It
 // returns nil when there was nothing to commit. Paths in exclude (relative
-// to the directory) are left out.
+// to the directory) are left out. Nested repositories commit their own
+// changes first; the parent commit then records their new commits, and the
+// returned files list both, nested paths prefixed.
 func (r *Repo) CommitAll(ctx context.Context, msg string, exclude ...string) (*Commit, error) {
-	return r.commit(ctx, msg, false, exclude...)
+	var nestedFiles []FileChange
+	for _, n := range r.nested {
+		c, err := r.sub(n).commit(ctx, msg, false, nestedExcludes(n, exclude)...)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", n, err)
+		}
+		if c != nil {
+			for _, f := range c.Files {
+				f.Path = n + "/" + f.Path
+				nestedFiles = append(nestedFiles, f)
+			}
+		}
+	}
+	c, err := r.commit(ctx, msg, false, exclude...)
+	if err != nil || c == nil {
+		return c, err
+	}
+	if len(nestedFiles) > 0 {
+		c.Files = append(slices.DeleteFunc(c.Files, func(f FileChange) bool { return slices.Contains(r.nested, f.Path) }), nestedFiles...)
+	}
+	return c, nil
+}
+
+// nestedExcludes keeps the excludes that fall inside nested, relative to it.
+func nestedExcludes(nested string, exclude []string) []string {
+	var out []string
+	for _, e := range exclude {
+		if rest, ok := strings.CutPrefix(e, nested+"/"); ok {
+			out = append(out, rest)
+		}
+	}
+	return out
+}
+
+// commitPaths commits only the given paths, when they changed.
+func (r *Repo) commitPaths(ctx context.Context, msg string, paths []string) (*Commit, error) {
+	spec := append([]string{"--"}, paths...)
+	if _, err := r.git(ctx, append([]string{"add"}, spec...)...); err != nil {
+		return nil, err
+	}
+	if _, err := r.git(ctx, append([]string{"diff", "--cached", "--quiet"}, spec...)...); err == nil {
+		return nil, nil
+	}
+	args := append([]string{"commit", "-q", "--no-verify", "-m", msg}, spec...)
+	if out, _ := r.git(ctx, "config", "user.email"); strings.TrimSpace(out) == "" {
+		args = append([]string{"-c", "user.name=" + commitName, "-c", "user.email=" + commitEmail}, args...)
+	}
+	if _, err := r.git(ctx, args...); err != nil {
+		return nil, err
+	}
+	hash, err := r.git(ctx, "rev-parse", "--short", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	return &Commit{Hash: strings.TrimSpace(hash)}, nil
 }
 
 func (r *Repo) commit(ctx context.Context, msg string, allowEmpty bool, exclude ...string) (*Commit, error) {
@@ -217,7 +345,7 @@ func (r *Repo) Show(ctx context.Context, hash string) (string, error) {
 	if !reHash.MatchString(hash) {
 		return "", fmt.Errorf("hash de commit inválido: %q", hash)
 	}
-	out, err := r.git(ctx, "show", "--stat", "--patch", "--no-color", "--no-ext-diff", hash, "--")
+	out, err := r.git(ctx, "show", "--stat", "--patch", "--no-color", "--no-ext-diff", "--submodule=diff", hash, "--")
 	if err != nil {
 		return "", err
 	}

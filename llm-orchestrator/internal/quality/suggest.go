@@ -59,6 +59,12 @@ func suggestDir(root, dir string) []Command {
 			runner = "bun run"
 		}
 		scripts := packageScripts(filepath.Join(abs, "package.json"))
+		// Without a lint or typecheck script, the build is the only static
+		// check available (nest build, ng build and tsc fail on type errors).
+		if !slices.ContainsFunc([]string{"lint", "typecheck", "type-check", "check"}, func(n string) bool { return scripts[n] != "" }) &&
+			scripts["build"] != "" {
+			add("build", runner+" build")
+		}
 		hasE2E := false
 		for _, name := range npmScripts {
 			body, ok := scripts[name]

@@ -58,6 +58,8 @@ func TestSuggestFromManifests(t *testing.T) {
 	write(t, root, "web/package.json", `{"scripts":{"test":"echo \"Error: no test specified\" && exit 1"}}`)
 	write(t, root, "web/playwright.config.ts", "")
 	write(t, root, "node_modules/x/package.json", `{"scripts":{"test":"x"}}`)
+	write(t, root, "front/package.json", `{"scripts":{"dev":"ng serve","build":"ng build"}}`)
+	write(t, root, "lib/package.json", `{"scripts":{"build":"tsc","lint":"eslint ."}}`)
 
 	var got []string
 	for _, c := range Suggest(root) {
@@ -68,6 +70,8 @@ func TestSuggestFromManifests(t *testing.T) {
 		"test:e2e=npm run test:e2e",
 		"api: go vet=cd api && go vet ./...",
 		"api: go test=cd api && go test ./...",
+		"front: build=cd front && npm run build",
+		"lib: lint=cd lib && npm run lint",
 		"web: e2e=cd web && npx playwright test",
 	}
 	if !slices.Equal(got, want) {
