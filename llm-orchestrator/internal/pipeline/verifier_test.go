@@ -109,19 +109,24 @@ func TestFailingCommandGoesBackToImplementer(t *testing.T) {
 	}
 }
 
-func TestPersistentFailureFailsStoryAfterRounds(t *testing.T) {
+func TestPersistentFailureMovesOnWithPendingIssues(t *testing.T) {
 	exec := &fakeExecutor{}
 	o, _ := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{ExitCode: 2, Output: "erro"} })
-	_ = o.Start(realStory("x"))
+	opts := realStory("x")
+	opts.Stories = append(opts.Stories, stories.Story{ID: "US-8", Title: "US-8 Próxima", Content: "y"})
+	_ = o.Start(opts)
 	run := waitDone(t, o)
-	if run.Result != ResultFailed {
+	if run.Result != ResultSucceeded {
 		t.Fatalf("result = %s", run.Result)
 	}
-	if got := exec.count("fe"); got != 1+maxVerifierRounds {
-		t.Errorf("frontend calls = %d, want %d", got, 1+maxVerifierRounds)
+	if run.Stories[0].Status != StepWarning || run.Stories[1].Status != StepWarning {
+		t.Errorf("stories = %s, %s; both must finish with pending issues", run.Stories[0].Status, run.Stories[1].Status)
 	}
-	if st := run.Stories[0].Steps; st[len(st)-1].Status != StepFailed {
-		t.Errorf("last verification must fail: %+v", st[len(st)-1])
+	if got := exec.count("fe"); got != 2*(1+maxVerifierRounds) {
+		t.Errorf("frontend calls = %d, want %d (both stories developed)", got, 2*(1+maxVerifierRounds))
+	}
+	if st := run.Stories[0].Steps; st[len(st)-1].Status != StepWarning {
+		t.Errorf("last verification must keep the pending issues: %+v", st[len(st)-1])
 	}
 }
 

@@ -152,7 +152,7 @@ func TestGateTriggersFixesAndVerification(t *testing.T) {
 	}
 }
 
-func TestGateFailsAfterMaxRounds(t *testing.T) {
+func TestGateKeepsGoingAfterMaxRounds(t *testing.T) {
 	bad := fence(`{"status": "changes_requested", "issues": [{"agent": "backend", "description": "teste quebrado"}]}`)
 	exec := &fakeExecutor{outputs: map[string][]string{
 		"architect": {fence(`{"agents": ["backend"]}`)},
@@ -160,15 +160,15 @@ func TestGateFailsAfterMaxRounds(t *testing.T) {
 	}}
 	run := runFlow(t, exec)
 
-	if run.Result != ResultFailed {
-		t.Fatalf("result = %s", run.Result)
+	if run.Result != ResultSucceeded || run.Stories[0].Status != StepWarning {
+		t.Fatalf("result = %s, story = %s; want succeeded with pending issues", run.Result, run.Stories[0].Status)
 	}
 	if n := exec.count("be"); n != 1+maxFixRounds {
 		t.Errorf("backend calls = %d, want %d (implementation + %d fixes)", n, 1+maxFixRounds, maxFixRounds)
 	}
 	last := run.Stories[0].Steps[len(run.Stories[0].Steps)-1]
-	if last.Status != StepFailed || !strings.Contains(last.Error, "persistem") {
-		t.Errorf("last verification should fail: %+v", last)
+	if last.Status != StepWarning || !strings.Contains(last.Error, "persistem") || len(last.Issues) == 0 {
+		t.Errorf("last verification should keep the pending issues: %+v", last)
 	}
 }
 

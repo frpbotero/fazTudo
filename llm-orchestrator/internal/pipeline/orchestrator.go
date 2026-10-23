@@ -3,6 +3,7 @@
 package pipeline
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -41,6 +42,7 @@ const (
 	StepSkipped  StepStatus = "skipped"
 	StepOmitted  StepStatus = "omitted" // not selected by the architect
 	StepFailed   StepStatus = "failed"
+	StepWarning  StepStatus = "warning" // finished with unresolved issues; the run goes on
 	StepCanceled StepStatus = "canceled"
 )
 
@@ -64,8 +66,12 @@ const (
 const (
 	maxLogs = 500
 	// maxFixRounds is how many fix-and-verify rounds a gate may trigger
-	// before the story fails.
+	// before the story moves on with the issues left as pending.
 	maxFixRounds = 2
+	// agentAttempts is how many times a failing agent call is tried before
+	// the run stops; the CLI may crash, time out or lose the network.
+	agentAttempts   = 3
+	agentRetryDelay = 20 * time.Second
 )
 
 // Step is the observable state of one stage.
@@ -172,6 +178,9 @@ type Orchestrator struct {
 	onChange func()
 	logger   *slog.Logger
 	runCheck func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
+	// attempts and retryDelay control how failing agent calls are retried.
+	attempts   int
+	retryDelay time.Duration
 
 	mu     sync.RWMutex
 	run    Run
@@ -184,7 +193,8 @@ type Orchestrator struct {
 // reused from the session cache), followed by stages. onChange is called
 // (without locks held) after every state mutation and must not block.
 func New(exec Executor, ws *workspace.Manager, stages []Stage, onChange func(), logger *slog.Logger) *Orchestrator {
-	o := &Orchestrator{exec: exec, ws: ws, stages: stages, onChange: onChange, logger: logger, runCheck: quality.Run}
+	o := &Orchestrator{exec: exec, ws: ws, stages: stages, onChange: onChange, logger: logger, runCheck: quality.Run,
+		attempts: agentAttempts, retryDelay: agentRetryDelay}
 	o.run.Discovery = newStep(DiscoveryStage)
 	o.run.Stories = []StoryRun{{Status: StepPending, Steps: o.freshSteps()}}
 	o.run.Current = -1
@@ -421,6 +431,7 @@ type storyState struct {
 	reqs       []quality.Requirement
 	verifiedAt time.Time // when a verifier last approved the repository
 	blocked    string    // Passo 0 reason when the story cannot be developed yet
+	pending    int       // issues a gate could not get fixed within its rounds
 }
 
 func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptions) {
@@ -457,17 +468,44 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 			return
 		}
 
-		if st.blocked != "" {
-			o.updateStory(si, func(r *StoryRun) { r.Status = StepSkipped; r.DurationMS = time.Since(started).Milliseconds() })
-			o.logf(LevelWarn, "%s bloqueada no Passo 0: %s", story.Title, st.blocked)
-			continue
-		}
-		o.updateStory(si, func(r *StoryRun) { r.Status = StepDone; r.DurationMS = time.Since(started).Milliseconds() })
-		if total > 1 {
-			o.logf(LevelSuccess, "%s entregue (%d de %d).", story.Title, si+1, total)
+		o.closeStory(st, total)
+	}
+	o.finishSucceeded("Pipeline concluído. Todos os agentes entregaram seus artefatos.")
+}
+
+// closeStory records how a developed story ended: delivered, delivered with
+// pending issues, or blocked in Passo 0.
+func (o *Orchestrator) closeStory(st *storyState, total int) {
+	status := StepDone
+	switch {
+	case st.blocked != "":
+		status = StepSkipped
+		o.logf(LevelWarn, "%s bloqueada no Passo 0: %s", st.sc.Story.Title, st.blocked)
+	case st.pending > 0:
+		status = StepWarning
+		o.logf(LevelWarn, "%s entregue com %d pendência(s) não resolvida(s).", st.sc.Story.Title, st.pending)
+	case total > 1:
+		o.logf(LevelSuccess, "%s entregue (%d de %d).", st.sc.Story.Title, st.si+1, total)
+	}
+	o.updateStory(st.si, func(r *StoryRun) { r.Status = status; r.DurationMS = time.Since(st.started).Milliseconds() })
+}
+
+// finishSucceeded ends a run that went through every story, pointing out the
+// ones left with pending issues.
+func (o *Orchestrator) finishSucceeded(msg string) {
+	o.mu.RLock()
+	var pending []string
+	for _, st := range o.run.Stories {
+		if st.Status == StepWarning {
+			pending = append(pending, cmp.Or(st.ID, st.Title))
 		}
 	}
-	o.finish(ResultSucceeded, LevelSuccess, "Pipeline concluído. Todos os agentes entregaram seus artefatos.")
+	o.mu.RUnlock()
+	if len(pending) > 0 {
+		o.finish(ResultSucceeded, LevelWarn, fmt.Sprintf("Pipeline concluído com pendências em: %s.", strings.Join(pending, ", ")))
+		return
+	}
+	o.finish(ResultSucceeded, LevelSuccess, msg)
 }
 
 // retryExecute rebuilds the transient session around the repository as it was
@@ -498,9 +536,9 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 		if !o.developStoryFrom(ctx, ss, st, startAt, si > story) {
 			return
 		}
-		o.updateStory(si, func(r *StoryRun) { r.Status = StepDone; r.DurationMS = time.Since(storyStarted).Milliseconds() })
+		o.closeStory(st, total)
 	}
-	o.finish(ResultSucceeded, LevelSuccess, "Pipeline concluído após refazer a etapa com falha.")
+	o.finishSucceeded("Pipeline concluído após refazer a etapa com falha.")
 }
 
 func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts StartOptions) *session {
@@ -898,11 +936,11 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 		}
 
 		if round > rounds {
-			return o.failGate(st.si, stepID, gate, fmt.Errorf("%d problema(s) persistem após %d rodadas de correção", len(verdict.Issues), rounds))
+			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d problema(s) persistem após %d rodadas de correção", len(verdict.Issues), rounds))
 		}
 		fixes := o.scheduleFixes(st.si, gate, stepID, verdict.Issues, round)
 		if len(fixes) == 0 {
-			return o.failGate(st.si, stepID, gate, fmt.Errorf("%d problema(s) sem implementador para corrigi-los", len(verdict.Issues)))
+			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d problema(s) sem implementador para corrigi-los", len(verdict.Issues)))
 		}
 		verifyID := fmt.Sprintf("%s-verify-%d", gate.ID, round+1)
 		o.insertSteps(st.si, fixes[len(fixes)-1].step.ID, Step{
@@ -936,11 +974,17 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 	}
 }
 
-func (o *Orchestrator) failGate(si int, stepID string, gate Stage, err error) bool {
-	o.updateStep(stepRef{si, stepID}, func(s *Step) { s.Status = StepFailed; s.Error = err.Error() })
-	o.abortRemaining(StepFailed)
-	o.finish(ResultFailed, LevelError, fmt.Sprintf("%s: %v", gate.Title, err))
-	return false
+// settleGate keeps the run going when a gate's issues outlast the fix rounds:
+// the step is marked with the pending issues and the next stages and stories
+// still run, so an unattended run never stops on one stubborn problem.
+func (o *Orchestrator) settleGate(st *storyState, stepID string, gate Stage, issues []Issue, msg string) bool {
+	o.updateStep(stepRef{st.si, stepID}, func(s *Step) {
+		s.Status = StepWarning
+		s.Error = msg + ". Pendências registradas; o pipeline segue."
+	})
+	st.pending += len(issues)
+	o.logf(LevelWarn, "%s: %s. Seguindo com as pendências registradas.", gate.Title, msg)
+	return true
 }
 
 type scheduledFix struct {
@@ -1035,8 +1079,9 @@ func (o *Orchestrator) discover(ctx context.Context, repo string) (*workspace.Re
 	return &report, true
 }
 
-// runStage executes a step and records its outcome. On failure or
-// cancellation it finishes the run and returns false.
+// runStage executes a step and records its outcome. A failing call (CLI
+// crash, timeout, network) is retried with a growing delay; after the last
+// attempt, or on cancellation, it finishes the run and returns false.
 func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.Request) (*provider.Response, bool) {
 	started := time.Now()
 	o.updateStep(ref, func(s *Step) {
@@ -1044,7 +1089,24 @@ func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.R
 		s.StartedAt = &started
 	})
 
-	resp, err := o.exec.Execute(ctx, req, o.providerLog)
+	prompt := req.Prompt
+	var resp *provider.Response
+	var err error
+	for attempt := 1; ; attempt++ {
+		resp, err = o.exec.Execute(ctx, req, o.providerLog)
+		if err == nil || ctx.Err() != nil || attempt >= o.attempts {
+			break
+		}
+		wait := o.retryDelay * time.Duration(attempt)
+		o.logf(LevelWarn, "%s falhou (tentativa %d de %d): %s. Nova tentativa em %s.",
+			o.stepTitle(ref), attempt, o.attempts, clipRunes(err.Error(), 300), wait)
+		o.updateStep(ref, func(s *Step) { s.Note = fmt.Sprintf("Tentativa %d de %d", attempt+1, o.attempts) })
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+		}
+		req.Prompt = prompt + resumeNote
+	}
 	elapsed := time.Since(started)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -1066,6 +1128,11 @@ func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.R
 	resp.Duration = elapsed
 	return resp, true
 }
+
+// resumeNote tells a retried agent that a previous attempt may have left work
+// (or a stuck process) behind.
+const resumeNote = "\n\n[RETOMADA] A tentativa anterior desta tarefa falhou ou excedeu o tempo. " +
+	"Verifique o estado atual dos arquivos e continue de onde parou. Não deixe servidor nem watcher em primeiro plano."
 
 func (o *Orchestrator) cancelStep(ref stepRef, elapsed time.Duration) {
 	o.updateStep(ref, func(s *Step) { s.Status = StepCanceled; s.DurationMS = elapsed.Milliseconds() })

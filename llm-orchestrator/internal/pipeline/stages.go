@@ -126,7 +126,7 @@ const engineeringRules = "\n\nRegras:\n" +
 	"- Mudou símbolo exportado: atualize todas as referências.\n" +
 	"- Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.\n" +
 	"- Valide: rode testes, typecheck e lint da área alterada antes de terminar.\n" +
-	browserRule +
+	browserRule + processRule +
 	"- Resumo final curto: poucas palavras por mudança."
 
 // browserRule keeps agents off the system Chrome: launched inside the CLI
@@ -134,6 +134,12 @@ const engineeringRules = "\n\nRegras:\n" +
 // a "Google Chrome quit unexpectedly" dialog for every attempt.
 const browserRule = "- Navegador de teste: Chromium do Playwright em headless (`npx playwright install chromium`). " +
 	"Nunca `channel: 'chrome'`/`msedge` nem Chrome do sistema; se a config usar, troque para o Chromium.\n"
+
+// processRule keeps agents from hanging the run: a foreground dev server or
+// watch-mode test never returns, and the orchestrator kills the CLI at its
+// time limit.
+const processRule = "- Servidor (ng serve, npm start, vite…) só em background, com espera por porta e encerrado no fim. " +
+	"Testes sem modo watch (`CI=1`, `--watch=false`, `--run`) e com timeout.\n"
 
 // DiscoveryStage maps the repository before any implementation. Its report is
 // cached per repository for the session and shared with every other stage.
@@ -255,7 +261,7 @@ var DefaultStages = []Stage{
 		Tier:       provider.TierStandard,
 		Selectable: true,
 		Gate:       true,
-		System:     "QA E2E com Playwright em navegador headless. Escreva testes E2E; não altere código da aplicação.\n\n" + browserRule,
+		System:     "QA E2E com Playwright em navegador headless. Escreva testes E2E; não altere código da aplicação.\n\n" + browserRule + processRule,
 		Task:       "Suba a aplicação, escreva/rode os testes Playwright dos fluxos da US (ID do caso no nome) e verifique tela e rede.",
 	},
 }

@@ -86,7 +86,9 @@ func newTest(t *testing.T, exec *fakeExecutor) (*Orchestrator, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(exec, ws, testStages, nil, slog.New(slog.NewTextHandler(io.Discard, nil))), repo
+	o := New(exec, ws, testStages, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o.attempts = 1 // failAt scripts a hard failure; retries have their own test
+	return o, repo
 }
 
 func one(dry bool) StartOptions {
@@ -220,6 +222,22 @@ func TestRetryFailedContinuesFromFailedStage(t *testing.T) {
 		if s.Status != StepDone {
 			t.Errorf("step %s = %s", s.ID, s.Status)
 		}
+	}
+}
+
+func TestFailingAgentIsRetried(t *testing.T) {
+	exec := &fakeExecutor{failAt: 3} // discovery, A, then B fails once
+	o, _ := newTest(t, exec)
+	o.attempts, o.retryDelay = 3, time.Millisecond
+	if err := o.Start(one(true)); err != nil {
+		t.Fatal(err)
+	}
+	run := waitDone(t, o)
+	if run.Result != ResultSucceeded || exec.count("rb") != 2 {
+		t.Fatalf("result = %s, B calls = %d; want succeeded after one retry", run.Result, exec.count("rb"))
+	}
+	if !strings.Contains(exec.prompts[3], "[RETOMADA]") {
+		t.Errorf("retried prompt must ask the agent to resume:\n%s", exec.prompts[3])
 	}
 }
 

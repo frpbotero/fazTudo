@@ -30,6 +30,7 @@ Critérios de aceitação:
     skipped: { label: 'Reutilizado', tone: 'neutral' },
     omitted: { label: 'Não necessária', tone: 'neutral' },
     failed: { label: 'Falhou', tone: 'danger' },
+    warning: { label: 'Com pendências', tone: 'warn' },
     canceled: { label: 'Cancelada', tone: 'neutral' },
   };
   const RUN_RESULT = {
@@ -78,7 +79,11 @@ Critérios de aceitação:
   let lastRunStart = null;
   let pollTimer = null;
   let refetchScheduled = false;
-  const openArtifacts = new Set();
+  // Open <details> panels and scrolled outputs survive the re-render that
+  // every pipeline event triggers; keyed by step and position in the step.
+  const openDetails = new Set();
+  const scrolled = new Map();
+  let lastStepsHtml = '';
   let viewStory = null; // story index pinned by the user; null follows the run
   let pendingDoc = null; // parsed document awaiting the user's choice
   let artifacts = new Map();
@@ -202,7 +207,7 @@ Critérios de aceitação:
       await api('POST', '/api/pipeline/start', {
         stories, preamble, source: el.source.value, dry_run: selectedMode() === 'dry', document_name: documentName,
       });
-      openArtifacts.clear();
+      openDetails.clear();
       viewStory = null;
       return true;
     } catch (err) {
@@ -637,10 +642,21 @@ Critérios de aceitação:
   }
 
   // ---------- pipeline ----------
+  function panelKey(node, selector) {
+    const step = node.closest('.step');
+    if (!step) return '';
+    return `${step.dataset.id}|${selector}|${[...step.querySelectorAll(selector)].indexOf(node)}`;
+  }
   el.steps.addEventListener('toggle', (e) => {
-    const id = e.target.closest('.step')?.dataset.id;
-    if (!id) return;
-    if (e.target.open) openArtifacts.add(id); else openArtifacts.delete(id);
+    if (e.target.tagName !== 'DETAILS') return;
+    const key = panelKey(e.target, 'details');
+    if (!key) return;
+    if (e.target.open) openDetails.add(key); else openDetails.delete(key);
+  }, true);
+  el.steps.addEventListener('scroll', (e) => {
+    if (e.target.tagName !== 'PRE') return;
+    const key = panelKey(e.target, 'pre');
+    if (key) scrolled.set(key, e.target.scrollTop);
   }, true);
   el.steps.addEventListener('click', async (e) => {
     const retry = e.target.closest('button[data-retry-step]');
@@ -651,7 +667,7 @@ Critérios de aceitação:
           story: Number(retry.dataset.retryStory),
           step: retry.dataset.retryStep,
         });
-        openArtifacts.clear();
+        openDetails.clear();
         viewStory = null;
         toast('Etapa reiniciada. As validações seguintes serão executadas novamente.', 'success');
       } catch (err) {
@@ -689,6 +705,7 @@ Critérios de aceitação:
       case 'done':
       case 'skipped': return icon('check');
       case 'failed': return icon('x');
+      case 'warning': return icon('alert');
       case 'canceled': return icon('ban');
       case 'omitted': return icon('minus');
       default: return s.kind === 'fix' ? icon('wrench') : String(index + 1);
@@ -814,6 +831,7 @@ Critérios de aceitação:
       case 'done': return icon('check');
       case 'failed': return icon('x');
       case 'skipped': return icon('alert'); // blocked in Passo 0
+      case 'warning': return icon('alert'); // delivered with pending issues
       default: return '<span class="dot" aria-hidden="true"></span>';
     }
   }
@@ -838,7 +856,7 @@ Critérios de aceitação:
     const hiddenSteps = allSteps.filter((s) => s.status === 'canceled' || s.status === 'omitted');
     const steps = allSteps.filter((s) => s.status !== 'canceled' && s.status !== 'omitted');
 
-    const finished = (s) => ['done', 'skipped', 'omitted'].includes(s.status);
+    const finished = (s) => ['done', 'skipped', 'omitted', 'warning'].includes(s.status);
     const total = 1 + list.reduce((n, st) => n + st.steps.length, 0);
     const done = (run.discovery && finished(run.discovery) ? 1 : 0) +
       list.reduce((n, st) => n + st.steps.filter(finished).length, 0);
@@ -856,7 +874,7 @@ Critérios de aceitação:
     if (run.started_at) {
       const parts = [];
       if (list.length > 1) {
-        const delivered = list.filter((st) => st.status === 'done').length;
+        const delivered = list.filter((st) => st.status === 'done' || st.status === 'warning').length;
         parts.push(`US ${Math.min(current + 1, list.length)} de ${list.length}`, `${delivered} entregue${delivered === 1 ? '' : 's'}`);
       } else {
         parts.push(`${done} de ${total} etapas`);
@@ -875,7 +893,7 @@ Critérios de aceitação:
     artifacts = new Map();
     let lastVerifier = -1;
     steps.forEach((s, i) => { if (i > 0 && isVerifier(s) && s.status !== 'pending' && s.status !== 'omitted') lastVerifier = i; });
-    el.steps.innerHTML = steps.map((s, i) => {
+    const html = steps.map((s, i) => {
       const key = i === 0 ? 'discovery' : `${shown}:${s.id}`;
       if (s.output) artifacts.set(key, s.output);
       const st = s.status === 'skipped' && i > 0 ? { label: 'Dispensada', tone: 'neutral' } : STEP_STATUS[s.status] || STEP_STATUS.pending;
@@ -884,7 +902,7 @@ Critérios de aceitação:
       else if (s.duration_ms) time = `<span class="time">${esc(fmtDuration(s.duration_ms))}</span>`;
       const model = s.model ? `<span class="model" title="${esc(s.provider)}">${esc(s.provider)} · ${esc(s.model)}</span>` : '';
       const artifact = s.output ? `
-        <details class="artifact"${openArtifacts.has(key) ? ' open' : ''}>
+        <details class="artifact">
           <summary>${icon('chevron')}${i === 0 ? 'Relatório de discovery' : 'Artefato'}
             <button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(key)}">${icon('copy')}Copiar</button>
           </summary>
@@ -894,7 +912,7 @@ Critérios de aceitação:
       let extra = renderChecks(s.checks) + renderCandidates(s.candidates);
       if (s.id === 'arch') extra = renderPlan(story.plan, story.steps || []);
       else if (s.kind === 'fix') extra = renderIssues(s.issues, 'Correções solicitadas');
-      else if (s.issues?.length) extra += renderIssues(s.issues, s.status === 'failed' ? 'Problemas não resolvidos' : 'Problemas encontrados');
+      else if (s.issues?.length) extra += renderIssues(s.issues, ['failed', 'warning'].includes(s.status) ? 'Problemas não resolvidos' : 'Problemas encontrados');
       if (i === lastVerifier) extra += renderTrace(story.trace);
       extra += renderCommit(s);
       const kindTag = s.kind === 'fix' ? '<span class="kind-tag" data-kind="fix">Correção</span>'
@@ -923,6 +941,14 @@ Critérios de aceitação:
         <span class="summary-line"></span>
         <span>${hiddenSteps.length} etapa${hiddenSteps.length === 1 ? '' : 's'} não executada${hiddenSteps.length === 1 ? '' : 's'}</span>
       </li>` : '');
+    if (html === lastStepsHtml) return; // nothing changed: keep the DOM (and what the user opened)
+    lastStepsHtml = html;
+    el.steps.innerHTML = html;
+    el.steps.querySelectorAll('details').forEach((d) => { if (openDetails.has(panelKey(d, 'details'))) d.open = true; });
+    el.steps.querySelectorAll('pre').forEach((p) => {
+      const top = scrolled.get(panelKey(p, 'pre'));
+      if (top) p.scrollTop = top;
+    });
     // The CSP forbids inline style attributes; widths are set through the CSSOM.
     el.steps.querySelectorAll('[data-pct]').forEach((n) => { n.style.width = `${n.dataset.pct}%`; });
   }

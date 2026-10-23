@@ -31,7 +31,8 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
 3. **Segurança**, **code review** e **E2E** são portões de qualidade: devolvem um veredito JSON
    (`approved` / `changes_requested`) com os problemas e o agente responsável por cada um. Havendo
    falhas, o frontend e/ou backend recebem um prompt com exatamente o que corrigir e o mesmo portão
-   roda de novo para verificar. Após 2 rodadas sem aprovação, a US falha com as pendências listadas.
+   roda de novo para verificar. Após 2 rodadas sem aprovação, a etapa fica *Com pendências* (listadas) e o pipeline segue para as
+   próximas etapas e US, sem parar a execução.
 4. O **code review** roda com revisores em paralelo, cada um com um foco: aderência à especificação,
    simplicidade e legibilidade, testes e — quando o frontend participa — interface e acessibilidade.
    Os problemas são unificados em um único veredito.
@@ -48,7 +49,10 @@ da configuração.
   orquestrador roda os comandos do projeto (detectados em `package.json`, `go.mod`, `pyproject.toml`…
   ou definidos manualmente, com `CI=1` e tempo limite), checa a sintaxe dos JS alterados e dos
   `<script>` inline de HTML (`node --check`), `gofmt` e linhas longas/código minificado. Cada falha
-  volta ao implementador responsável com a saída do comando; até 3 rodadas.
+  volta ao implementador responsável com a saída do comando; até 3 rodadas; depois disso a US segue *Com pendências*.
+- **Resiliência** — cada chamada de agente tem tempo limite (60 min); o processo e os filhos (ex.: um
+  `ng serve` esquecido) são encerrados juntos. Chamada que falha ou expira é refeita até 3 vezes, com
+  espera crescente e aviso para o agente retomar de onde parou.
 - **Rastreabilidade** — IDs de casos de teste das tabelas de testes do documento (ex.: `UT-CART-01`,
   `IT-08`) e os listados pela especificação precisam aparecer nos arquivos de teste.
 - **Arquivos protegidos** — `US*.md`, `EDD*.md` e o `.md` aberto; se um agente alterar um deles, o

@@ -315,6 +315,7 @@ kbd {
 .step[data-status="running"] .marker { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .step[data-status="done"] .marker { background: var(--success-soft); color: var(--success); border-color: transparent; }
 .step[data-status="failed"] .marker { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+.step[data-status="warning"] .marker { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .step[data-status="canceled"] .marker { color: var(--muted); border-style: dashed; }
 .step[data-status="skipped"] .marker { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, var(--border)); border-style: dashed; }
 .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
@@ -337,6 +338,7 @@ kbd {
 
 .issues { margin-top: 8px; padding: 0; border-radius: var(--radius-sm); background: var(--warn-soft); }
 .step[data-status="failed"] .issues { background: var(--danger-soft); }
+.step[data-status="warning"] .issues { background: var(--warn-soft); }
 .issues-title { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; padding: 9px 11px; font-size: 12px; font-weight: 650; color: var(--warn); }
 .issues-title::-webkit-details-marker { display: none; }
 .issues-title span:last-child { font-weight: 500; opacity: .8; }
@@ -374,6 +376,7 @@ kbd {
   border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 .step-error { margin-top: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.step[data-status="warning"] .step-error { background: var(--warn-soft); color: var(--warn); }
 .step-summary { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 12px; align-items: center; color: var(--muted); font-size: 12px; padding-top: 2px; }
 .summary-line { width: 18px; height: 1px; justify-self: center; background: var(--border-strong); }
 
@@ -456,6 +459,7 @@ kbd {
 .story-tab .spinner { width: 11px; height: 11px; color: var(--accent); }
 .story-tab[data-status="done"] .icon { color: var(--success); }
 .story-tab[data-status="failed"] .icon { color: var(--danger); }
+.story-tab:is([data-status="warning"], [data-status="skipped"]) .icon { color: var(--warn); }
 .story-tab[data-status="pending"] .dot, .story-tab[data-status="canceled"] .dot { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--muted); }
 .story-tab[data-status="canceled"] { color: var(--muted); }
 

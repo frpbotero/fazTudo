@@ -31,6 +31,9 @@ var (
 	reTestID  = regexp.MustCompile(`^[A-Z][A-Z0-9]{0,9}(?:-[A-Z0-9]{1,10})*-\d{1,4}$`)
 	reTesty   = regexp.MustCompile(`(?i)\btest|\bteste|\bcen[aá]rio|\bspec\b|\be2e\b|\bplaywright|\bqa\b`)
 	reSepRow  = regexp.MustCompile(`^\|?[\s:|-]+\|?$`)
+	// reTestCode recognises test code in files whose name does not say so
+	// (e.g. scripts/verify-login.mjs run with node --test).
+	reTestCode = regexp.MustCompile("node:test|@playwright/test|\\b(?:describe|it|test)\\s*\\(\\s*['\"`]|\\bfunc Test[A-Z_]|\\bdef test_|@Test\\b")
 )
 
 // ExtractRequirements reads test IDs from Markdown tables placed under
@@ -132,7 +135,8 @@ func IsTestFile(rel string) bool {
 	return slices.ContainsFunc(strings.Split(path.Dir(rel), "/"), func(d string) bool { return testDirs[strings.ToLower(d)] })
 }
 
-// TraceTests looks for each requirement ID in the repository's test files.
+// TraceTests looks for each requirement ID in the repository's test files:
+// those named as tests and any code file that contains test code.
 // A test may drop the layer prefix: UT-GRID-04 also matches GRID-04.
 func TraceTests(root string, reqs []Requirement) []Trace {
 	traces := make([]Trace, len(reqs))
@@ -149,11 +153,12 @@ func TraceTests(root string, reqs []Requirement) []Trace {
 		return traces
 	}
 	walk(root, func(rel string, _ fs.FileInfo) {
-		if !IsTestFile(rel) {
+		named := IsTestFile(rel)
+		if !named && !codeExts[ext(rel)] {
 			return
 		}
 		text, ok := readFile(root, rel)
-		if !ok {
+		if !ok || (!named && !reTestCode.MatchString(text)) {
 			return
 		}
 		for i, re := range patterns {

@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -156,18 +157,36 @@ type Runner interface {
 	Run(ctx context.Context, inv Invocation) (string, error)
 }
 
-// ExecRunner shells out to the real CLI binary.
-type ExecRunner struct{}
+// DefaultAgentTimeout bounds one CLI run. An agent stuck on a foreground
+// server or a hanging test would otherwise block an unattended run forever.
+const DefaultAgentTimeout = 60 * time.Minute
 
-func (ExecRunner) Run(ctx context.Context, inv Invocation) (string, error) {
+// ExecRunner shells out to the real CLI binary.
+type ExecRunner struct {
+	Timeout time.Duration // zero means DefaultAgentTimeout
+}
+
+func (r ExecRunner) Run(ctx context.Context, inv Invocation) (string, error) {
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = DefaultAgentTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	cmd := exec.CommandContext(ctx, inv.CLI.Binary, inv.CLI.Args(inv)...)
 	cmd.Dir = inv.WorkDir
+	isolate(cmd)
+	cmd.WaitDelay = 5 * time.Second // children holding the pipes must not keep Wait blocked
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 
 	err := cmd.Run()
 	out := buf.String()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return out, fmt.Errorf("%s excedeu o tempo limite de %s", inv.CLI.Binary, timeout)
+	}
 	if err != nil {
 		return out, fmt.Errorf("%s falhou: %w: %s", inv.CLI.Binary, err, truncate(strings.TrimSpace(out), 2000))
 	}

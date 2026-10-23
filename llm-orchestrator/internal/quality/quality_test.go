@@ -234,3 +234,24 @@ func TestIsTestFile(t *testing.T) {
 		}
 	}
 }
+
+func TestTraceFindsTestCodeOutsideTestNames(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, text string) {
+		p := filepath.Join(root, rel)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("scripts/verify-mfa.mjs", "import test from 'node:test';\ntest('E2E-AUTH-01: login', () => {});\n")
+	write("src/app.js", "// E2E-AUTH-02 é citado, mas aqui não há teste\n")
+
+	traces := TraceTests(root, []Requirement{{ID: "E2E-AUTH-01"}, {ID: "E2E-AUTH-02"}})
+	if !traces[0].Found() || traces[0].Files[0] != "scripts/verify-mfa.mjs" {
+		t.Errorf("test code in a script must count: %+v", traces[0])
+	}
+	if traces[1].Found() {
+		t.Errorf("a plain source comment is not a test: %+v", traces[1])
+	}
+}
