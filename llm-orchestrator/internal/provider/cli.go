@@ -24,6 +24,7 @@ type Tier string
 const (
 	TierHeavy    Tier = "heavy"    // architecture, security, review
 	TierStandard Tier = "standard" // spec, implementation, QA
+	TierLight    Tier = "light"    // quick classification (e.g. finding stories in a document)
 )
 
 // Settings is the user-editable model configuration of a provider.
@@ -66,6 +67,8 @@ type CLI struct {
 	Efforts  []string
 	Models   []Model // fallback catalog when LoadCatalog is nil or fails
 	Defaults Settings
+	// LightModel runs TierLight tasks; empty falls back to the standard model.
+	LightModel string
 	// LoadCatalog reads the models actually available to the installed CLI.
 	LoadCatalog func() (Catalog, error)
 	// Args builds the argument list for a non-interactive run.
@@ -84,7 +87,8 @@ var ClaudeCLI = CLI{
 		{ID: "claude-haiku-5-5", Label: "Claude Haiku 5.5"},
 		{ID: "claude-fable-5-1", Label: "Claude Fable 5.1"},
 	},
-	Defaults: Settings{HeavyModel: "claude-opus-5-5", StdModel: "claude-sonnet-5-5", Effort: "high"},
+	Defaults:   Settings{HeavyModel: "claude-opus-5-5", StdModel: "claude-sonnet-5-5", Effort: "high"},
+	LightModel: "claude-haiku-5-5",
 	Args: func(inv Invocation) []string {
 		args := []string{"-p", inv.Prompt, "--append-system-prompt", inv.System}
 		if inv.ReadOnly {

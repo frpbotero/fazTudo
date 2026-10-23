@@ -43,6 +43,37 @@ func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storySt
 	return true
 }
 
+// checkFixes runs the project checks after a reviewer's fix round, before the
+// reviewer is called again: a fix that breaks the build goes straight back to
+// the implementers without spending a review. It returns the failing
+// evaluation, or nil when the checks pass (or there is nothing new to check);
+// false means ctx was canceled.
+func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storyState, ref stepRef) (*evaluation, bool) {
+	if ss.dry || (!st.verifiedAt.IsZero() && len(o.changedFiles(ss, st.verifiedAt)) == 0) {
+		return nil, true
+	}
+	started := time.Now()
+	o.updateStep(ref, func(s *Step) { s.Status = StepRunning; s.StartedAt = &started })
+	a, ok := o.assess(ctx, ss, st, ss.repo, o.changedFiles(ss, st.started))
+	if !ok {
+		o.cancelStep(ref, time.Since(started))
+		return nil, false
+	}
+	if a.passed() {
+		st.verifiedAt = time.Now()
+		return nil, true
+	}
+	report := verifierReport(a.results, a.findings, a.traces)
+	o.updateStep(ref, func(s *Step) {
+		s.Status = StepDone
+		s.Checks = a.results
+		s.Findings = a.findings
+		s.Output = report
+		s.DurationMS = time.Since(started).Milliseconds()
+	})
+	return &evaluation{verdict: Verdict{Status: VerdictChangesRequested, Issues: a.issues}, parsed: true, report: report}, true
+}
+
 // verify runs the project commands, the static checks on files changed by
 // this story and the test traceability, turning every failure into an issue
 // for the implementer most likely responsible.

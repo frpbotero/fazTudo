@@ -60,6 +60,19 @@ func TestExecuteUsesTierModel(t *testing.T) {
 	}
 }
 
+func TestExecuteLightTierUsesLightModel(t *testing.T) {
+	real := &fakeRunner{}
+	r := newTestRouter(false, real, allInstalled)
+
+	resp, err := r.Execute(context.Background(), Request{Role: "detect", Tier: TierLight}, discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Model != "claude-haiku-5-5" || resp.Effort != "low" {
+		t.Errorf("got %s/%s, want haiku with low effort", resp.Model, resp.Effort)
+	}
+}
+
 func TestExecuteFailsOverOnQuota(t *testing.T) {
 	real := &fakeRunner{results: map[string][]result{
 		"claude": {{out: "Error: rate limit exceeded, try again in 10m", err: errors.New("exit status 1")}},

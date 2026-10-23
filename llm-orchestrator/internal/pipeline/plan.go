@@ -180,3 +180,35 @@ func normalize(ids []string) []string {
 	}
 	return out
 }
+
+// Assessment is the Passo 0 decision about what the repository already does.
+type Assessment struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// Passo 0 decisions.
+const (
+	DecisionReuse     = "reuse"     // already meets the acceptance criteria
+	DecisionExtend    = "extend"    // partly there: implement only the delta
+	DecisionRefactor  = "refactor"  // there, with an incompatible model
+	DecisionImplement = "implement" // not there, dependencies ready
+	DecisionBlock     = "block"     // missing dependency or open product decision
+)
+
+var decisions = []string{DecisionReuse, DecisionExtend, DecisionRefactor, DecisionImplement, DecisionBlock}
+
+// parseAssessment extracts the Passo 0 decision; anything unreadable means
+// implement, so a confused assessor never skips work silently.
+func parseAssessment(output string) Assessment {
+	a, ok := lastJSON(output, func(a Assessment) bool { return a.Decision != "" })
+	if !ok {
+		return Assessment{Decision: DecisionImplement}
+	}
+	a.Decision = strings.ToLower(strings.TrimSpace(a.Decision))
+	a.Reason = strings.TrimSpace(a.Reason)
+	if !slices.Contains(decisions, a.Decision) {
+		a.Decision = DecisionImplement
+	}
+	return a
+}

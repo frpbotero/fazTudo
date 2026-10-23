@@ -420,6 +420,7 @@ type storyState struct {
 	planText   string
 	reqs       []quality.Requirement
 	verifiedAt time.Time // when a verifier last approved the repository
+	blocked    string    // Passo 0 reason when the story cannot be developed yet
 }
 
 func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptions) {
@@ -456,6 +457,11 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 			return
 		}
 
+		if st.blocked != "" {
+			o.updateStory(si, func(r *StoryRun) { r.Status = StepSkipped; r.DurationMS = time.Since(started).Milliseconds() })
+			o.logf(LevelWarn, "%s bloqueada no Passo 0: %s", story.Title, st.blocked)
+			continue
+		}
 		o.updateStory(si, func(r *StoryRun) { r.Status = StepDone; r.DurationMS = time.Since(started).Milliseconds() })
 		if total > 1 {
 			o.logf(LevelSuccess, "%s entregue (%d de %d).", story.Title, si+1, total)
@@ -643,12 +649,21 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		o.logf(LevelSuccess, "%s concluída via %s em %s.", stage.Title, resp.Name, resp.Duration.Round(time.Millisecond))
 
 		switch {
+		case stage.Assessor:
+			if o.applyAssessment(st, ref, resp) {
+				return true
+			}
 		case stage.Specifier:
 			o.applySpec(st, resp)
 		case stage.Planner:
 			st.plan, st.planText = o.applyPlan(st.si, st.sc, resp), resp.Output
 		case stage.Gate:
 			recheck := func(ctx context.Context, ref stepRef, issues []Issue, fixes []Step, round int) (evaluation, bool) {
+				if ev, ok := o.checkFixes(ctx, ss, st, ref); !ok {
+					return evaluation{}, false
+				} else if ev != nil {
+					return *ev, true
+				}
 				resp, ok := o.runStage(ctx, ref, provider.Request{
 					Role:     stage.Role,
 					System:   stage.System,
@@ -668,6 +683,53 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		}
 	}
 	return true
+}
+
+// applyAssessment records the Passo 0 decision. It returns true when the
+// story ends here: already implemented (reuse) or blocked.
+func (o *Orchestrator) applyAssessment(st *storyState, ref stepRef, resp *provider.Response) bool {
+	a := parseAssessment(resp.Output)
+	reason := a.Reason
+	if reason == "" {
+		reason = "sem motivo informado"
+	}
+	switch a.Decision {
+	case DecisionReuse:
+		o.updateStep(ref, func(s *Step) { s.Note = "Já atendida: " + reason })
+		o.skipRemaining(st.si, "Já atendida pelo código existente (Passo 0)")
+		o.logf(LevelSuccess, "%s já está implementada; nada a desenvolver.", st.sc.Story.Title)
+		return true
+	case DecisionBlock:
+		o.updateStep(ref, func(s *Step) { s.Note = "Bloqueada: " + reason })
+		o.skipRemaining(st.si, "US bloqueada no Passo 0")
+		st.blocked = reason
+		return true
+	}
+	o.updateStep(ref, func(s *Step) { s.Note = "Decisão: " + decisionLabel(a.Decision) })
+	o.logf(LevelInfo, "Passo 0: %s.", decisionLabel(a.Decision))
+	return false
+}
+
+func decisionLabel(d string) string {
+	switch d {
+	case DecisionExtend:
+		return "estender (só o delta)"
+	case DecisionRefactor:
+		return "refatorar"
+	}
+	return "implementar"
+}
+
+// skipRemaining marks the story's pending steps as skipped.
+func (o *Orchestrator) skipRemaining(si int, note string) {
+	o.mu.Lock()
+	for j := range o.run.Stories[si].Steps {
+		if s := &o.run.Stories[si].Steps[j]; s.Status == StepPending {
+			s.Status, s.Note = StepSkipped, note
+		}
+	}
+	o.mu.Unlock()
+	o.notify()
 }
 
 // startBranch creates the story's branch from the current HEAD, so stories of

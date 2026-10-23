@@ -62,3 +62,25 @@ func TestParseWithoutStoryHeadings(t *testing.T) {
 		t.Errorf("blank document should have no stories: %+v", doc.Stories)
 	}
 }
+
+func TestParseLetterPrefixedIDsAcrossEpics(t *testing.T) {
+	md := "# Backlog de User Stories\n\n### Estrutura de cada US\n1. **História**\n\n" +
+		"## Épico A — Fundação\nIntro do épico.\n\n" +
+		"### US-A01 — Cadastrar tenant\n**Como** admin…\n\n" +
+		"### US-A02 — Autenticar\n**Como** usuário…\n\n" +
+		"## Épico B — Reservas\nIntro B.\n\n" +
+		"### US-B01 — Unidade\n**Como** gestor…\n"
+
+	doc := Parse(md)
+	if doc.Method != MethodHeadings || len(doc.Stories) != 3 {
+		t.Fatalf("stories = %d (%s), want 3: %+v", len(doc.Stories), doc.Method, doc.Stories)
+	}
+	for i, id := range []string{"US-A01", "US-A02", "US-B01"} {
+		if doc.Stories[i].ID != id {
+			t.Errorf("story %d id = %q, want %q", i, doc.Stories[i].ID, id)
+		}
+	}
+	if strings.Contains(doc.Stories[1].Content, "Épico B") {
+		t.Error("an epic heading must close the previous story")
+	}
+}

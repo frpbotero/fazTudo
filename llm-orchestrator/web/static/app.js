@@ -214,8 +214,10 @@ Critérios de aceitação:
     }
   }
 
-  async function parseDocument(content) {
-    return api('POST', '/api/stories/parse', { content });
+  // useModel lets a light model (Haiku) find the stories when no story
+  // heading matches; only for loaded files, the server caches its answer.
+  async function parseDocument(content, useModel = false) {
+    return api('POST', '/api/stories/parse', { content, use_model: useModel });
   }
 
   el.runForm.addEventListener('submit', async (e) => {
@@ -232,7 +234,7 @@ Critérios de aceitação:
     }
     let doc;
     try {
-      doc = await parseDocument(content);
+      doc = await parseDocument(content, Boolean(documentName));
     } catch (err) {
       toast(err.message, 'error');
       return;
@@ -267,11 +269,13 @@ Critérios de aceitação:
     }
     el.story.value = text;
     el.story.dispatchEvent(new Event('input'));
+    documentName = file.name;
+    toast(`Identificando User Stories em ${file.name}…`);
     try {
-      const doc = await parseDocument(text);
+      const doc = await parseDocument(text, true);
       const n = doc.stories?.length || 0;
-      documentName = file.name;
       showFileInfo(file.name, n);
+      if (doc.method === 'model') toast(`${n} User Stories identificadas pelo modelo.`, 'success');
       if (n > 1) openStoryDialog(doc);
       else if (n === 1) toast(`1 User Story carregada de ${file.name}.`, 'success');
       else toast('Nenhuma User Story encontrada no arquivo.', 'error');
@@ -288,7 +292,7 @@ Critérios de aceitação:
   el.fileInfo.addEventListener('click', async (e) => {
     if (!e.target.closest('[data-action="choose"]')) return;
     try {
-      openStoryDialog(await parseDocument(el.story.value));
+      openStoryDialog(await parseDocument(el.story.value, true));
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -802,13 +806,14 @@ Critérios de aceitação:
       </div>`;
   }
 
-  const isVerifier = (s) => /^(checks|final)(-verify-\d+)?$/.test(s.id);
+  const isVerifier = (s) => /^checks(-verify-\d+)?$/.test(s.id);
 
   function storyTabIcon(status) {
     switch (status) {
       case 'running': return '<span class="spinner" aria-hidden="true"></span>';
       case 'done': return icon('check');
       case 'failed': return icon('x');
+      case 'skipped': return icon('alert'); // blocked in Passo 0
       default: return '<span class="dot" aria-hidden="true"></span>';
     }
   }

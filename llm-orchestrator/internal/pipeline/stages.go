@@ -20,6 +20,9 @@ type Stage struct {
 	System string
 	Task   string
 
+	// Assessor marks the stage that checks what the repository already
+	// implements (Passo 0); its decision may close or block the story.
+	Assessor bool
 	// Specifier marks the stage that lists the required tests by ID.
 	Specifier bool
 	// Planner marks the stage whose output decides which agents run.
@@ -96,6 +99,13 @@ const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"security = auth, dados sensíveis, pagamento, entrada externa; e2e = fluxo de tela. " +
 	"Só interface: sem backend. Mudança simples: sem security nem e2e. Code review sempre roda."
 
+const assessInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
+	"```json\n{\"decision\": \"reuse\" | \"extend\" | \"refactor\" | \"implement\" | \"block\", \"reason\": \"evidência curta\"}\n```\n" +
+	"reuse = existe e atende todos os critérios de aceite (US encerrada sem implementar); " +
+	"extend = existe em parte (só o delta); refactor = existe com modelo incompatível; " +
+	"implement = não existe e dependências prontas; block = dependência ausente ou decisão de produto em aberto. " +
+	"reuse e block só com evidência no código (arquivo:linha)."
+
 const specInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"tests\": [{\"id\": \"UT-CART-01\", \"description\": \"o que verifica\", \"kind\": \"unit\" | \"integration\" | \"e2e\"}]}\n```\n" +
 	"Documento já tem IDs de teste: use os mesmos. Orquestrador confere cada ID nos arquivos de teste."
@@ -112,6 +122,7 @@ const engineeringRules = "\n\nRegras:\n" +
 	"- Não assuma biblioteca: confirme no manifesto (package.json, go.mod…) antes de usar.\n" +
 	"- Mudança mínima, solução simples.\n" +
 	"- Reutilize helpers e componentes existentes. Não reimplemente.\n" +
+	"- Passo 0 diz o que já existe: implemente só o que falta, não reescreva o que já atende.\n" +
 	"- Mudou símbolo exportado: atualize todas as referências.\n" +
 	"- Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.\n" +
 	"- Valide: rode testes, typecheck e lint da área alterada antes de terminar.\n" +
@@ -141,30 +152,34 @@ var DiscoveryStage = Stage{
 		"Será o contexto fixo de todos os agentes.",
 }
 
-// DefaultStages is the sequential context → EDD → architecture →
-// implementation → executable checks → review → E2E → final checks flow.
+// DefaultStages is the sequential Passo 0 → EDD → architecture →
+// implementation → executable checks → review → E2E flow. Fixes requested by
+// the reviewers re-run the project checks inside their own fix loop.
 var DefaultStages = []Stage{
 	{
 		ID:       "context",
-		Title:    "Contexto da US",
+		Title:    "Passo 0: o que já existe",
 		Role:     "Context Scout",
 		Tier:     provider.TierStandard,
+		Assessor: true,
 		ReadOnly: true,
-		System:   "Mapeia código existente antes de qualquer mudança. Só leitura.",
+		System:   "Verifica o que o repositório já implementa antes de qualquer mudança. Só leitura.",
 		Task: "Relatório curto:\n" +
-			"1. Até 15 arquivos relevantes: caminho + por que importa (uma linha).\n" +
-			"2. Funções, componentes, utilitários a reutilizar.\n" +
-			"3. Testes relacionados e onde ficam os novos.\n" +
-			"4. Convenções a seguir.\n" +
+			"1. Busque entidades, módulos, rotas, migrations e testes com o nome do domínio da US.\n" +
+			"2. Para cada critério de aceite: já atendido, parcial ou ausente, com arquivo:linha.\n" +
+			"3. Até 15 arquivos relevantes: caminho + por que importa (uma linha).\n" +
+			"4. Funções, componentes, utilitários a reutilizar; testes relacionados e onde ficam os novos.\n" +
+			"5. Dependências da US prontas? Decisão de produto em aberto?\n" +
 			"Não proponha implementação.",
 	},
 	{
-		ID:        "spec",
-		Title:     "Especificação EDD e contratos TDD",
-		Role:      "Staff Spec Engineer",
-		Tier:      provider.TierStandard,
-		System:    "Engenheiro de especificação (EDD + TDD). Só leitura.",
-		Task:      "US vira EDD: contratos, schemas, endpoints, estados, erros. Plano TDD: um ID por caso de teste. Sem código de implementação.",
+		ID:     "spec",
+		Title:  "Especificação EDD e contratos TDD",
+		Role:   "Staff Spec Engineer",
+		Tier:   provider.TierStandard,
+		System: "Engenheiro de especificação (EDD + TDD). Só leitura.",
+		Task: "US vira EDD só do que falta segundo o Passo 0: contratos, schemas, endpoints, estados, erros. " +
+			"Plano TDD: um ID por caso de teste. Sem código de implementação.",
 		Specifier: true,
 		ReadOnly:  true,
 	},
@@ -242,13 +257,6 @@ var DefaultStages = []Stage{
 		Gate:       true,
 		System:     "QA E2E com Playwright em navegador headless. Escreva testes E2E; não altere código da aplicação.\n\n" + browserRule,
 		Task:       "Suba a aplicação, escreva/rode os testes Playwright dos fluxos da US (ID do caso no nome) e verifique tela e rede.",
-	},
-	{
-		ID:       "final",
-		Title:    "Verificação final",
-		Role:     "Portão automático",
-		Verifier: true,
-		Task:     "Repete os comandos e checagens depois das correções pedidas pelos revisores.",
 	},
 }
 
@@ -357,6 +365,8 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 // stageInstructions appends the machine-readable output contract.
 func stageInstructions(stage Stage) string {
 	switch {
+	case stage.Assessor:
+		return assessInstructions
 	case stage.Specifier:
 		return specInstructions
 	case stage.Planner:

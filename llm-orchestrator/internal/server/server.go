@@ -4,13 +4,16 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -28,6 +31,7 @@ const (
 	defaultExhaustS  = 45
 	maxExhaustS      = 3600
 	sseKeepAlive     = 25 * time.Second
+	detectTimeout    = 3 * time.Minute
 	contentTypeJSON  = "application/json"
 	contentTypeEvent = "text/event-stream"
 )
@@ -63,6 +67,10 @@ type Server struct {
 	version string
 	desktop bool
 	handler http.Handler
+
+	detectMu  sync.Mutex
+	detectKey [sha256.Size]byte
+	detectDoc stories.Document
 }
 
 // Deps groups the components the server exposes.
@@ -184,6 +192,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleParseStories(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
+		// UseModel lets a light LLM find the stories when no story heading
+		// matches (sent for loaded files, not for a story typed by hand).
+		UseModel bool `json:"use_model"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -192,7 +203,48 @@ func (s *Server) handleParseStories(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("o documento excede %d caracteres", maxDocumentRunes))
 		return
 	}
-	writeJSON(w, http.StatusOK, stories.Parse(req.Content))
+	doc := stories.Parse(req.Content)
+	if doc.Method == stories.MethodWhole && req.UseModel && !s.router.DryRun() {
+		if found, err := s.detectStories(r.Context(), req.Content); err != nil {
+			s.log.Warn("detecção de User Stories pelo modelo falhou", "err", err)
+		} else {
+			doc = found
+		}
+	}
+	writeJSON(w, http.StatusOK, doc)
+}
+
+// detectStories asks a light model where each story starts. The last result
+// is cached because the UI parses the same document again before starting.
+func (s *Server) detectStories(ctx context.Context, md string) (stories.Document, error) {
+	key := sha256.Sum256([]byte(md))
+	s.detectMu.Lock()
+	defer s.detectMu.Unlock()
+	if s.detectKey == key {
+		return s.detectDoc, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, detectTimeout)
+	defer cancel()
+	resp, err := s.router.Execute(ctx, provider.Request{
+		Role:     "Identificação de User Stories",
+		System:   stories.DetectSystem,
+		Prompt:   stories.DetectPrompt(md),
+		WorkDir:  os.TempDir(),
+		Tier:     provider.TierLight,
+		ReadOnly: true,
+	}, func(level slog.Level, format string, args ...any) {
+		s.log.Log(ctx, level, fmt.Sprintf(format, args...))
+	})
+	if err != nil {
+		return stories.Document{}, err
+	}
+	doc, err := stories.FromModel(md, resp.Output)
+	if err != nil {
+		return stories.Document{}, err
+	}
+	s.detectKey, s.detectDoc = key, doc
+	return doc, nil
 }
 
 // startRequest accepts either explicit stories (as chosen by the user from a

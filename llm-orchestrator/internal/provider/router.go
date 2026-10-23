@@ -387,6 +387,12 @@ func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response
 			WorkDir:  req.WorkDir,
 			ReadOnly: req.ReadOnly,
 		}
+		if req.Tier == TierLight {
+			if p.cli.LightModel != "" {
+				inv.Model = p.cli.LightModel
+			}
+			inv.Effort = "low"
+		}
 		if handoff {
 			inv.Prompt += "\n\n[HAND-OFF] Uma tentativa anterior desta tarefa foi interrompida por limite de uso. " +
 				"Verifique o estado atual dos arquivos e continue de onde ele parou."

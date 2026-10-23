@@ -1,8 +1,8 @@
 # FazTudo — Orquestrador de agentes
 
 Servidor Go com dashboard web que conduz uma User Story por um pipeline de agentes LLM
-(contexto → especificação EDD/TDD → arquitetura → frontend → backend → verificação executável →
-segurança → code review → E2E → verificação final),
+(Passo 0 → especificação EDD/TDD → arquitetura → frontend → backend → verificação executável →
+segurança → code review → E2E),
 usando os CLIs **Claude Code** e **Codex** com failover automático quando um deles atinge o limite de uso.
 
 ## Repositório e discovery
@@ -18,8 +18,10 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
 
 ## Fluxo dos agentes
 
-1. **Discovery** (uma vez por sessão) → **Contexto da US** (mapeia arquivos, código a reutilizar e
-   testes relacionados) → **Especificação** → **Arquiteto**. Essas etapas, a segurança e o code review
+1. **Discovery** (uma vez por sessão) → **Passo 0** (verifica o que o repositório já implementa,
+   critério a critério, e decide: `reuse` encerra a US sem implementar; `block` pula a US apontando a
+   dependência ou decisão que falta; `extend`/`refactor`/`implement` seguem, implementando só o delta)
+   → **Especificação** → **Arquiteto**. Essas etapas, a segurança e o code review
    rodam **somente leitura** (`--permission-mode plan` / `--sandbox read-only`): planejadores e
    revisores não conseguem alterar arquivos, independentemente do prompt.
 2. O arquiteto devolve um plano em JSON com os agentes necessários entre `frontend`, `backend`,
@@ -41,7 +43,8 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
 Configurados por repositório em **Portões de qualidade** (card do repositório) e salvos com o resto
 da configuração.
 
-- **Verificação executável** — depois da implementação e de novo ao final (se algo mudou), o próprio
+- **Verificação executável** — depois da implementação (e após cada rodada de correção pedida por
+  segurança, review ou E2E, antes de chamar o revisor de novo; sem etapa extra), o próprio
   orquestrador roda os comandos do projeto (detectados em `package.json`, `go.mod`, `pyproject.toml`…
   ou definidos manualmente, com `CI=1` e tempo limite), checa a sintaxe dos JS alterados e dos
   `<script>` inline de HTML (`node --check`), `gofmt` e linhas longas/código minificado. Cada falha

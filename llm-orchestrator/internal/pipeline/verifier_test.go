@@ -22,7 +22,6 @@ var verifierStages = []Stage{
 	{ID: "spec", Title: "Spec", Role: "spec", Specifier: true},
 	{ID: "frontend", Title: "Front", Role: "fe", Implementer: true},
 	{ID: "checks", Title: "Checks", Role: "gate", Verifier: true},
-	{ID: "final", Title: "Final", Role: "gate", Verifier: true},
 }
 
 // newVerifierTest builds an orchestrator in real mode over a temp repository
@@ -92,7 +91,7 @@ func TestFailingCommandGoesBackToImplementer(t *testing.T) {
 	for i, s := range steps {
 		ids[i] = s.ID + ":" + string(s.Status)
 	}
-	want := "spec:done frontend:done checks:done fix-checks-1-frontend:done checks-verify-2:done final:skipped"
+	want := "spec:done frontend:done checks:done fix-checks-1-frontend:done checks-verify-2:done"
 	if got := strings.Join(ids, " "); got != want {
 		t.Fatalf("steps =\n%s\nwant\n%s", got, want)
 	}
@@ -121,8 +120,8 @@ func TestPersistentFailureFailsStoryAfterRounds(t *testing.T) {
 	if got := exec.count("fe"); got != 1+maxVerifierRounds {
 		t.Errorf("frontend calls = %d, want %d", got, 1+maxVerifierRounds)
 	}
-	if st := run.Stories[0].Steps; st[len(st)-1].Status != StepCanceled {
-		t.Errorf("final verification must be canceled after the failure: %+v", st[len(st)-1])
+	if st := run.Stories[0].Steps; st[len(st)-1].Status != StepFailed {
+		t.Errorf("last verification must fail: %+v", st[len(st)-1])
 	}
 }
 
