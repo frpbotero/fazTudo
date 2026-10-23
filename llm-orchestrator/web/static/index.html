@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>FazTudo · Orquestrador de agentes</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M10 22V10h12M10 16h8' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231b6c80'/%3E%3Cpath d='M10 22V10h12M10 16h8' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preload" href="fonts/plex-sans-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="app.css">
   <script src="app.js" defer></script>
 </head>
@@ -31,46 +32,173 @@
       <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
       <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1Z"/><path d="m9 12 2 2 4-4"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
       <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-11 5.5"/></symbol>
     </defs>
   </svg>
 
-  <header class="topbar">
-    <div class="brand">
-      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-        <rect width="32" height="32" rx="8"/>
-        <path d="M10 22V10h12M10 16h8"/>
-      </svg>
-      <div class="brand-text">
+  <div class="shell">
+    <aside class="sidebar" id="sidebar" aria-label="Navegação">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8"/>
+          <path d="M10 22V10h12M10 16h8"/>
+        </svg>
         <span class="brand-name">FazTudo</span>
-        <span class="brand-sub">Orquestrador de agentes</span>
+        <span class="brand-version" id="version">—</span>
       </div>
-      <span class="chip" id="version">—</span>
-    </div>
 
-    <div class="topbar-actions">
-      <span class="conn" id="conn" data-state="connecting">
-        <span class="conn-dot"></span><span id="connText">Conectando…</span>
-      </span>
-      <button class="btn btn-icon" id="themeBtn" type="button" aria-label="Alternar tema" title="Alternar tema">
-        <svg class="icon icon-sun"><use href="#i-sun"/></svg>
-        <svg class="icon icon-moon"><use href="#i-moon"/></svg>
-      </button>
-      <button class="btn" id="configBtn" type="button">
-        <svg class="icon"><use href="#i-sliders"/></svg><span>Modelos</span>
-      </button>
-    </div>
-  </header>
+      <a class="scope" href="#repositorio" data-view-link="repositorio">
+        <span class="scope-label">Repositório</span>
+        <span class="scope-name" id="scopeName">Não configurado</span>
+        <span class="scope-meta"><span class="dot" id="discoveryDot" data-tone="neutral"></span><span id="discoveryBadge">—</span></span>
+      </a>
 
-  <main class="layout">
-    <div class="col-side">
-      <section class="card" aria-labelledby="repoTitle">
-        <div class="card-head">
+      <nav class="nav">
+        <a href="#execucao" data-view-link="execucao"><svg class="icon"><use href="#i-play"/></svg><span>Execução</span><span class="nav-live" id="navLive" hidden></span></a>
+        <a href="#nova" data-view-link="nova"><svg class="icon"><use href="#i-file"/></svg><span>Nova execução</span></a>
+        <a href="#repositorio" data-view-link="repositorio"><svg class="icon"><use href="#i-folder"/></svg><span>Repositório</span></a>
+        <a href="#provedores" data-view-link="provedores"><svg class="icon"><use href="#i-sliders"/></svg><span>Provedores</span></a>
+        <a href="#logs" data-view-link="logs"><svg class="icon"><use href="#i-clock"/></svg><span>Logs</span><span class="nav-count" id="navIssues" hidden></span></a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span class="conn" id="conn" data-state="connecting"><span class="conn-dot"></span><span id="connText">Conectando…</span></span>
+        <button class="btn btn-icon btn-ghost" id="themeBtn" type="button" aria-label="Alternar tema" title="Alternar tema">
+          <svg class="icon icon-sun"><use href="#i-sun"/></svg>
+          <svg class="icon icon-moon"><use href="#i-moon"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <header class="topbar">
+      <button class="btn btn-icon btn-ghost menu-btn" id="menuBtn" type="button" aria-label="Menu" aria-controls="sidebar" aria-expanded="false">
+        <svg class="icon"><use href="#i-menu"/></svg>
+      </button>
+      <nav class="crumbs" aria-label="Local">
+        <span id="crumbRepo">FazTudo</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-chevron"/></svg>
+        <span id="crumbView" aria-current="page">Execução</span>
+      </nav>
+      <div class="topbar-run" id="topRun" hidden>
+        <span class="pill" id="runBadge" data-tone="neutral">Ocioso</span>
+        <span class="num" id="topElapsed"></span>
+      </div>
+    </header>
+
+    <main class="sheet">
+      <!-- Execução -->
+      <section class="view" data-view="execucao" aria-labelledby="runTitle">
+        <div class="title-row">
           <div>
-            <h2 id="repoTitle">Repositório</h2>
-            <p class="muted">Diretório local onde os agentes vão desenvolver.</p>
+            <h1 id="runTitle">Execução</h1>
+            <p class="subline" id="runMeta">Nenhuma execução nesta sessão.</p>
           </div>
-          <span class="badge" id="discoveryBadge" data-tone="neutral">Não configurado</span>
+          <div class="title-actions">
+            <button class="btn btn-danger" id="stopBtn" type="button" disabled hidden>
+              <svg class="icon"><use href="#i-stop"/></svg><span>Parar</span>
+            </button>
+            <a class="btn btn-primary" id="newRunLink" href="#nova">Nova execução</a>
+          </div>
+        </div>
+
+        <dl class="stats num" id="runStats" hidden></dl>
+        <div class="progress" role="progressbar" aria-labelledby="runTitle" aria-valuemin="0" id="progress" hidden>
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+
+        <div class="wave-tabs" id="waveTabs" role="tablist" aria-label="Ondas de desenvolvimento" hidden></div>
+        <div class="wave-head" id="waveHead" hidden></div>
+        <div class="lanes" id="lanes" hidden></div>
+
+        <section class="story" id="storyPanel" aria-labelledby="storyTitle" hidden>
+          <div class="story-head" id="storyHead"></div>
+          <ol class="steps" id="steps"></ol>
+        </section>
+
+        <div class="empty" id="runEmpty">
+          <p>Nenhuma execução nesta sessão.</p>
+          <a class="btn" href="#nova">Abrir o formulário</a>
+        </div>
+      </section>
+
+      <!-- Nova execução -->
+      <section class="view" data-view="nova" aria-labelledby="newRunTitle" hidden>
+        <div class="title-row">
+          <div>
+            <h1 id="newRunTitle">Nova execução</h1>
+            <p class="subline">Cole ou abra o documento com as User Stories. O fluxo planeja, implementa e valida antes de entregar.</p>
+          </div>
+        </div>
+        <div class="split">
+          <form id="runForm" class="panel stack" novalidate>
+            <div class="field">
+              <div class="field-row">
+                <label for="story">User Stories</label>
+                <div class="examples">
+                  <button type="button" class="btn btn-sm" id="openMdBtn">
+                    <svg class="icon"><use href="#i-file"/></svg><span>Abrir .md</span>
+                  </button>
+                  <input type="file" id="mdFile" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
+                </div>
+              </div>
+              <textarea id="story" rows="14" spellcheck="false" placeholder="# US-123: Título&#10;Como …, quero …, para …&#10;&#10;Critérios de aceitação:&#10;- …"></textarea>
+              <div class="field-foot">
+                <span class="file-info" id="fileInfo" hidden></span>
+                <span class="examples-inline">Exemplos:
+                  <button type="button" class="link" data-template="checkout">Checkout</button>
+                  <button type="button" class="link" data-template="auth">RBAC + MFA</button>
+                </span>
+                <span class="field-hint"><span id="storyCount">0</span> / 200.000</span>
+              </div>
+            </div>
+
+            <div class="form-grid">
+              <div class="field">
+                <label for="source">Origem</label>
+                <select id="source">
+                  <option value="markdown">Markdown</option>
+                  <option value="jira" disabled>Jira (em breve)</option>
+                  <option value="trello" disabled>Trello (em breve)</option>
+                </select>
+              </div>
+              <div class="field">
+                <span class="field-label" id="modeLabel">Modo</span>
+                <div class="segmented" role="radiogroup" aria-labelledby="modeLabel">
+                  <label><input type="radio" name="mode" value="dry" checked><span>Simulação</span></label>
+                  <label><input type="radio" name="mode" value="real"><span>Execução real</span></label>
+                </div>
+              </div>
+            </div>
+            <p class="note" id="modeNote">Fluxo completo sem chamar os CLIs e sem consumir tokens.</p>
+
+            <div class="actions">
+              <button class="btn btn-primary" id="startBtn" type="submit">
+                <svg class="icon"><use href="#i-play"/></svg><span id="startLabel">Iniciar execução</span>
+              </button>
+              <span class="kbd-hint muted"><kbd>⌘</kbd> <kbd>Enter</kbd></span>
+            </div>
+          </form>
+
+          <aside class="panel aside" aria-labelledby="routeTitle">
+            <h2 id="routeTitle">Quem executa</h2>
+            <fieldset class="field">
+              <legend class="sr-only">Provedor padrão</legend>
+              <div class="segmented segmented-block" role="radiogroup" id="providerPicker"></div>
+            </fieldset>
+            <div class="model-summary" id="modelSummary"></div>
+            <label class="check"><input type="checkbox" id="failoverToggle"> Failover para o outro provedor ao atingir o limite de uso</label>
+          </aside>
+        </div>
+      </section>
+
+      <!-- Repositório -->
+      <section class="view" data-view="repositorio" aria-labelledby="repoTitle" hidden>
+        <div class="title-row">
+          <div>
+            <h1 id="repoTitle">Repositório</h1>
+            <p class="subline">Diretório local onde os agentes desenvolvem. O discovery é feito uma vez por sessão.</p>
+          </div>
         </div>
         <form id="repoForm" class="repo-form" novalidate>
           <label for="repoPath" class="sr-only">Caminho do repositório</label>
@@ -80,132 +208,58 @@
           </div>
           <button class="btn" type="submit" id="repoSaveBtn">Salvar</button>
         </form>
-        <div id="discovery" class="discovery"></div>
-        <div id="quality" class="quality" hidden></div>
-      </section>
-
-      <section class="card" aria-labelledby="newRunTitle">
-        <div class="card-head">
-          <div>
-            <h2 id="newRunTitle">Nova execução</h2>
-            <p class="muted">Descreva a entrega. O fluxo planeja, implementa e valida antes de concluir.</p>
-          </div>
+        <div class="column">
+          <section class="panel" aria-labelledby="stacksTitle">
+            <h2 id="stacksTitle">Discovery</h2>
+            <div id="discovery" class="discovery"></div>
+          </section>
+          <section class="panel" aria-labelledby="gatesTitle">
+            <div class="panel-head">
+              <h2 id="gatesTitle">Portões de qualidade</h2>
+              <button class="btn btn-sm" type="button" data-action="quality" id="qualityEditBtn">Editar</button>
+            </div>
+            <div id="quality" class="quality"></div>
+          </section>
         </div>
-
-        <form id="runForm" class="stack" novalidate>
-          <div class="field">
-            <label for="source">Origem</label>
-            <select id="source">
-              <option value="markdown">Markdown</option>
-              <option value="jira" disabled>Jira (em breve)</option>
-              <option value="trello" disabled>Trello (em breve)</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <div class="field-row">
-              <label for="story">User Story</label>
-              <div class="examples">
-                <button type="button" class="btn btn-sm" id="openMdBtn">
-                  <svg class="icon"><use href="#i-file"/></svg><span>Abrir .md</span>
-                </button>
-                <input type="file" id="mdFile" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden>
-                <span class="muted">Exemplos:</span>
-                <button type="button" class="link" data-template="checkout">Checkout</button>
-                <button type="button" class="link" data-template="auth">RBAC + MFA</button>
-              </div>
-            </div>
-            <textarea id="story" rows="10" spellcheck="false" placeholder="# US-123: Título&#10;Como …, quero …, para …&#10;&#10;Critérios de aceitação:&#10;- …"></textarea>
-            <div class="field-foot">
-              <span class="file-info" id="fileInfo" hidden></span>
-              <span class="field-hint"><span id="storyCount">0</span> / 200.000</span>
-            </div>
-          </div>
-
-          <fieldset class="field">
-            <legend>Modo</legend>
-            <div class="segmented" role="radiogroup">
-              <label><input type="radio" name="mode" value="dry" checked><span>Simulação</span></label>
-              <label><input type="radio" name="mode" value="real"><span>Execução real</span></label>
-            </div>
-            <p class="note" id="modeNote">Fluxo completo sem chamar os CLIs e sem consumir tokens.</p>
-          </fieldset>
-
-          <fieldset class="field">
-            <legend>Provedor padrão</legend>
-            <div class="segmented segmented-block" role="radiogroup" id="providerPicker"></div>
-            <div class="model-summary" id="modelSummary"></div>
-            <label class="check"><input type="checkbox" id="failoverToggle"> Failover automático para o outro provedor ao atingir limite de uso</label>
-          </fieldset>
-
-          <div class="actions">
-            <button class="btn btn-primary btn-block" id="startBtn" type="submit">
-              <svg class="icon"><use href="#i-play"/></svg><span id="startLabel">Iniciar execução</span>
-            </button>
-            <button class="btn btn-danger" id="stopBtn" type="button" disabled>
-              <svg class="icon"><use href="#i-stop"/></svg><span>Parar</span>
-            </button>
-          </div>
-          <p class="kbd-hint muted"><kbd>⌘</kbd> <kbd>Enter</kbd> inicia a execução</p>
-        </form>
       </section>
 
-      <section class="card" aria-labelledby="providersTitle">
-        <div class="card-head">
+      <!-- Provedores -->
+      <section class="view" data-view="provedores" aria-labelledby="providersTitle" hidden>
+        <div class="title-row">
           <div>
-            <h2 id="providersTitle">Provedores</h2>
-            <p class="muted">Failover automático com hand-off quando um limite de uso é atingido.</p>
+            <h1 id="providersTitle">Provedores</h1>
+            <p class="subline">Quando um provedor atinge o limite de uso, o trabalho passa para o outro com hand-off.</p>
+          </div>
+          <div class="title-actions">
+            <button class="btn btn-ghost" id="restoreAllBtn" type="button">
+              <svg class="icon"><use href="#i-rotate"/></svg><span>Restaurar cotas</span>
+            </button>
+            <button class="btn" id="configBtn" type="button">Editar modelos</button>
           </div>
         </div>
         <div id="providers" class="providers"></div>
-        <div class="card-foot">
-          <button class="btn btn-ghost btn-sm" id="restoreAllBtn" type="button">
-            <svg class="icon"><use href="#i-rotate"/></svg><span>Restaurar todas as cotas</span>
-          </button>
-        </div>
       </section>
-    </div>
 
-    <div class="col-main">
-      <section class="card" aria-labelledby="pipelineTitle">
-        <div class="card-head">
+      <!-- Logs -->
+      <section class="view view-fill" data-view="logs" aria-labelledby="logsTitle" hidden>
+        <div class="title-row">
           <div>
-            <h2 id="pipelineTitle">Pipeline</h2>
-            <p class="muted" id="runMeta">Nenhuma execução iniciada.</p>
+            <h1 id="logsTitle">Logs</h1>
+            <p class="subline">Eventos técnicos da execução: chamadas, commits, avisos e erros.</p>
           </div>
-          <span class="badge" id="runBadge" data-tone="neutral">Ocioso</span>
-        </div>
-        <div class="story-bar" id="storyBar" role="tablist" aria-label="User Stories da execução" hidden></div>
-        <div class="progress" role="progressbar" aria-labelledby="pipelineTitle" aria-valuemin="0" id="progress">
-          <div class="progress-bar" id="progressBar"></div>
-        </div>
-        <ol class="steps" id="steps"></ol>
-      </section>
-
-      <details class="card events-card" aria-labelledby="eventsTitle">
-        <summary class="events-summary">
-          <span>
-            <h2 id="eventsTitle">Detalhes da execução</h2>
-            <span class="muted">Logs técnicos, avisos e erros</span>
-          </span>
-          <span class="events-summary-action"><span class="when-closed">Mostrar</span><span class="when-open">Ocultar</span></span>
-        </summary>
-        <div class="events-content">
-          <div class="card-head events-tools">
-            <div class="toolbar">
-              <div class="segmented segmented-sm" role="radiogroup" aria-label="Filtrar eventos">
-                <label><input type="radio" name="logFilter" value="all" checked><span>Todos</span></label>
-                <label><input type="radio" name="logFilter" value="issues"><span>Avisos e erros</span></label>
-              </div>
-              <label class="check"><input type="checkbox" id="autoScroll" checked> Rolagem automática</label>
-              <button class="btn btn-ghost btn-sm" id="clearLogsBtn" type="button">Limpar</button>
+          <div class="toolbar">
+            <div class="segmented segmented-sm" role="radiogroup" aria-label="Filtrar eventos">
+              <label><input type="radio" name="logFilter" value="all" checked><span>Todos</span></label>
+              <label><input type="radio" name="logFilter" value="issues"><span>Avisos e erros</span></label>
             </div>
+            <label class="check"><input type="checkbox" id="autoScroll" checked> Rolagem automática</label>
+            <button class="btn btn-ghost btn-sm" id="clearLogsBtn" type="button">Limpar</button>
           </div>
-          <div class="log" id="log" role="log" aria-live="polite"></div>
         </div>
-      </details>
-    </div>
-  </main>
+        <div class="log num" id="log" role="log" aria-live="polite"></div>
+      </section>
+    </main>
+  </div>
 
   <dialog id="configDialog" class="dialog" aria-labelledby="configTitle">
     <form id="configForm" class="dialog-body">

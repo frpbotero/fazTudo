@@ -23,16 +23,6 @@ Critérios de aceitação:
 - Auditoria OWASP e suíte de testes de integração.`,
   };
 
-  const STEP_STATUS = {
-    pending: { label: 'Pendente', tone: 'neutral' },
-    running: { label: 'Executando', tone: 'accent' },
-    done: { label: 'Concluída', tone: 'success' },
-    skipped: { label: 'Reutilizado', tone: 'neutral' },
-    omitted: { label: 'Não necessária', tone: 'neutral' },
-    failed: { label: 'Falhou', tone: 'danger' },
-    warning: { label: 'Com pendências', tone: 'warn' },
-    canceled: { label: 'Cancelada', tone: 'neutral' },
-  };
   const RUN_RESULT = {
     succeeded: { label: 'Concluído', tone: 'success' },
     failed: { label: 'Falhou', tone: 'danger' },
@@ -57,7 +47,12 @@ Critérios de aceitação:
     storyDialog: $('storyDialog'), storyForm: $('storyForm'), storyDialogTitle: $('storyDialogTitle'),
     storyModeNote: $('storyModeNote'), storyList: $('storyList'), storySelCount: $('storySelCount'),
     storyBulk: $('storyBulk'), storyPreamble: $('storyPreamble'), storyError: $('storyError'),
-    storyStartBtn: $('storyStartBtn'), storyStartLabel: $('storyStartLabel'), storyBar: $('storyBar'),
+    storyStartBtn: $('storyStartBtn'), storyStartLabel: $('storyStartLabel'),
+    sidebar: $('sidebar'), menuBtn: $('menuBtn'), scopeName: $('scopeName'), discoveryDot: $('discoveryDot'),
+    navLive: $('navLive'), navIssues: $('navIssues'), crumbRepo: $('crumbRepo'), crumbView: $('crumbView'),
+    topRun: $('topRun'), topElapsed: $('topElapsed'), runStats: $('runStats'), runEmpty: $('runEmpty'),
+    waveTabs: $('waveTabs'), waveHead: $('waveHead'), lanes: $('lanes'), storyPanel: $('storyPanel'),
+    storyHead: $('storyHead'), newRunLink: $('newRunLink'), qualityEditBtn: $('qualityEditBtn'),
     providerPicker: $('providerPicker'), modelSummary: $('modelSummary'), failoverToggle: $('failoverToggle'),
     cfgDefault: $('cfgDefault'), cfgFailover: $('cfgFailover'), persistInfo: $('persistInfo'),
     providers: $('providers'), restoreAllBtn: $('restoreAllBtn'),
@@ -93,7 +88,7 @@ Critérios de aceitação:
   // ---------- utils ----------
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
-  const badge = ({ label, tone }) => `<span class="badge" data-tone="${tone}">${esc(label)}</span>`;
+  const pill = ({ label, tone }) => `<span class="pill" data-tone="${tone}">${esc(label)}</span>`;
   const fmtTime = (iso) => new Date(iso).toLocaleTimeString('pt-BR', { hour12: false });
   const fmtDuration = (ms) => {
     if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
@@ -211,7 +206,10 @@ Critérios de aceitação:
         stories, preamble, source: el.source.value, dry_run: selectedMode() === 'dry', document_name: documentName,
       });
       openDetails.clear();
+      userClosed.clear();
       viewStory = null;
+      viewWave = null;
+      location.hash = '#execucao';
       return true;
     } catch (err) {
       toast(err.message, 'error');
@@ -361,7 +359,7 @@ Critérios de aceitação:
       opt.classList.toggle('is-selected', opt.querySelector('input').checked);
     });
     el.storyModeNote.textContent = seq
-      ? 'As US selecionadas serão desenvolvidas em sequência, na ordem do documento; cada uma parte do código entregue pelas anteriores. Uma falha interrompe a sequência.'
+      ? 'Uma análise de dependências agrupa as US em ondas: as independentes rodam em paralelo, cada uma na sua branch; as demais esperam as que precisam. Uma falha interrompe a execução.'
       : 'Somente a US escolhida será desenvolvida.';
     el.storySelCount.textContent = seq ? `${n} de ${pendingDoc.stories.length} selecionadas` : 'Escolha uma US';
     el.storyStartLabel.textContent = seq ? `Iniciar ${n} US` : 'Iniciar US';
@@ -437,25 +435,34 @@ Critérios de aceitação:
     }
   });
 
+  function setDiscovery(tone, text) {
+    el.discoveryDot.dataset.tone = tone;
+    el.discoveryBadge.textContent = text;
+  }
+
+  function repoName(path) {
+    return path ? path.split('/').filter(Boolean).pop() || path : '';
+  }
+
   function renderWorkspace(ws) {
     if (!repoDirty && document.activeElement !== el.repoPath) el.repoPath.value = ws.path || '';
+    el.scopeName.textContent = repoName(ws.path) || 'Não configurado';
+    el.scopeName.title = ws.path || '';
+    el.crumbRepo.textContent = repoName(ws.path) || 'FazTudo';
 
     if (!ws.path) {
-      el.discoveryBadge.dataset.tone = 'neutral';
-      el.discoveryBadge.textContent = 'Não configurado';
+      setDiscovery('neutral', 'Configure o caminho');
       el.discovery.innerHTML = '<p class="note">Configure o repositório para habilitar as execuções.</p>';
       return;
     }
     const d = ws.discovery;
     if (!d) {
-      el.discoveryBadge.dataset.tone = 'warn';
-      el.discoveryBadge.textContent = 'Discovery pendente';
+      setDiscovery('warn', 'Discovery pendente');
       el.discovery.innerHTML = '<p class="note">O discovery das stacks será feito na primeira execução desta sessão e reutilizado nas seguintes.</p>';
       return;
     }
 
-    el.discoveryBadge.dataset.tone = 'success';
-    el.discoveryBadge.textContent = 'Discovery feito';
+    setDiscovery('success', `Discovery às ${fmtTime(d.created_at).slice(0, 5)}`);
     const groups = new Map();
     for (const s of d.stacks || []) {
       if (!groups.has(s.dir)) groups.set(s.dir, []);
@@ -465,7 +472,7 @@ Critérios de aceitação:
       ? [...groups].map(([dir, items]) => `
           <div class="stack-group">
             <span class="stack-dir" title="${esc(dir)}">${esc(dir === '.' ? '(raiz)' : `${dir}/`)}</span>
-            <span class="stack-chips">${items.map((s) => `<span class="stack-chip" title="${esc(s.evidence)}">${esc(s.name)}</span>`).join('')}</span>
+            <span class="chips">${items.map((s) => `<span class="chip" title="${esc(s.evidence)}">${esc(s.name)}</span>`).join('')}</span>
           </div>`).join('')
       : '<p class="note">Nenhum manifesto reconhecido; veja o relatório na etapa de discovery.</p>';
     const via = [d.provider, d.model].filter(Boolean).join(' · ');
@@ -488,22 +495,21 @@ Critérios de aceitação:
   }
 
   function renderQuality(ws) {
-    el.quality.hidden = !ws.path;
-    if (!ws.path) return;
+    el.qualityEditBtn.disabled = !ws.path;
+    if (!ws.path) {
+      el.quality.innerHTML = '<p class="note">Configure o repositório para editar os portões.</p>';
+      return;
+    }
     const p = ws.policy || {};
     const checks = p.auto_checks ? ws.suggested || [] : p.checks || [];
     const origin = p.auto_checks ? 'detectados' : 'personalizados';
     const chips = checks.length
-      ? checks.map((c) => `<span class="stack-chip" title="${esc(c.run)}">${esc(c.name)}</span>`).join('')
+      ? checks.map((c) => `<span class="chip" title="${esc(c.run)}">${esc(c.name)}</span>`).join('')
       : `<span class="note" data-tone="warn">Nenhum comando ${p.auto_checks ? 'detectado' : 'configurado'}: apenas checagens estáticas.</span>`;
     const protectedList = (p.protected || []).map((x) => `<code>${esc(x)}</code>`).join(' ');
     el.quality.innerHTML = `
-      <div class="discovery-meta">
-        <span class="quality-title">${icon('shield')}Portões de qualidade</span>
-        <button class="btn btn-ghost btn-sm" type="button" data-action="quality">Editar</button>
-      </div>
-      <dl class="kv quality-kv">
-        <dt>Comandos</dt><dd class="wrap"><span class="stack-chips">${chips}</span><span class="note">${esc(origin)}</span></dd>
+      <dl class="kv">
+        <dt>Comandos</dt><dd class="wrap">${chips}<span class="note">${esc(origin)}</span></dd>
         <dt>Protegidos</dt><dd class="wrap">${protectedList || '<span class="note">nenhum</span>'}</dd>
         <dt>Linhas</dt><dd>até ${esc(p.max_line_length)} caracteres</dd>
         <dt>Git</dt><dd>${p.git ? 'branch por US, commit por etapa' : 'desativado'}</dd>
@@ -537,9 +543,7 @@ Critérios de aceitação:
     el.qualityDialog.showModal();
   }
 
-  el.quality.addEventListener('click', (e) => {
-    if (e.target.closest('[data-action="quality"]')) openQuality();
-  });
+  el.qualityEditBtn.addEventListener('click', openQuality);
   el.qAuto.addEventListener('change', syncQualityForm);
   el.qualityDialog.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => el.qualityDialog.close()));
   el.qualityDialog.addEventListener('click', (e) => { if (e.target === el.qualityDialog) el.qualityDialog.close(); });
@@ -632,7 +636,7 @@ Critérios de aceitação:
         <div class="provider" data-status="${esc(p.status)}">
           <div class="provider-head">
             <div class="provider-name"><span>${esc(p.name)}</span><code>${esc(p.binary)}</code>${p.default ? '<span class="chip-default">Padrão</span>' : ''}</div>
-            ${badge(status)}
+            ${pill(status)}
           </div>
           <dl class="kv">
             <dt>Heavy</dt><dd title="${esc(p.heavy_model)}">${esc(p.heavy_model)}</dd>
@@ -645,25 +649,32 @@ Critérios de aceitação:
   }
 
   // ---------- pipeline ----------
+  // Open <details> survive the re-render every pipeline event triggers. A
+  // step the user never touched opens by default only when it failed.
+  const userClosed = new Set();
+  let viewWave = null; // wave tab pinned by the user (0 = preparation); null follows the run
+  let lastShownWave = null;
+
   function panelKey(node, selector) {
-    const step = node.closest('.step');
-    if (!step) return '';
-    return `${step.dataset.id}|${selector}|${[...step.querySelectorAll(selector)].indexOf(node)}`;
+    const owner = node.closest('[data-key]');
+    if (!owner) return '';
+    return `${owner.dataset.key}|${selector}|${[...owner.querySelectorAll(selector)].indexOf(node)}`;
   }
-  el.steps.addEventListener('toggle', (e) => {
+  el.storyPanel.addEventListener('toggle', (e) => {
     if (e.target.tagName !== 'DETAILS') return;
     const key = panelKey(e.target, 'details');
     if (!key) return;
-    if (e.target.open) openDetails.add(key); else openDetails.delete(key);
+    if (e.target.open) { openDetails.add(key); userClosed.delete(key); } else { openDetails.delete(key); userClosed.add(key); }
   }, true);
-  el.steps.addEventListener('scroll', (e) => {
+  el.storyPanel.addEventListener('scroll', (e) => {
     if (e.target.tagName !== 'PRE') return;
     const key = panelKey(e.target, 'pre');
     if (key) scrolled.set(key, e.target.scrollTop);
   }, true);
-  el.steps.addEventListener('click', async (e) => {
+  el.storyPanel.addEventListener('click', async (e) => {
     const retry = e.target.closest('button[data-retry-step]');
     if (retry) {
+      e.preventDefault();
       retry.disabled = true;
       try {
         await api('POST', '/api/pipeline/retry', {
@@ -671,7 +682,9 @@ Critérios de aceitação:
           step: retry.dataset.retryStep,
         });
         openDetails.clear();
+        userClosed.clear();
         viewStory = null;
+        viewWave = null;
         toast('Etapa reiniciada. As validações seguintes serão executadas novamente.', 'success');
       } catch (err) {
         retry.disabled = false;
@@ -681,6 +694,7 @@ Critérios de aceitação:
     }
     const diff = e.target.closest('button[data-diff]');
     if (diff) {
+      e.preventDefault();
       openDiff(diff.dataset.diff, diff.dataset.title);
       return;
     }
@@ -694,15 +708,44 @@ Critérios de aceitação:
       toast('Não foi possível acessar a área de transferência.', 'error');
     }
   });
-  el.storyBar.addEventListener('click', (e) => {
-    const tab = e.target.closest('[data-story]');
+  el.waveTabs.addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-wave]');
     if (!tab) return;
-    const i = Number(tab.dataset.story);
-    viewStory = i === Math.max(snapshot.run.current, 0) ? null : i;
+    const wave = Number(tab.dataset.wave);
+    viewWave = wave === currentWave(snapshot.run, runWaves(snapshot.run)) ? null : wave;
+    viewStory = null;
+    renderRun(snapshot.run);
+  });
+  el.lanes.addEventListener('click', (e) => {
+    const lane = e.target.closest('[data-story]');
+    if (!lane) return;
+    viewStory = Number(lane.dataset.story);
     renderRun(snapshot.run);
   });
 
-  function stepMarker(s, index) {
+  const STORY_STATUS = {
+    pending: { label: 'Aguardando', tone: 'neutral' },
+    running: { label: 'Em execução', tone: 'accent' },
+    done: { label: 'Entregue', tone: 'success' },
+    warning: { label: 'Com pendências', tone: 'warn' },
+    skipped: { label: 'Bloqueada', tone: 'warn' },
+    failed: { label: 'Falhou', tone: 'danger' },
+    canceled: { label: 'Cancelada', tone: 'neutral' },
+  };
+  const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', stream: 'Frente', merge: 'Integração' };
+  const PLAN_SOURCE = {
+    architect: '',
+    heuristic: 'Simulação: escolha por palavras-chave da US.',
+    fallback: 'O arquiteto não retornou um plano; todos os agentes foram executados.',
+  };
+  const finished = (s) => ['done', 'skipped', 'omitted', 'warning'].includes(s.status);
+  const isHidden = (s) => s.status === 'canceled' || s.status === 'omitted';
+  const isVerifier = (s) => /^checks(-verify-\d+)?$/.test(s.id);
+  const storyLabel = (st, i) => st.id || `#${i + 1}`;
+  // The title without the ID it usually starts with ("US-B01 — Modelar…").
+  const storyName = (st) => (st.id ? st.title.replace(st.id, '').replace(/^[\s—–:.-]+/, '') : st.title) || st.title;
+
+  function stepMarker(s) {
     switch (s.status) {
       case 'running': return '<span class="spinner" aria-hidden="true"></span>';
       case 'done':
@@ -711,40 +754,142 @@ Critérios de aceitação:
       case 'warning': return icon('alert');
       case 'canceled': return icon('ban');
       case 'omitted': return icon('minus');
-      default: return s.kind === 'fix' ? icon('wrench') : String(index + 1);
+      default: return s.kind === 'fix' ? icon('wrench') : '<span class="dot" aria-hidden="true"></span>';
     }
   }
 
-  const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', stream: 'Frente', merge: 'Integração' };
-
-  const PLAN_SOURCE = {
-    architect: '',
-    heuristic: 'Simulação: escolha por palavras-chave da US.',
-    fallback: 'O arquiteto não retornou um plano; todos os agentes foram executados.',
-  };
-
-  function renderPlan(plan, steps) {
-    if (!plan) return '';
-    const titles = new Map(steps.map((s) => [s.id, s.title]));
-    const chips = plan.agents.map((id) => `<span class="stack-chip">${esc(titles.get(id) || id)}</span>`).join('');
-    const note = PLAN_SOURCE[plan.source];
-    return `
-      <div class="plan-box">
-        <div class="plan-head"><span class="plan-label">Agentes selecionados</span><span class="stack-chips">${chips}</span></div>
-        ${plan.pattern ? `<p class="plan-reason"><span class="plan-label">Padrão de projeto</span> ${esc(plan.pattern)}</p>` : ''}
-        ${renderStreams(plan.streams, titles)}
-        ${plan.reason ? `<p class="plan-reason">${esc(plan.reason)}</p>` : ''}
-        ${note ? `<p class="note">${esc(note)}</p>` : ''}
-      </div>`;
+  // ----- waves -----
+  function runWaves(run) {
+    const list = run.stories || [];
+    if (run.waves?.length) return run.waves;
+    return list.length === 1 ? [[0]] : [];
   }
 
-  function renderStreams(streams, titles) {
-    if (!streams?.length) return '';
-    const items = streams.map((st) => {
-      const deps = st.depends_on?.length ? ` · depende de ${st.depends_on.map(esc).join(', ')}` : '';
-      return `<li><span class="stack-chip">${esc(titles.get(st.agent) || st.agent)}</span> ${esc(st.title)}<span class="note">${deps}</span></li>`;
+  // The wave the run is in: 0 while preparing, n for waves[n - 1].
+  function currentWave(run, waves) {
+    if ((run.current ?? -1) < 0) return 0;
+    const at = waves.findIndex((w) => w.includes(run.current));
+    return at < 0 ? 0 : at + 1;
+  }
+
+  function groupStatus(statuses) {
+    if (statuses.includes('running')) return 'running';
+    if (statuses.includes('failed')) return 'failed';
+    if (statuses.length && statuses.every((s) => ['done', 'warning', 'skipped'].includes(s))) {
+      return statuses.some((s) => s !== 'done') ? 'warning' : 'done';
+    }
+    return 'pending';
+  }
+
+  function tabMark(status) {
+    switch (status) {
+      case 'running': return '<span class="spinner" aria-hidden="true"></span>';
+      case 'done': return icon('check');
+      case 'failed': return icon('x');
+      case 'warning': return icon('alert');
+      default: return '<span class="dot" aria-hidden="true"></span>';
+    }
+  }
+
+  function renderWaveTabs(run, waves, shown) {
+    const list = run.stories || [];
+    const prep = [run.discovery, run.analysis].filter(Boolean).map((s) => (s.status === 'skipped' ? 'done' : s.status));
+    const tabs = [`
+      <button type="button" class="wave-tab" role="tab" data-wave="0" data-status="${groupStatus(prep)}" aria-selected="${shown === 0}">
+        ${tabMark(groupStatus(prep))}<span>Preparação</span>
+      </button>`];
+    waves.forEach((w, n) => {
+      const statuses = w.map((i) => list[i]?.status || 'pending');
+      const status = groupStatus(statuses);
+      const delivered = statuses.filter((s) => s === 'done' || s === 'warning').length;
+      const label = waves.length === 1 ? 'Desenvolvimento' : `Onda ${n + 1}`;
+      const names = w.map((i) => storyLabel(list[i] || {}, i)).join(', ');
+      tabs.push(`
+        <button type="button" class="wave-tab" role="tab" data-wave="${n + 1}" data-status="${status}"
+                aria-selected="${shown === n + 1}" title="${esc(names)}">
+          ${tabMark(status)}<span>${esc(label)}</span><span class="count">${delivered}/${w.length}</span>
+        </button>`);
+    });
+    const html = tabs.join('');
+    if (el.waveTabs.dataset.html !== html) {
+      el.waveTabs.innerHTML = html;
+      el.waveTabs.dataset.html = html;
+    }
+    if (shown !== lastShownWave) {
+      lastShownWave = shown;
+      el.waveTabs.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    }
+  }
+
+  // ----- lanes -----
+  function runningStep(st) {
+    return [...(st.steps || [])].reverse().find((s) => s.status === 'running');
+  }
+
+  function laneActivity(st) {
+    const running = runningStep(st);
+    if (running) {
+      const time = running.started_at ? `<span class="time" data-elapsed="${esc(running.started_at)}"></span>` : '';
+      return `<span class="spinner" aria-hidden="true"></span><span>${esc(running.title)}</span>${time}`;
+    }
+    const failedStep = (st.steps || []).find((s) => s.status === 'failed');
+    if (failedStep) return `<span>Falhou em ${esc(failedStep.title)}</span>`;
+    if (st.status === 'done' || st.status === 'warning') {
+      return `<span>Entregue${st.duration_ms ? ` em ${esc(fmtDuration(st.duration_ms))}` : ''}</span>`;
+    }
+    if (st.status === 'skipped') return '<span>Bloqueada no Passo 0</span>';
+    if (st.status === 'canceled') return '<span>Cancelada</span>';
+    return `<span>${st.depends_on?.length ? `Depende de ${esc(st.depends_on.join(', '))}` : 'Aguardando a vez'}</span>`;
+  }
+
+  function laneHtml(st, i, selected) {
+    const steps = (st.steps || []).filter((s) => !isHidden(s));
+    const done = steps.filter(finished).length;
+    const pct = steps.length ? Math.round((done / steps.length) * 100) : 0;
+    const status = STORY_STATUS[st.status] || STORY_STATUS.pending;
+    return `
+      <button type="button" class="lane" data-story="${i}" data-status="${esc(st.status)}" aria-pressed="${selected}">
+        <span class="lane-top"><span class="lane-id">${esc(storyLabel(st, i))}</span>${pill(status)}</span>
+        <span class="lane-title">${esc(storyName(st))}</span>
+        <span class="lane-now">${laneActivity(st)}</span>
+        <span class="lane-bar"><span data-pct="${pct}"></span></span>
+        <span class="lane-foot num"><span>${done} de ${steps.length} etapas</span>${st.branch ? `<code title="${esc(st.branch)}">${esc(st.branch)}</code>` : ''}</span>
+      </button>`;
+  }
+
+  function pickStory(run, wave) {
+    const list = run.stories || [];
+    if (viewStory !== null && wave.includes(viewStory)) return viewStory;
+    return wave.find((i) => list[i]?.status === 'running')
+      ?? wave.find((i) => list[i]?.status === 'failed')
+      ?? wave[0];
+  }
+
+  // ----- step rows -----
+  function renderPlan(plan, steps, key) {
+    if (!plan) return '';
+    const titles = new Map(steps.map((s) => [s.id, s.title]));
+    const agents = plan.agents.map((id) => titles.get(id) || id);
+    const streams = plan.streams || [];
+    const summary = [agents.join(', '), streams.length ? `${streams.length} frentes` : ''].filter(Boolean).join(' · ');
+    const streamList = streams.map((st) => {
+      const deps = st.depends_on?.length ? ` <span class="muted">depende de ${st.depends_on.map(esc).join(', ')}</span>` : '';
+      return `<li><span class="chip">${esc(titles.get(st.agent) || st.agent)}</span> ${esc(st.title)}${deps}</li>`;
     }).join('');
-    return `<div class="plan-streams"><span class="plan-label">Frentes de desenvolvimento</span><ul>${items}</ul></div>`;
+    const note = PLAN_SOURCE[plan.source];
+    return `
+      <details class="plan" data-key="${esc(key)}"${openDetails.has(`${key}|details|-1`) ? ' open' : ''}>
+        <summary>${icon('chevron')}<b>Plano</b><span>${esc(summary)}</span></summary>
+        <div class="plan-body">
+          <dl>
+            <dt>Agentes</dt><dd><span class="chips">${agents.map((a) => `<span class="chip">${esc(a)}</span>`).join('')}</span></dd>
+            ${plan.pattern ? `<dt>Padrão de projeto</dt><dd>${esc(plan.pattern)}</dd>` : ''}
+            ${streams.length ? `<dt>Frentes</dt><dd><ul>${streamList}</ul></dd>` : ''}
+            ${plan.reason ? `<dt>Motivo</dt><dd>${esc(plan.reason)}</dd>` : ''}
+          </dl>
+          ${note ? `<p class="note">${esc(note)}</p>` : ''}
+        </div>
+      </details>`;
   }
 
   // Command output quoted in a fenced block is collapsed under the summary.
@@ -759,17 +904,16 @@ Critérios de aceitação:
   function renderIssues(issues, title) {
     if (!issues?.length) return '';
     return `
-      <details class="issues">
-        <summary class="issues-title"><span>${esc(title)}</span><span>${issues.length} item${issues.length === 1 ? '' : 's'}</span></summary>
+      <div class="issues">
+        <h3>${esc(title)} <span class="muted">${issues.length}</span></h3>
         <ul>${issues.map((is) => `
           <li>
-            ${is.severity ? `<span class="sev" data-sev="${esc(is.severity)}">${esc(is.severity)}</span>` : ''}
-            <span class="issue-agent">${esc(is.agent)}</span>
-            ${issueDescription(is.description)}
-            ${is.location ? `<code>${esc(is.location)}</code>` : ''}
+            ${is.severity ? `<span class="sev" data-sev="${esc(is.severity)}">${esc(is.severity)}</span>` : '<span></span>'}
+            <span>${issueDescription(is.description)}</span>
+            <span class="issue-meta"><span>${esc(is.agent)}</span>${is.location ? `<code>${esc(is.location)}</code>` : ''}</span>
           </li>`).join('')}
         </ul>
-      </details>`;
+      </div>`;
   }
 
   function renderChecks(checks) {
@@ -793,9 +937,9 @@ Critérios de aceitação:
         let result = c.note || (c.passed ? 'passou nas verificações' : `${c.issues} problema${c.issues === 1 ? '' : 's'}`);
         if (c.chosen) result += ' · escolhido';
         return `
-        <li data-chosen="${Boolean(c.chosen)}" data-passed="${Boolean(c.passed)}">
+        <li data-chosen="${Boolean(c.chosen)}">
           <span class="cand-id">${esc(c.id)}</span>
-          <span class="cand-strategy">${esc(c.strategy)}</span>
+          <span>${esc(c.strategy)}</span>
           <span class="cand-result">${esc(result)}</span>
         </li>`;
       }).join('')}
@@ -805,13 +949,14 @@ Critérios de aceitação:
   function renderCommit(s) {
     const c = s.commit;
     if (!c) return '';
-    const add = c.files.reduce((n, f) => n + f.added, 0);
-    const del = c.files.reduce((n, f) => n + f.deleted, 0);
-    const names = c.files.map((f) => f.path).join('\n');
+    const files = c.files || [];
+    const add = files.reduce((n, f) => n + f.added, 0);
+    const del = files.reduce((n, f) => n + f.deleted, 0);
+    const names = files.map((f) => f.path).join('\n');
     return `
       <div class="commit">
         ${icon('branch')}<code>${esc(c.hash)}</code>
-        <span title="${esc(names)}">${c.files.length} arquivo${c.files.length === 1 ? '' : 's'}</span>
+        <span title="${esc(names)}">${files.length} arquivo${files.length === 1 ? '' : 's'}</span>
         <span class="diffstat"><span data-kind="add">+${add}</span> <span data-kind="del">−${del}</span></span>
         <button class="link" type="button" data-diff="${esc(c.hash)}" data-title="${esc(s.title)}">Ver diff</button>
       </div>`;
@@ -824,12 +969,9 @@ Critérios de aceitação:
     const pct = Math.round((found / trace.length) * 100);
     return `
       <div class="trace" data-complete="${missing.length === 0}">
-        <div class="trace-head">
-          <span class="plan-label">Rastreabilidade dos testes</span>
-          <span class="trace-count">${found} de ${trace.length}</span>
-        </div>
+        <div class="trace-head"><span>Rastreabilidade dos testes</span><span class="num">${found} de ${trace.length}</span></div>
         <div class="trace-bar" role="img" aria-label="${pct}% dos casos de teste encontrados"><span data-pct="${pct}"></span></div>
-        ${missing.length ? `<div class="stack-chips">${missing.map((t) => `<span class="stack-chip" data-missing title="${esc(t.description || '')}">${esc(t.id)}</span>`).join('')}</div>` : ''}
+        ${missing.length ? `<div class="chips">${missing.map((t) => `<span class="chip" data-missing title="${esc(t.description || '')}">${esc(t.id)}</span>`).join('')}</div>` : ''}
         <details class="trace-all"><summary>Ver todos</summary>
           <table>${trace.map((t) => `
             <tr><td><code>${esc(t.id)}</code></td><td>${esc(t.description || '')}</td>
@@ -839,156 +981,278 @@ Critérios de aceitação:
       </div>`;
   }
 
-  const isVerifier = (s) => /^checks(-verify-\d+)?$/.test(s.id);
-
-  function storyTabIcon(status) {
-    switch (status) {
-      case 'running': return '<span class="spinner" aria-hidden="true"></span>';
-      case 'done': return icon('check');
-      case 'failed': return icon('x');
-      case 'skipped': return icon('alert'); // blocked in Passo 0
-      case 'warning': return icon('alert'); // delivered with pending issues
-      default: return '<span class="dot" aria-hidden="true"></span>';
-    }
-  }
-
-  function renderStoryBar(run, shown) {
-    const list = run.stories || [];
-    el.storyBar.hidden = list.length < 2;
-    if (list.length < 2) return;
-    el.storyBar.innerHTML = list.map((st, i) => `
-      <button type="button" class="story-tab" role="tab" data-story="${i}" data-status="${esc(st.status)}"
-              aria-selected="${i === shown}" title="${esc(storyTabTitle(st))}">
-        ${storyTabIcon(st.status)}<span class="tab-title">${esc(st.id || st.title)}</span>
-        ${st.wave && run.waves?.length > 1 ? `<span class="tab-wave">onda ${esc(st.wave)}</span>` : ''}
-      </button>`).join('');
-  }
-
-  function storyTabTitle(st) {
-    const deps = st.depends_on?.length ? ` · depende de ${st.depends_on.join(', ')}` : '';
-    return `${st.title}${st.wave ? ` · onda ${st.wave}` : ''}${deps}`;
-  }
-
-  // Waves of stories developed in parallel, as the dependency analysis found them.
+  // The dependency analysis, as a table of waves.
   function renderWaves(run) {
     const waves = run.waves || [];
     if (!waves.length) return '';
-    const label = (i) => esc(run.stories[i]?.id || run.stories[i]?.title || `#${i + 1}`);
-    const items = waves.map((w, n) => `
-      <li><span class="plan-label">Onda ${n + 1}</span> <span class="stack-chips">${w.map((i) => `<span class="stack-chip">${label(i)}</span>`).join('')}</span>
-        ${w.length > 1 ? '<span class="note">em paralelo</span>' : ''}</li>`).join('');
+    const list = run.stories || [];
+    const rows = waves.map((w, n) => `
+      <tr>
+        <td>Onda ${n + 1}</td>
+        <td><span class="chips">${w.map((i) => `<span class="chip">${esc(storyLabel(list[i] || {}, i))}</span>`).join('')}</span></td>
+        <td class="deps">${esc([...new Set(w.flatMap((i) => list[i]?.depends_on || []))].join(', ') || '—')}</td>
+      </tr>`).join('');
     const merged = run.integrations?.length
-      ? `<p class="plan-reason"><span class="plan-label">Integração</span> ${run.integrations.map((b) => `<code>${esc(b)}</code>`).join(' ')}</p>` : '';
-    return `<div class="plan-box plan-streams"><span class="plan-label">Ondas de desenvolvimento</span><ul>${items}</ul>${merged}</div>`;
+      ? `<p class="note">Branches de integração: ${run.integrations.map((b) => `<code>${esc(b)}</code>`).join(' ')}</p>` : '';
+    return `
+      <table class="waves-table">
+        <thead><tr><th>Onda</th><th>User Stories</th><th>Depende de</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>${merged}`;
   }
 
-  function renderRun(run) {
-    const list = run.stories || [];
-    const current = Math.max(run.current ?? 0, 0);
-    const shown = viewStory !== null && viewStory < list.length ? viewStory : current;
-    const story = list[shown] || { steps: [] };
-    const runSteps = [run.discovery, run.analysis].filter(Boolean);
-    const isRunStep = (s) => runSteps.includes(s);
-    const allSteps = [...runSteps, ...(story.steps || [])];
-    const hiddenSteps = allSteps.filter((s) => s.status === 'canceled' || s.status === 'omitted');
-    const steps = allSteps.filter((s) => s.status !== 'canceled' && s.status !== 'omitted');
+  function stepSide(s, ctx) {
+    const parts = [];
+    if (s.model) parts.push(`<span class="model" title="${esc([s.provider, s.model, s.effort].filter(Boolean).join(' · '))}">${esc(s.model)}</span>`);
+    if (s.status === 'running' && s.started_at) parts.push(`<span class="time" data-elapsed="${esc(s.started_at)}"></span>`);
+    else if (s.duration_ms) parts.push(`<span class="time">${esc(fmtDuration(s.duration_ms))}</span>`);
+    if (s.status === 'running') parts.push(pill({ label: 'Executando', tone: 'accent' }));
+    if (s.status === 'failed') parts.push(pill({ label: 'Falhou', tone: 'danger' }));
+    if (s.status === 'warning') parts.push(pill({ label: 'Com pendências', tone: 'warn' }));
+    if (s.status === 'skipped') parts.push(`<span>${ctx.isRunStep ? 'Reutilizado' : 'Dispensada'}</span>`);
+    if (s.status === 'failed' && !ctx.run.running) {
+      parts.push(`<button class="btn btn-sm" type="button" data-retry-step="${esc(s.id)}" data-retry-story="${ctx.isRunStep ? -1 : ctx.si}">${icon('rotate')}Refazer</button>`);
+    }
+    return parts.join('');
+  }
 
-    const finished = (s) => ['done', 'skipped', 'omitted', 'warning'].includes(s.status);
-    const total = runSteps.length + list.reduce((n, st) => n + st.steps.length, 0);
-    const done = runSteps.filter(finished).length +
-      list.reduce((n, st) => n + st.steps.filter(finished).length, 0);
-    el.progressBar.style.width = `${total ? (done / total) * 100 : 0}%`;
-    el.progress.setAttribute('aria-valuemax', String(total));
-    el.progress.setAttribute('aria-valuenow', String(done));
-    el.progress.dataset.result = run.result || '';
+  function stepBody(s, key, ctx) {
+    const blocks = [];
+    if (s.error) blocks.push(`<div class="step-error">${esc(s.error)}</div>`);
+    if (s === ctx.run.analysis) blocks.push(renderWaves(ctx.run));
+    if (s.kind === 'fix') blocks.push(renderIssues(s.issues, 'Correções solicitadas'));
+    else if (s.issues?.length) blocks.push(renderIssues(s.issues, ['failed', 'warning'].includes(s.status) ? 'Problemas não resolvidos' : 'Problemas encontrados'));
+    blocks.push(renderChecks(s.checks), renderCandidates(s.candidates));
+    if (ctx.withTrace) blocks.push(renderTrace(ctx.story?.trace));
+    blocks.push(renderCommit(s));
+    if (s.output) {
+      artifacts.set(key, s.output);
+      blocks.push(`
+        <div class="output">
+          <button class="btn btn-sm" type="button" data-copy="${esc(key)}">${icon('copy')}Copiar</button>
+          <pre>${esc(s.output)}</pre>
+        </div>`);
+    }
+    return blocks.filter(Boolean).join('');
+  }
+
+  function stepRow(s, ctx) {
+    const key = ctx.isRunStep ? s.id : `${ctx.si}:${s.id}`;
+    const tag = KIND_TAGS[s.kind] ? `<span class="tag">${KIND_TAGS[s.kind]}</span>` : '';
+    const sub = [s.note || s.role, s.round && s.kind !== 'stream' ? `rodada ${s.round}` : ''].filter(Boolean).join(' · ');
+    const row = `
+      <span class="mark">${stepMarker(s)}</span>
+      <span class="step-main">
+        <span class="step-title"><span>${esc(s.title)}</span>${tag}</span>
+        ${sub ? `<span class="step-sub">${esc(sub)}</span>` : ''}
+      </span>
+      <span class="step-side">${stepSide(s, ctx)}</span>`;
+    const body = stepBody(s, key, ctx);
+    if (!body) return `<li class="step" data-status="${esc(s.status)}" data-key="${esc(key)}"><div class="step-row">${row}</div></li>`;
+    const detailsKey = `${key}|details|0`;
+    const open = openDetails.has(detailsKey) || (s.status === 'failed' && !userClosed.has(detailsKey));
+    return `
+      <li class="step" data-status="${esc(s.status)}" data-key="${esc(key)}">
+        <details${open ? ' open' : ''}><summary class="step-row">${row}</summary><div class="step-body">${body}</div></details>
+      </li>`;
+  }
+
+  function stepsHtml(steps, ctx) {
+    const shown = steps.filter((s) => !isHidden(s.step));
+    const hidden = steps.length - shown.length;
+    let lastVerifier = -1;
+    shown.forEach((x, i) => { if (!x.isRunStep && isVerifier(x.step) && x.step.status !== 'pending') lastVerifier = i; });
+    return shown.map((x, i) => stepRow(x.step, { ...ctx, isRunStep: x.isRunStep, withTrace: i === lastVerifier })).join('') +
+      (hidden ? `<li class="steps-hidden">${hidden} etapa${hidden === 1 ? '' : 's'} não executada${hidden === 1 ? '' : 's'}: não necessária${hidden === 1 ? '' : 's'} ou cancelada${hidden === 1 ? '' : 's'}.</li>` : '');
+  }
+
+  // ----- header -----
+  function storyStepTitle(st) {
+    return runningStep(st)?.title || '';
+  }
+
+  function runFinding(run) {
+    const list = run.stories || [];
+    if (!run.started_at) return 'Nenhuma execução nesta sessão.';
+    const label = (st) => `<strong>${esc(storyLabel(st, list.indexOf(st)))}</strong>`;
+    if (run.running) {
+      const running = list.filter((s) => s.status === 'running');
+      if (running.length) return running.map((st) => `${label(st)} ${esc(storyStepTitle(st) || 'em andamento')}`).join(' · ');
+      if (run.discovery?.status === 'running') return 'Fazendo o discovery do repositório.';
+      if (run.analysis?.status === 'running') return `Mapeando as dependências entre ${list.length} US.`;
+      return 'Preparando a próxima onda.';
+    }
+    const failedStory = list.find((s) => s.status === 'failed');
+    if (run.result === 'failed') {
+      const step = failedStory?.steps.find((s) => s.status === 'failed') || [run.discovery, run.analysis].find((s) => s?.status === 'failed');
+      const where = failedStory ? `${label(failedStory)} · ` : '';
+      return `Parou em ${where}${esc(step?.title || 'uma etapa')}. Abra a etapa para refazer.`;
+    }
+    if (run.result === 'canceled') return 'Execução cancelada.';
+    const delivered = list.filter((s) => s.status === 'done' || s.status === 'warning').length;
+    const pending = list.filter((s) => s.status === 'warning' || s.status === 'skipped').length;
+    const took = run.finished_at ? ` em ${fmtDuration(Date.parse(run.finished_at) - Date.parse(run.started_at))}` : '';
+    return `Concluída${esc(took)}: ${delivered} de ${list.length} US entregue${list.length === 1 ? '' : 's'}${pending ? `, ${pending} com pendências` : ''}.`;
+  }
+
+  function stat(label, value, tone = '') {
+    return `<div><dt>${esc(label)}</dt><dd${tone ? ` data-tone="${tone}"` : ''}>${value}</dd></div>`;
+  }
+
+  function renderStats(run) {
+    const list = run.stories || [];
+    const elapsed = `<span data-elapsed="${esc(run.started_at)}"${run.finished_at ? ` data-end="${esc(run.finished_at)}"` : ''}></span>`;
+    let cells;
+    if (list.length > 1) {
+      const delivered = list.filter((s) => s.status === 'done' || s.status === 'warning').length;
+      const running = list.filter((s) => s.status === 'running').length;
+      const pending = list.filter((s) => s.status === 'warning' || s.status === 'skipped').length;
+      cells = [
+        stat('Entregues', `${delivered} <small>de ${list.length}</small>`),
+        stat('Em execução', String(running)),
+        stat('Com pendências', String(pending), pending ? 'warn' : ''),
+        stat('Tempo', elapsed),
+      ];
+    } else {
+      const steps = (list[0]?.steps || []).filter((s) => !isHidden(s));
+      const fixes = steps.filter((s) => s.kind === 'fix').length;
+      cells = [
+        stat('Etapas', `${steps.filter(finished).length} <small>de ${steps.length}</small>`),
+        stat('Correções', String(fixes)),
+        stat('Tempo', elapsed),
+      ];
+    }
+    const html = cells.join('');
+    if (el.runStats.dataset.html !== html) {
+      el.runStats.innerHTML = html;
+      el.runStats.dataset.html = html;
+    }
+  }
+
+  function renderHeader(run) {
+    const started = Boolean(run.started_at);
+    el.runMeta.innerHTML = runFinding(run);
+    el.runStats.hidden = !started;
+    el.progress.hidden = !started;
+    el.runEmpty.hidden = started;
+    el.topRun.hidden = !started;
+    el.navLive.hidden = !run.running;
 
     let state = { label: 'Ocioso', tone: 'neutral' };
     if (run.running) state = { label: 'Em execução', tone: 'accent' };
     else if (run.result) state = RUN_RESULT[run.result];
     el.runBadge.dataset.tone = state.tone;
     el.runBadge.textContent = state.label;
+    if (!started) return;
+    el.topElapsed.innerHTML = `<span data-elapsed="${esc(run.started_at)}"${run.finished_at ? ` data-end="${esc(run.finished_at)}"` : ''}></span>`;
+    renderStats(run);
 
-    if (run.started_at) {
-      const parts = [];
-      if (list.length > 1) {
-        const delivered = list.filter((st) => st.status === 'done' || st.status === 'warning').length;
-        parts.push(`US ${Math.min(current + 1, list.length)} de ${list.length}`, `${delivered} entregue${delivered === 1 ? '' : 's'}`);
-      } else {
-        parts.push(`${done} de ${total} etapas`);
-      }
-      parts.push(run.dry_run ? 'Simulação' : 'Execução real');
-      if (story.branch) parts.push(story.branch);
-      if (run.repository) parts.push(run.repository.split('/').filter(Boolean).pop() || run.repository);
-      parts.push(`Início ${fmtTime(run.started_at)}`);
-      el.runMeta.innerHTML = `${parts.map(esc).join(' · ')} · <span data-elapsed="${esc(run.started_at)}"${run.finished_at ? ` data-end="${esc(run.finished_at)}"` : ''}></span>`;
-    } else {
-      el.runMeta.textContent = 'Nenhuma execução iniciada.';
+    const list = run.stories || [];
+    const runSteps = [run.discovery, run.analysis].filter(Boolean);
+    const total = runSteps.length + list.reduce((n, st) => n + st.steps.length, 0);
+    const done = runSteps.filter(finished).length + list.reduce((n, st) => n + st.steps.filter(finished).length, 0);
+    el.progressBar.style.width = `${total ? (done / total) * 100 : 0}%`;
+    el.progress.setAttribute('aria-valuemax', String(total));
+    el.progress.setAttribute('aria-valuenow', String(done));
+    el.progress.dataset.result = run.result || '';
+  }
+
+  // ----- the run -----
+  function renderRun(run) {
+    renderHeader(run);
+    artifacts = new Map();
+    const list = run.stories || [];
+    if (!run.started_at || !list.length) {
+      el.waveTabs.hidden = el.waveHead.hidden = el.lanes.hidden = el.storyPanel.hidden = true;
+      return;
+    }
+    el.storyPanel.hidden = false;
+    const runSteps = [run.discovery, run.analysis].filter(Boolean);
+
+    // One story: no waves to navigate; preparation and story share one list.
+    if (list.length === 1) {
+      el.waveTabs.hidden = el.waveHead.hidden = el.lanes.hidden = true;
+      renderStory(run, 0, runSteps);
+      return;
     }
 
-    renderStoryBar(run, shown);
+    const waves = runWaves(run);
+    const current = currentWave(run, waves);
+    const shown = viewWave !== null && viewWave <= waves.length ? viewWave : current;
+    el.waveTabs.hidden = false;
+    renderWaveTabs(run, waves, shown);
 
-    artifacts = new Map();
-    let lastVerifier = -1;
-    steps.forEach((s, i) => { if (!isRunStep(s) && isVerifier(s) && s.status !== 'pending' && s.status !== 'omitted') lastVerifier = i; });
-    const firstStoryStep = steps.findIndex((s) => !isRunStep(s));
-    const html = steps.map((s, i) => {
-      const key = isRunStep(s) ? s.id : `${shown}:${s.id}`;
-      if (s.output) artifacts.set(key, s.output);
-      const st = s.status === 'skipped' && !isRunStep(s) ? { label: 'Dispensada', tone: 'neutral' } : STEP_STATUS[s.status] || STEP_STATUS.pending;
-      let time = '';
-      if (s.status === 'running' && s.started_at) time = `<span class="time" data-elapsed="${esc(s.started_at)}"></span>`;
-      else if (s.duration_ms) time = `<span class="time">${esc(fmtDuration(s.duration_ms))}</span>`;
-      const model = s.model ? `<span class="model" title="${esc(s.provider)}">${esc(s.provider)} · ${esc(s.model)}</span>` : '';
-      const artifact = s.output ? `
-        <details class="artifact">
-          <summary>${icon('chevron')}${s === run.discovery ? 'Relatório de discovery' : s === run.analysis ? 'Análise de dependências' : 'Artefato'}
-            <button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(key)}">${icon('copy')}Copiar</button>
-          </summary>
-          <pre>${esc(s.output)}</pre>
-        </details>` : '';
-      const error = s.error ? `<div class="step-error">${esc(s.error)}</div>` : '';
-      let extra = renderChecks(s.checks) + renderCandidates(s.candidates);
-      if (s === run.analysis) extra = renderWaves(run);
-      else if (s.id === 'arch') extra = renderPlan(story.plan, story.steps || []);
-      else if (s.kind === 'fix') extra = renderIssues(s.issues, 'Correções solicitadas');
-      else if (s.issues?.length) extra += renderIssues(s.issues, ['failed', 'warning'].includes(s.status) ? 'Problemas não resolvidos' : 'Problemas encontrados');
-      if (i === lastVerifier) extra += renderTrace(story.trace);
-      extra += renderCommit(s);
-      const kindTag = KIND_TAGS[s.kind] ? `<span class="kind-tag" data-kind="${esc(s.kind)}">${KIND_TAGS[s.kind]}</span>` : '';
-      const storyNote = i === firstStoryStep && list.length > 1 && story.title ? `<li class="step-story" aria-hidden="true">${esc(story.title)}</li>` : '';
-      return `
-        ${storyNote}
-        <li class="step" data-status="${esc(s.status)}" data-kind="${esc(s.kind || '')}" data-id="${esc(key)}">
-          <div class="marker">${stepMarker(s, i)}</div>
-          <div class="step-body">
-            <div class="step-head">
-              <div>
-                <div class="step-title">${esc(s.title)}</div>
-                <div class="step-meta">${kindTag}<span>${esc(s.role)}</span>${s.tier ? `<span class="tier">${esc(s.tier)}</span>` : ''}${s.note ? `<span>${esc(s.note)}</span>` : ''}</div>
-              </div>
-              <div class="step-side">
-                ${model}${time}${s.status !== 'pending' ? badge(st) : ''}
-                ${s.status === 'failed' && !run.running ? `<button class="btn btn-sm" type="button" data-retry-step="${esc(s.id)}" data-retry-story="${isRunStep(s) ? -1 : shown}">${icon('rotate')}Refazer etapa</button>` : ''}
-              </div>
-            </div>
-            ${error}${extra}${artifact}
-          </div>
-        </li>`;
-    }).join('') + (hiddenSteps.length ? `
-      <li class="step-summary">
-        <span class="summary-line"></span>
-        <span>${hiddenSteps.length} etapa${hiddenSteps.length === 1 ? '' : 's'} não executada${hiddenSteps.length === 1 ? '' : 's'}</span>
-      </li>` : '');
-    if (html === lastStepsHtml) return; // nothing changed: keep the DOM (and what the user opened)
-    lastStepsHtml = html;
-    el.steps.innerHTML = html;
-    el.steps.querySelectorAll('details').forEach((d) => { if (openDetails.has(panelKey(d, 'details'))) d.open = true; });
-    el.steps.querySelectorAll('pre').forEach((p) => {
-      const top = scrolled.get(panelKey(p, 'pre'));
-      if (top) p.scrollTop = top;
-    });
+    if (shown === 0) {
+      el.waveHead.hidden = el.lanes.hidden = true;
+      renderPreparation(run, runSteps);
+      return;
+    }
+    const wave = waves[shown - 1];
+    const si = pickStory(run, wave);
+    const parallel = wave.length > 1;
+    el.waveHead.hidden = !parallel;
+    el.waveHead.innerHTML = parallel
+      ? `<p>${wave.length} US em paralelo, cada uma na sua branch. São integradas quando todas terminam.</p>` : '';
+    el.lanes.hidden = !parallel;
+    if (parallel) {
+      const html = wave.map((i) => laneHtml(list[i], i, i === si)).join('');
+      el.lanes.dataset.count = String(Math.min(wave.length, 4));
+      if (el.lanes.dataset.html !== html) {
+        el.lanes.innerHTML = html;
+        el.lanes.dataset.html = html;
+        el.lanes.querySelectorAll('[data-pct]').forEach((n) => { n.style.width = `${n.dataset.pct}%`; });
+      }
+    }
+    renderStory(run, si, []);
+  }
+
+  function renderPreparation(run, runSteps) {
+    el.storyHead.innerHTML = `
+      <h2 id="storyTitle">Preparação</h2>
+      <p class="story-meta">Discovery do repositório e análise de dependências entre as ${(run.stories || []).length} US.</p>`;
+    paintSteps(stepsHtml(runSteps.map((step) => ({ step, isRunStep: true })), { run, si: -1 }));
+  }
+
+  function renderStory(run, si, runSteps) {
+    const list = run.stories || [];
+    const st = list[si];
+    const status = STORY_STATUS[st.status] || STORY_STATUS.pending;
+    const time = st.status === 'running' && st.started_at
+      ? `<span class="num" data-elapsed="${esc(st.started_at)}"></span>`
+      : st.duration_ms ? `<span class="num">${esc(fmtDuration(st.duration_ms))}</span>` : '';
+    const meta = [
+      pill(status),
+      st.branch ? `<code>${esc(st.branch)}</code>` : '',
+      st.depends_on?.length ? `<span>Depende de ${esc(st.depends_on.join(', '))}</span>` : '',
+      time,
+    ].filter(Boolean).join('');
+    const head = `
+      <h2 id="storyTitle">${esc(st.title || 'User Story')}</h2>
+      <div class="story-meta">${meta}</div>
+      ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}`;
+    if (el.storyHead.dataset.html !== head) {
+      el.storyHead.innerHTML = head;
+      el.storyHead.dataset.html = head;
+    }
+    const steps = [
+      ...runSteps.map((step) => ({ step, isRunStep: true })),
+      ...(st.steps || []).map((step) => ({ step, isRunStep: false })),
+    ];
+    paintSteps(stepsHtml(steps, { run, si, story: st }));
+  }
+
+  function paintSteps(html) {
+    if (html !== lastStepsHtml) {
+      lastStepsHtml = html;
+      el.steps.innerHTML = html;
+      el.steps.querySelectorAll('details').forEach((d) => { if (openDetails.has(panelKey(d, 'details'))) d.open = true; });
+      el.steps.querySelectorAll('pre').forEach((p) => {
+        const top = scrolled.get(panelKey(p, 'pre'));
+        if (top) p.scrollTop = top;
+      });
+    }
     // The CSP forbids inline style attributes; widths are set through the CSSOM.
-    el.steps.querySelectorAll('[data-pct]').forEach((n) => { n.style.width = `${n.dataset.pct}%`; });
+    el.storyPanel.querySelectorAll('[data-pct]').forEach((n) => { n.style.width = `${n.dataset.pct}%`; });
   }
 
   // ---------- logs ----------
@@ -1007,6 +1271,10 @@ Critérios de aceitação:
       (!logsClearedAt || l.time > logsClearedAt) &&
       (logFilter === 'all' || l.level === 'warn' || l.level === 'error'));
 
+    const issues = logs.filter((l) => (!logsClearedAt || l.time > logsClearedAt) && (l.level === 'warn' || l.level === 'error')).length;
+    el.navIssues.hidden = issues === 0;
+    el.navIssues.textContent = String(issues);
+    el.navIssues.title = `${issues} aviso${issues === 1 ? '' : 's'} ou erro${issues === 1 ? '' : 's'}`;
     const stick = el.autoScroll.checked;
     if (!visible.length) {
       el.log.innerHTML = '<div class="log-empty">Nenhum evento para exibir.</div>';
@@ -1223,7 +1491,9 @@ Critérios de aceitação:
     el.startBtn.title = hasRepo ? '' : 'Configure o repositório primeiro';
     el.repoSaveBtn.disabled = running;
     el.stopBtn.disabled = !running;
-    el.startLabel.textContent = running ? 'Em execução…' : 'Iniciar execução';
+    el.stopBtn.hidden = !running;
+    el.newRunLink.hidden = running;
+    el.startLabel.textContent = running ? 'Execução em andamento…' : 'Iniciar execução';
   }
 
   function applySnapshot(data) {
@@ -1314,9 +1584,37 @@ Critérios de aceitação:
     };
   }
 
+  // ---------- views ----------
+  const VIEWS = { execucao: 'Execução', nova: 'Nova execução', repositorio: 'Repositório', provedores: 'Provedores', logs: 'Logs' };
+  const viewFromHash = () => (VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : null);
+
+  function showView(name) {
+    document.querySelectorAll('[data-view]').forEach((v) => { v.hidden = v.dataset.view !== name; });
+    document.querySelectorAll('.nav [data-view-link]').forEach((a) => {
+      if (a.dataset.viewLink === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    el.crumbView.textContent = VIEWS[name];
+    el.sidebar.parentElement.dataset.view = name;
+    document.title = `${VIEWS[name]} · FazTudo`;
+    setMenu(false);
+    if (name === 'logs' && el.autoScroll.checked) el.log.scrollTop = el.log.scrollHeight;
+  }
+  function setMenu(open) {
+    el.sidebar.toggleAttribute('data-open', open);
+    el.menuBtn.setAttribute('aria-expanded', String(open));
+  }
+  el.menuBtn.addEventListener('click', () => setMenu(!el.sidebar.hasAttribute('data-open')));
+  document.addEventListener('click', (e) => {
+    if (el.sidebar.hasAttribute('data-open') && !e.target.closest('#sidebar, #menuBtn')) setMenu(false);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
+  window.addEventListener('hashchange', () => showView(viewFromHash() || 'execucao'));
+
   async function boot() {
     updateModeNote();
     await fetchStatus();
+    if (!viewFromHash()) history.replaceState(null, '', snapshot?.run.started_at ? '#execucao' : '#nova');
+    showView(viewFromHash() || 'execucao');
     if (snapshot?.desktop) {
       setConn('live', 'Aplicativo local');
       startPolling();

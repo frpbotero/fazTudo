@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -24,6 +25,9 @@ import (
 	"llm-orchestrator/internal/vcs"
 	"llm-orchestrator/internal/workspace"
 )
+
+// The UI embeds its fonts; not every system maps .woff2 to a MIME type.
+func init() { _ = mime.AddExtensionType(".woff2", "font/woff2") }
 
 const (
 	maxBodyBytes     = 1 << 20
