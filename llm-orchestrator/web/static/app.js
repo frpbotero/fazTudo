@@ -1589,12 +1589,12 @@ Critérios de aceitação:
   const viewFromHash = () => (VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : null);
 
   function showView(name) {
-    document.querySelectorAll('[data-view]').forEach((v) => { v.hidden = v.dataset.view !== name; });
+    document.querySelectorAll('.view[data-view]').forEach((v) => { v.hidden = v.dataset.view !== name; });
     document.querySelectorAll('.nav [data-view-link]').forEach((a) => {
       if (a.dataset.viewLink === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
     el.crumbView.textContent = VIEWS[name];
-    el.sidebar.parentElement.dataset.view = name;
+    el.sidebar.parentElement.dataset.currentView = name;
     document.title = `${VIEWS[name]} · FazTudo`;
     setMenu(false);
     if (name === 'logs' && el.autoScroll.checked) el.log.scrollTop = el.log.scrollHeight;

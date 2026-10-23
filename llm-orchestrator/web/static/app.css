@@ -177,7 +177,7 @@ a { color: inherit; }
 .crumbs .icon { width: 14px; height: 14px; }
 .crumbs span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .crumbs [aria-current] { color: var(--text); }
-.shell[data-view="execucao"] .topbar-run { display: none; }
+.shell[data-current-view="execucao"] .topbar-run { display: none; }
 .topbar-run { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: var(--fs-small); }
 
 .sheet {
