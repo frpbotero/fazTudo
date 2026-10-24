@@ -1,6 +1,7 @@
 package stories
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -82,5 +83,40 @@ func TestParseLetterPrefixedIDsAcrossEpics(t *testing.T) {
 	}
 	if strings.Contains(doc.Stories[1].Content, "Épico B") {
 		t.Error("an epic heading must close the previous story")
+	}
+}
+
+func TestParseEpicPrefixedIDsBeatSectionTitles(t *testing.T) {
+	md := "# Backlog\n\n## 5. Template único de User Story\n\n````markdown\n### US-<ÉPICO>-<NN> — Título\n```gherkin\nCenário: x\n```\n````\n\n" +
+		"## 9. User Stories\n\n### Épico `plataforma`\n\n### US-PLT-01 — Publicar loja\n\nComo equipe, quero.\n\n### US-PLT-02 — Servir arquivos\n\nComo operador, quero.\n\n" +
+		"### Épico `contrato`\n\n### US-CTR-01 — Padronizar paginação\n\nComo operador, quero.\n"
+	doc := Parse(md)
+	if doc.Method != MethodHeadings || len(doc.Stories) != 3 {
+		t.Fatalf("method %s, %d stories: %+v", doc.Method, len(doc.Stories), doc.Stories)
+	}
+	for i, id := range []string{"US-PLT-01", "US-PLT-02", "US-CTR-01"} {
+		if doc.Stories[i].ID != id {
+			t.Errorf("story %d id = %q, want %q", i, doc.Stories[i].ID, id)
+		}
+	}
+	if strings.Contains(doc.Stories[1].Content, "US-CTR-01") || strings.Contains(doc.Stories[2].Content, "Épico `contrato`") {
+		t.Error("a story must end at the next story or epic heading")
+	}
+}
+
+func TestParseKeepsShortPrefixIDs(t *testing.T) {
+	doc := Parse("## US-A01 — a\n\ntexto\n\n## HU 3 — b\n\ntexto\n")
+	if len(doc.Stories) != 2 || doc.Stories[0].ID != "US-A01" || doc.Stories[1].ID != "HU-3" {
+		t.Fatalf("stories = %+v", doc.Stories)
+	}
+}
+
+func TestParseAcceptsMoreThanFiftyStories(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&b, "### US-X-%02d — história %d\n\nComo a, quero b.\n\n", i, i)
+	}
+	if got := len(Parse(b.String()).Stories); got != 80 {
+		t.Errorf("stories = %d, want 80", got)
 	}
 }

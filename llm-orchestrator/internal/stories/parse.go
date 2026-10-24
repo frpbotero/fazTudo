@@ -8,7 +8,7 @@ import (
 )
 
 // MaxStories caps how many stories a single document may yield.
-const MaxStories = 50
+const MaxStories = 100
 
 // How a document's stories were found.
 const (
@@ -35,10 +35,14 @@ type Document struct {
 var (
 	reHeading = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*#*\s*$`)
 	reFence   = regexp.MustCompile("^\\s*(```|~~~)")
-	// IDs may carry a short letter prefix ("US-A01", "HU B3"). Singular forms
-	// only: "User Stories" / "Histórias" are container headings.
-	reStory = regexp.MustCompile(`(?i)\b(?:US|HU)[-_ ]?[A-Z]{0,3}\d+\b|\buser story\b|\bhist[óo]ria\b`)
-	reID    = regexp.MustCompile(`(?i)\b(US|HU)[-_ ]?([A-Z]{0,3}\d+)\b`)
+	// IDs may carry an epic prefix, glued or separated ("US-A01", "HU B3",
+	// "US-PLT-01"). reStoryID is the strong signal; the singular words
+	// "user story" / "história" count only when no heading has an ID, since
+	// section titles such as "5. Template de User Story" also contain them
+	// ("User Stories" / "Histórias" are container headings).
+	reStoryID = regexp.MustCompile(`(?i)\b(?:US|HU)[-_ ]?(?:[A-Z]{1,6}[-_ ]?)?\d+\b`)
+	reStory   = regexp.MustCompile(`(?i)\buser story\b|\bhist[óo]ria\b`)
+	reID      = regexp.MustCompile(`(?i)\b(US|HU)[-_ ]?((?:[A-Z]{1,6}[-_ ]?)?\d+)\b`)
 )
 
 type heading struct {
@@ -54,12 +58,7 @@ func Parse(md string) Document {
 	lines := splitLines(md)
 	all := headings(lines)
 
-	var candidates []heading
-	for _, h := range all {
-		if reStory.MatchString(h.title) {
-			candidates = append(candidates, h)
-		}
-	}
+	candidates := storyHeadings(all)
 	if len(candidates) == 0 {
 		content := strings.TrimSpace(strings.Join(lines, "\n"))
 		if content == "" {
@@ -87,6 +86,24 @@ func Parse(md string) Document {
 	doc := split(lines, all, starts)
 	doc.Method = MethodHeadings
 	return doc
+}
+
+// storyHeadings picks the headings that open a story: those carrying an ID,
+// or, when none does, those naming a "user story" or "história".
+func storyHeadings(all []heading) []heading {
+	var withID, named []heading
+	for _, h := range all {
+		switch {
+		case reStoryID.MatchString(h.title):
+			withID = append(withID, h)
+		case reStory.MatchString(h.title):
+			named = append(named, h)
+		}
+	}
+	if len(withID) > 0 {
+		return withID
+	}
+	return named
 }
 
 // split cuts lines into one story per start. A story ends at the next start
@@ -141,7 +158,7 @@ func headings(lines []string) []heading {
 
 func storyID(title string, index int) string {
 	if m := reID.FindStringSubmatch(title); m != nil {
-		return strings.ToUpper(m[1]) + "-" + strings.ToUpper(m[2])
+		return strings.ToUpper(m[1]) + "-" + strings.ToUpper(strings.NewReplacer(" ", "-", "_", "-").Replace(strings.TrimRight(m[2], "-_ ")))
 	}
 	return fmt.Sprintf("US %d", index+1)
 }
