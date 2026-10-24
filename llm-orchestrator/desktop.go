@@ -95,6 +95,7 @@ func runDesktop() error {
 			Handler: srv.Handler(),
 		},
 		BackgroundColour: &options.RGBA{R: 246, G: 246, B: 247, A: 255},
+		Menu:             appMenu(logger),
 		OnShutdown:       shutdown,
 		Mac: &mac.Options{
 			Appearance:                   mac.DefaultAppearance,

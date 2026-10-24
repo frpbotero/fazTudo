@@ -374,3 +374,27 @@ func TestDiscoveryFailureIsNotCached(t *testing.T) {
 		t.Error("failed discovery must not be cached")
 	}
 }
+
+func TestRunRefusedWhileAnotherWindowHoldsTheRepository(t *testing.T) {
+	o, repo := newTest(t, &fakeExecutor{})
+	other, err := workspace.LockRepository(repo) // another FazTudo process running there
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Start(realStory("API")); !errors.Is(err, workspace.ErrRepositoryBusy) {
+		t.Fatalf("err = %v, want ErrRepositoryBusy", err)
+	}
+	other()
+	if err := o.Start(realStory("API")); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, o)
+	if err := o.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := workspace.LockRepository(repo)
+	if err != nil {
+		t.Fatalf("a finished run must release the repository: %v", err)
+	}
+	unlock()
+}

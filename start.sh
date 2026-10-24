@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Compila e abre o FazTudo.
-#   ./start.sh        app desktop (macOS: build/bin/FazTudo.app; Linux: build/bin/FazTudo)
+#   ./start.sh        app desktop (macOS: instala em /Applications/FazTudo.app; Linux: build/bin/FazTudo)
 #   ./start.sh --web  modo servidor em http://127.0.0.1:8081 (PORT, ADDR, DRY_RUN, LOG_LEVEL)
 set -euo pipefail
 
@@ -17,8 +17,8 @@ command -v wails >/dev/null || go install github.com/wailsapp/wails/v2/cmd/wails
 
 case "$(uname -s)" in
   Darwin)
-    make desktop-mac
-    open build/bin/FazTudo.app
+    make install-mac # one copy only: no stale build/bin app beside the installed one
+    open /Applications/FazTudo.app
     ;;
   Linux)
     make desktop-linux

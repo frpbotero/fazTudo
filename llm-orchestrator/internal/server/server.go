@@ -291,7 +291,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		switch {
-		case errors.Is(err, pipeline.ErrAlreadyRunning):
+		case errors.Is(err, pipeline.ErrAlreadyRunning), errors.Is(err, workspace.ErrRepositoryBusy):
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		case errors.Is(err, workspace.ErrNotConfigured):
@@ -365,7 +365,7 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.orch.RetryFailed(body.Story, strings.TrimSpace(body.Step)); err != nil {
 		status := http.StatusUnprocessableEntity
-		if errors.Is(err, pipeline.ErrAlreadyRunning) {
+		if errors.Is(err, pipeline.ErrAlreadyRunning) || errors.Is(err, workspace.ErrRepositoryBusy) {
 			status = http.StatusConflict
 		}
 		writeError(w, status, err.Error())

@@ -275,6 +275,11 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		o.mu.Unlock()
 		return workspace.ErrNotConfigured
 	}
+	unlock, err := workspace.LockRepository(repo)
+	if err != nil {
+		o.mu.Unlock()
+		return err
+	}
 	if opts.Rediscover {
 		o.ws.Invalidate()
 	}
@@ -314,6 +319,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 
 	go func() {
 		defer close(done)
+		defer unlock()
 		defer cancel()
 		o.execute(ctx, repo, opts)
 	}()
@@ -349,6 +355,12 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	if stageAt < 0 {
 		o.mu.Unlock()
 		return ErrNoFailedStep
+	}
+
+	unlock, err := workspace.LockRepository(o.ws.Path())
+	if err != nil {
+		o.mu.Unlock()
+		return err
 	}
 
 	// Keep stable artifacts before the retry point and rebuild the rest of the
@@ -400,6 +412,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 
 	go func() {
 		defer close(done)
+		defer unlock()
 		defer cancel()
 		o.retryExecute(ctx, opts, story, stageAt, started)
 	}()

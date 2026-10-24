@@ -180,12 +180,17 @@ os instaladores à Release. Rodado manualmente (*Run workflow*), deixa os arquiv
 ```bash
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0   # uma vez
 make desktop-dev  # janela com recarga dos assets
+make install-mac  # compila e substitui /Applications/FazTudo.app (sem cópia em build/bin)
 make dmg          # build/bin/FazTudo.app + dist/*.dmg
-../start.sh       # compila e abre o app (macOS); ../start.sh --web para o modo servidor
+../start.sh       # instala e abre o app (macOS); ../start.sh --web para o modo servidor
 ```
 
 Notas:
 
+- **Várias janelas:** *Arquivo › Nova janela* (⌘N / Ctrl+N) abre outra instância do app. Cada janela
+  tem sua execução e pode apontar para outro repositório; no mesmo repositório só uma janela executa
+  por vez (trava por repositório entre processos, liberada ao fim da execução ou se o app fechar).
+  Configuração e discovery salvos são compartilhados entre as janelas.
 - Ao abrir pelo Finder/Dock/menu, o app carrega o `PATH` do shell de login, para achar
   `claude`, `codex`, `node` e `npx` instalados via Homebrew, nvm ou `~/.local/bin`.
 - Sem assinatura Apple Developer, o macOS bloqueia o primeiro uso: clique com o botão direito
