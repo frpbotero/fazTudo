@@ -28,11 +28,15 @@ var (
 		"rate limit", "rate_limit", "quota exceeded", "usage limit", "session limit",
 		"too many requests", "http 429", "status 429", "tokens exhausted",
 		"capacity exceeded", "credit balance", "insufficient_quota",
+		"hit your limit", "hit your usage limit", "reached your limit", "reached your usage limit",
+		"limit reached", "weekly limit", "5-hour limit",
 	}
 
 	reRetryAfter = regexp.MustCompile(`(?i)retry-after:\s*(\d+)`)
 	reRelative   = regexp.MustCompile(`(?i)(?:resets?|retry|try again|available)\s+(?:in|after)\s+((?:\d+\s*[a-z]+[\s,]*(?:and\s+)?)+)`)
-	reDurPart    = regexp.MustCompile(`(?i)(\d+)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)`)
+	reDurPart    = regexp.MustCompile(`(?i)(\d+)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)`)
+	reEpoch      = regexp.MustCompile(`(?i)limit reached\s*\|\s*(\d{10})\b`)
+	reZone       = regexp.MustCompile(`\(([A-Za-z_]+(?:/[A-Za-z_+\-0-9]+)+)\)`)
 	reClock      = regexp.MustCompile(`(?i)(?:until|resets?(?:\s+at)?|at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b`)
 )
 
@@ -61,6 +65,13 @@ func ParseQuotaError(provider, output string, now time.Time) *QuotaError {
 }
 
 func resetTime(output string, now time.Time) time.Time {
+	if m := reEpoch.FindStringSubmatch(output); m != nil {
+		if sec, err := strconv.ParseInt(m[1], 10, 64); err == nil {
+			if t := time.Unix(sec, 0); t.After(now) {
+				return t
+			}
+		}
+	}
 	if m := reRetryAfter.FindStringSubmatch(output); m != nil {
 		if sec, err := strconv.Atoi(m[1]); err == nil {
 			return now.Add(time.Duration(sec) * time.Second)
@@ -72,7 +83,13 @@ func resetTime(output string, now time.Time) time.Time {
 		}
 	}
 	if m := reClock.FindStringSubmatch(output); m != nil {
-		if t, ok := parseClock(m[1], m[2], m[3], now); ok {
+		at := now
+		if z := reZone.FindStringSubmatch(output); z != nil {
+			if loc, err := time.LoadLocation(z[1]); err == nil {
+				at = now.In(loc)
+			}
+		}
+		if t, ok := parseClock(m[1], m[2], m[3], at); ok {
 			return t
 		}
 	}
@@ -87,6 +104,8 @@ func parseRelative(s string) time.Duration {
 			continue
 		}
 		switch unit := strings.ToLower(part[2]); {
+		case strings.HasPrefix(unit, "d"):
+			total += time.Duration(n) * 24 * time.Hour
 		case strings.HasPrefix(unit, "h"):
 			total += time.Duration(n) * time.Hour
 		case strings.HasPrefix(unit, "m"):

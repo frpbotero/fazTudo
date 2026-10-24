@@ -28,6 +28,9 @@ const (
 )
 
 const (
+	// maxQuotaNoticeLen bounds a "successful" output still treated as a quota notice.
+	maxQuotaNoticeLen = 400
+
 	installCheckTTL = 30 * time.Second
 	catalogTTL      = time.Minute
 )
@@ -406,6 +409,12 @@ func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response
 
 		start := time.Now()
 		out, err := runner.Run(ctx, inv)
+		if err == nil && !dry && len(out) <= maxQuotaNoticeLen {
+			// Some CLIs print the limit notice and still exit 0.
+			if ParseQuotaError(p.cli.Name, out, r.now()) != nil {
+				err = errors.New("limite de uso atingido")
+			}
+		}
 		if err == nil {
 			return &Response{
 				Output:    out,
