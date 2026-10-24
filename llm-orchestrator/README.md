@@ -100,6 +100,12 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
 Configurados por repositório em **Portões de qualidade** (card do repositório) e salvos com o resto
 da configuração.
 
+**Desenvolvimento paralelo ou sequencial** (campo *Desenvolvimento* nas mesmas configurações, por
+repositório). *Paralelo* (padrão): US independentes e frentes independentes de cada US rodam juntas em
+worktrees. *Sequencial*: sem análise de dependências; uma US de cada vez, na ordem do documento, e
+os agentes de cada US um após o outro. Nos dois modos cada US/onda é mergeada na branch base antes da
+seguinte.
+
 - **Verificação executável** — depois da implementação (e após cada rodada de correção pedida por
   segurança, review ou E2E, antes de chamar o revisor de novo; sem etapa extra), o próprio
   orquestrador roda os comandos do projeto (detectados em `package.json`, `go.mod`, `pyproject.toml`…

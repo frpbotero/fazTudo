@@ -61,7 +61,7 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qGit: $('qGit'), qualityError: $('qualityError'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qGit: $('qGit'), qualityError: $('qualityError'),
     branches: $('branches'), branchesRefreshBtn: $('branchesRefreshBtn'),
     diffDialog: $('diffDialog'), diffTitle: $('diffTitle'), diffMeta: $('diffMeta'), diffBody: $('diffBody'),
     toasts: $('toasts'),
@@ -531,6 +531,7 @@ Critérios de aceitação:
         <dt>Protegidos</dt><dd class="wrap">${protectedList || '<span class="note">nenhum</span>'}</dd>
         <dt>Linhas</dt><dd>até ${esc(p.max_line_length)} caracteres</dd>
         <dt>Git</dt><dd>${p.git ? 'branch por US, commit por etapa' : 'desativado'}</dd>
+        <dt>Desenvolvimento</dt><dd>${p.sequential ? 'sequencial: uma US de cada vez' : 'paralelo: US e frentes independentes juntas'}</dd>
         <dt>Candidatos</dt><dd>${p.candidates > 1 ? `best-of-${esc(p.candidates)}` : '1 por implementação'}</dd>
       </dl>`;
   }
@@ -556,6 +557,7 @@ Critérios de aceitação:
     el.qMaxLine.value = p.max_line_length;
     el.qTimeout.value = p.check_timeout_s;
     el.qCandidates.value = String(p.candidates || 1);
+    el.qMode.value = p.sequential ? 'sequential' : 'parallel';
     el.qGit.checked = p.git;
     syncQualityForm();
     el.qualityDialog.showModal();
@@ -576,6 +578,7 @@ Critérios de aceitação:
       max_line_length: Number(el.qMaxLine.value) || 0,
       check_timeout_s: Number(el.qTimeout.value) || 0,
       candidates: Number(el.qCandidates.value) || 1,
+      sequential: el.qMode.value === 'sequential',
       base_branches: snapshot?.workspace?.policy?.base_branches,
     };
     try {

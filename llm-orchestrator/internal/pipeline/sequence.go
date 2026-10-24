@@ -200,10 +200,12 @@ func sequentialWaves(n int) [][]int {
 // repository without git isolation, or an analysis without a readable answer
 // keeps the document order.
 func (o *Orchestrator) analyzeSequence(ctx context.Context, ss *session, opts StartOptions) ([][]int, bool) {
-	if len(opts.Stories) > 1 && !canIsolate(ss) && !ss.dry {
+	if len(opts.Stories) > 1 && ss.policy.Sequential {
+		o.logf(LevelInfo, "Desenvolvimento sequencial: as US seguem a ordem do documento, uma de cada vez.")
+	} else if len(opts.Stories) > 1 && !canIsolate(ss) && !ss.dry {
 		o.logf(LevelInfo, "Sem git, as US não rodam em paralelo; seguem a ordem do documento.")
 	}
-	if len(opts.Stories) < 2 || (!canIsolate(ss) && !ss.dry) {
+	if len(opts.Stories) < 2 || ss.policy.Sequential || (!canIsolate(ss) && !ss.dry) {
 		o.setWaves(sequentialWaves(len(opts.Stories)), nil, nil)
 		return sequentialWaves(len(opts.Stories)), true
 	}

@@ -377,6 +377,13 @@
           <input type="number" id="qTimeout" min="10" max="3600" step="10">
         </div>
         <div class="field">
+          <label for="qMode">Desenvolvimento</label>
+          <select id="qMode">
+            <option value="parallel">Paralelo (padrão)</option>
+            <option value="sequential">Sequencial</option>
+          </select>
+        </div>
+        <div class="field">
           <label for="qCandidates">Candidatos por implementação</label>
           <select id="qCandidates">
             <option value="1">1 (padrão)</option>
@@ -385,6 +392,7 @@
           </select>
         </div>
       </div>
+      <p class="note">Paralelo: as US independentes (análise de dependências) e as frentes independentes de cada US rodam ao mesmo tempo, em worktrees git separados, e cada onda é mergeada na branch base antes da seguinte. Sequencial: uma US de cada vez, na ordem do documento, e os agentes de cada US um após o outro; gasta menos de uma vez e evita conflitos, mas demora mais.</p>
       <p class="note">Com 2 ou 3 candidatos, cada implementador gera alternativas em paralelo (worktrees git separados); a que passa nas verificações vence e um seletor desempata. Multiplica o consumo de tokens. Requer git.</p>
 
       <label class="check"><input type="checkbox" id="qGit"> Versionar com git: uma branch por US e um commit por etapa (repositórios sem git são inicializados)</label>

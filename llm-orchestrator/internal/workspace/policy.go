@@ -29,6 +29,10 @@ type Policy struct {
 	// Candidates is how many alternative implementations each implementer
 	// produces (best-of-N, in separate git worktrees); 1 disables it.
 	Candidates int `json:"candidates"`
+	// Sequential develops one story at a time and the implementers of a story
+	// one after the other; the default (false) runs independent stories and
+	// independent fronts in parallel.
+	Sequential bool `json:"sequential"`
 	// BaseBranches is the development branch each run starts from, per
 	// repository: "." for the repository itself, or a nested repository's
 	// path. A repository without one starts from its current branch.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -374,5 +375,47 @@ func TestSequentialStoriesAreMergedIntoTheBaseOneByOne(t *testing.T) {
 	}
 	if !baseHas(t, repo, base, "dois.txt") || gitOut(t, repo, "branch", "--show-current") != base {
 		t.Error("the last story must be merged and the repository left on the base")
+	}
+}
+
+func TestSequentialPolicyRunsOneStoryAtATimeWithoutAnalysis(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{AnalysisStage.Role: {independentPair}}}
+	o, repo := newParallelStoryTest(t, exec)
+	policy := o.ws.Policy()
+	policy.Sequential = true
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	base := initRepo(t, repo)
+	var running, overlapped int32
+	exec.onCall = func(req provider.Request) {
+		if req.Role != "ra" {
+			return
+		}
+		if atomic.AddInt32(&running, 1) > 1 {
+			atomic.StoreInt32(&overlapped, 1)
+		}
+		time.Sleep(30 * time.Millisecond)
+		atomic.AddInt32(&running, -1)
+		if m := storyMarker(req.Prompt); m != "" {
+			writeFile(t, repo, m+".txt", m+"\n")
+		}
+	}
+	_ = o.Start(twoIndependent())
+	run := waitDone(t, o)
+	if run.Result != ResultSucceeded {
+		t.Fatalf("result = %s, logs: %+v", run.Result, run.Logs)
+	}
+	if exec.count(AnalysisStage.Role) != 0 {
+		t.Error("sequential development needs no dependency analysis")
+	}
+	if overlapped == 1 {
+		t.Error("stories overlapped in sequential mode")
+	}
+	if got := fmt.Sprint(run.Waves); got != "[[0] [1]]" || len(run.Integrations) != 0 {
+		t.Errorf("waves = %s, integrations = %v", got, run.Integrations)
+	}
+	if !baseHas(t, repo, base, "um.txt") || !baseHas(t, repo, base, "dois.txt") {
+		t.Error("each story must still be merged into the base")
 	}
 }

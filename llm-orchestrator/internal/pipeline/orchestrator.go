@@ -815,7 +815,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			continue // already marked as omitted when the plan was applied
 		}
 		ref := stepRef{st.si, stage.ID}
-		if waves := st.plan.parallelWaves(); stage.Implementer && waves != nil {
+		if waves := st.plan.parallelWaves(); stage.Implementer && waves != nil && !ss.policy.Sequential {
 			// The first implementer runs every front; the others are covered.
 			if !streamed && !o.runStreams(ctx, ss, st, ref, waves) {
 				return false

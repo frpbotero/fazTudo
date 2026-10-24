@@ -249,3 +249,24 @@ func waitTimeout(wg *sync.WaitGroup, d time.Duration) bool {
 		return false
 	}
 }
+
+func TestSequentialPolicyDropsParallelFronts(t *testing.T) {
+	exec := &fakeExecutor{}
+	o, _ := newStreamTest(t, exec, true)
+	policy := o.ws.Policy()
+	policy.Sequential = true
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	_ = o.Start(realStory("x"))
+	run := waitDone(t, o)
+	if run.Result != ResultSucceeded {
+		t.Fatalf("result = %s, logs: %+v", run.Result, run.Logs)
+	}
+	if exec.count("fe · Tela") != 0 || exec.count("be · API") != 0 {
+		t.Errorf("sequential development must not split the plan into fronts: %v", exec.roles)
+	}
+	if exec.count("fe") != 1 || exec.count("be") != 1 {
+		t.Errorf("the implementers run as regular stages, one after the other: %v", exec.roles)
+	}
+}

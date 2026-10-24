@@ -164,3 +164,17 @@ func TestPolicyBaseBranches(t *testing.T) {
 		t.Errorf("empty choices must clear the map: %v", p.BaseBranches)
 	}
 }
+
+func TestPolicyDefaultsToParallelAndKeepsSequential(t *testing.T) {
+	if DefaultPolicy().Sequential {
+		t.Error("parallel is the default")
+	}
+	repo := t.TempDir()
+	m, _ := NewManager(repo)
+	p := m.Policy()
+	p.Sequential = true
+	saved, err := m.SetPolicy(p)
+	if err != nil || !saved.Sequential || !m.Policy().Sequential {
+		t.Fatalf("sequential not kept: %+v %v", saved, err)
+	}
+}
