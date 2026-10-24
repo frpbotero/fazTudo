@@ -214,7 +214,7 @@ func (o *Orchestrator) runStreams(ctx context.Context, ss *session, st *storySta
 }
 
 func canIsolate(ss *session) bool {
-	return ss.git != nil && len(ss.git.Nested()) == 0 && !ss.dry
+	return ss.git != nil && !ss.dry
 }
 
 func streamModeLabel(ss *session) string {
@@ -224,7 +224,7 @@ func streamModeLabel(ss *session) string {
 	case ss.dry:
 		return "simulação com frentes em paralelo"
 	}
-	return "sem git isolável (desativado ou com repositórios aninhados), frentes em sequência"
+	return "sem git (desativado), frentes em sequência"
 }
 
 func (o *Orchestrator) insertStreamSteps(si int, beforeID string, waves [][]Stream) {
@@ -401,7 +401,7 @@ func (o *Orchestrator) addWorktrees(ctx context.Context, ss *session, jobs []str
 		jobs[i].req.WorkDir = jobs[i].work
 		// The prompt names the directory the agent works in, never the repository.
 		jobs[i].req.Prompt = strings.Replace(jobs[i].req.Prompt, "`"+ss.repo+"`", "`"+jobs[i].work+"`", 1)
-		linkDependencies(ss.repo, jobs[i].work)
+		linkDependencies(ss.repo, jobs[i].work, ss.git.Nested())
 	}
 	return cleanup, nil
 }
@@ -445,14 +445,15 @@ func (o *Orchestrator) executeWave(ctx context.Context, jobs []streamJob) bool {
 }
 
 // mergeStream commits a front's worktree and merges it into the story branch.
-// A front that conflicts with the fronts merged before it is redone in the
-// repository, on top of their combined result.
+// A front that cannot be committed, or that conflicts with the fronts merged
+// before it, is redone in the repository, on top of their combined result.
 func (o *Orchestrator) mergeStream(ctx context.Context, ss *session, st *storyState, job streamJob, prefix string) bool {
 	msg := fmt.Sprintf("faztudo(%s): frente %s", storyLabel(st.sc.Story), job.stream.Title)
-	commit, err := vcs.At(job.work).CommitAll(ctx, msg, dependencyDirs...)
+	work := vcs.At(job.work)
+	commit, err := work.CommitAll(ctx, msg, dependencyPaths(work.Nested())...)
 	if err != nil {
-		o.failStep(job.ref, 0, fmt.Errorf("commit da frente: %w", err))
-		return false
+		o.logf(LevelWarn, "Commit da frente \"%s\" falhou (%v); refazendo no repositório da US.", job.stream.Title, err)
+		return o.redoStream(ctx, ss, st, job, "")
 	}
 	if commit == nil {
 		return true
@@ -463,7 +464,7 @@ func (o *Orchestrator) mergeStream(ctx context.Context, ss *session, st *storySt
 	}
 	if err := ss.git.Merge(ctx, commit.Hash, msg); err != nil {
 		o.logf(LevelWarn, "Frente \"%s\" conflita com outra frente (%v); refazendo sobre o resultado integrado.", job.stream.Title, err)
-		return o.redoStream(ctx, ss, st, job)
+		return o.redoStream(ctx, ss, st, job, conflictNote)
 	}
 	o.updateStep(job.ref, func(s *Step) { s.Commit = commit })
 	o.logf(LevelInfo, "Commit %s: frente \"%s\" integrada (%d arquivo(s)).", commit.Hash, job.stream.Title, len(commit.Files))
@@ -482,9 +483,9 @@ func protectedChange(c *vcs.Commit, prefix string, protected []string) string {
 const conflictNote = "\n\n[CONFLITO] Sua implementação anterior desta frente conflitou com outra frente paralela já integrada. " +
 	"Refaça a frente sobre o código atual, preservando o que as outras frentes entregaram."
 
-func (o *Orchestrator) redoStream(ctx context.Context, ss *session, st *storyState, job streamJob) bool {
+func (o *Orchestrator) redoStream(ctx context.Context, ss *session, st *storyState, job streamJob, note string) bool {
 	job.req.WorkDir = ss.repo
-	job.req.Prompt += conflictNote
+	job.req.Prompt = strings.Replace(job.req.Prompt, "`"+job.work+"`", "`"+ss.repo+"`", 1) + note
 	_, ok := o.runStage(ctx, job.ref, job.req)
 	return ok && o.afterAgent(ctx, ss, st, job.ref)
 }

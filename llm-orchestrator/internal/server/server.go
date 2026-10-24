@@ -114,6 +114,7 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("PUT /api/workspace", s.handlePutWorkspace)
 	mux.HandleFunc("DELETE /api/workspace/discovery", s.handleResetDiscovery)
 	mux.HandleFunc("PUT /api/workspace/policy", s.handlePutPolicy)
+	mux.HandleFunc("GET /api/workspace/repos", s.handleListRepos)
 	mux.HandleFunc("GET /api/git/commits/{hash}", s.handleShowCommit)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", s.handlePutConfig)
@@ -419,6 +420,27 @@ func (s *Server) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 	s.persist()
 	s.hub.Notify()
 	writeJSON(w, http.StatusOK, s.ws.State())
+}
+
+// handleListRepos lists the repository and its nested repositories with
+// their branches, to choose each one's base branch.
+func (s *Server) handleListRepos(w http.ResponseWriter, r *http.Request) {
+	repo := s.ws.Path()
+	if repo == "" {
+		writeError(w, http.StatusUnprocessableEntity, workspace.ErrNotConfigured.Error())
+		return
+	}
+	g, err := vcs.Find(r.Context(), repo)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []vcs.RepoBranches{})
+		return
+	}
+	repos, err := g.AllBranches(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, repos)
 }
 
 // handleShowCommit returns a commit made by the pipeline in the current

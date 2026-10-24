@@ -118,7 +118,7 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 		}
 		c := &candidate{Candidate: Candidate{ID: string(letters[i]), Strategy: candidateStrategies[i]}, dir: dir, work: filepath.Join(dir, prefix)}
 		cands[i] = c
-		linkDependencies(ss.repo, c.work)
+		linkDependencies(ss.repo, c.work, ss.git.Nested())
 	}
 
 	prompt := buildPrompt(stage, st.sc, ss.report, o.stepsBefore(ref))
@@ -153,7 +153,8 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 			c.Note = "falhou: " + errs[i].Error()
 			continue
 		}
-		commit, err := vcs.At(c.work).CommitAll(ctx, fmt.Sprintf("faztudo(%s): %s — candidato %s", storyLabel(st.sc.Story), stage.Title, c.ID), dependencyDirs...)
+		work := vcs.At(c.work)
+		commit, err := work.CommitAll(ctx, fmt.Sprintf("faztudo(%s): %s — candidato %s", storyLabel(st.sc.Story), stage.Title, c.ID), dependencyPaths(work.Nested())...)
 		switch {
 		case err != nil:
 			c.Note = "commit falhou: " + err.Error()
@@ -296,10 +297,22 @@ func filesOf(c *vcs.Commit) []vcs.FileChange {
 	return c.Files
 }
 
+// dependencyPaths lists the dependency directories of a repository and of its
+// nested repositories, relative to it.
+func dependencyPaths(nested []string) []string {
+	paths := slices.Clone(dependencyDirs)
+	for _, n := range nested {
+		for _, name := range dependencyDirs {
+			paths = append(paths, n+"/"+name)
+		}
+	}
+	return paths
+}
+
 // linkDependencies symlinks installed dependencies from the repository into a
 // worktree, where ignored directories do not exist.
-func linkDependencies(repo, work string) {
-	for _, name := range dependencyDirs {
+func linkDependencies(repo, work string, nested []string) {
+	for _, name := range dependencyPaths(nested) {
 		src := filepath.Join(repo, name)
 		if _, err := os.Stat(src); err != nil {
 			continue

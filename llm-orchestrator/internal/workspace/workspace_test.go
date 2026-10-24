@@ -108,3 +108,25 @@ func TestReadInstructions(t *testing.T) {
 		t.Fatalf("instructions = %q", got)
 	}
 }
+
+func TestPolicyBaseBranches(t *testing.T) {
+	p := DefaultPolicy()
+	p.BaseBranches = map[string]string{".": " develop ", "api": "", " front ": "release/2.0"}
+	p = p.Normalize()
+	if len(p.BaseBranches) != 2 || p.BaseBranches["."] != "develop" || p.BaseBranches["front"] != "release/2.0" {
+		t.Fatalf("normalized = %v", p.BaseBranches)
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"-f", "dev elop", "a..b:c", "x\ny"} {
+		p.BaseBranches = map[string]string{".": bad}
+		if p.Validate() == nil {
+			t.Errorf("%q must be rejected", bad)
+		}
+	}
+	p.BaseBranches = map[string]string{"api": ""}
+	if p = p.Normalize(); p.BaseBranches != nil {
+		t.Errorf("empty choices must clear the map: %v", p.BaseBranches)
+	}
+}

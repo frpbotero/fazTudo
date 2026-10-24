@@ -62,6 +62,7 @@ Critérios de aceitação:
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
     qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qGit: $('qGit'), qualityError: $('qualityError'),
+    branches: $('branches'), branchesRefreshBtn: $('branchesRefreshBtn'),
     diffDialog: $('diffDialog'), diffTitle: $('diffTitle'), diffMeta: $('diffMeta'), diffBody: $('diffBody'),
     toasts: $('toasts'),
   };
@@ -558,6 +559,7 @@ Critérios de aceitação:
       max_line_length: Number(el.qMaxLine.value) || 0,
       check_timeout_s: Number(el.qTimeout.value) || 0,
       candidates: Number(el.qCandidates.value) || 1,
+      base_branches: snapshot?.workspace?.policy?.base_branches,
     };
     try {
       await api('PUT', '/api/workspace/policy', policy);
@@ -566,6 +568,75 @@ Critérios de aceitação:
     } catch (err) {
       el.qualityError.textContent = err.message;
       el.qualityError.hidden = false;
+    }
+  });
+
+  // ---------- base branches ----------
+  let repos = null; // the repository and its nested ones, with their branches
+  let reposPath = null; // repository they were listed for
+  let branchesKey = '';
+
+  async function loadRepos() {
+    reposPath = snapshot?.workspace?.path || null;
+    repos = null;
+    if (reposPath) {
+      try {
+        repos = await api('GET', '/api/workspace/repos');
+      } catch (err) {
+        repos = { error: err.message };
+      }
+    }
+    renderBranches(snapshot?.workspace || {});
+  }
+
+  function branchOptions(repo, base) {
+    const names = repo.branches || [];
+    const options = [`<option value="">Atual (${esc(repo.current || 'sem branch')})</option>`];
+    if (base && !names.includes(base)) options.push(`<option value="${esc(base)}" selected>${esc(base)} (não encontrada)</option>`);
+    for (const b of names) options.push(`<option value="${esc(b)}"${b === base ? ' selected' : ''}>${esc(b)}</option>`);
+    return options.join('');
+  }
+
+  function branchesHTML(ws) {
+    if (!ws.path) return '<p class="note">Configure o repositório para escolher a branch base.</p>';
+    if (!repos) return '<p class="note">Carregando…</p>';
+    if (repos.error) return `<p class="note" data-tone="warn">${esc(repos.error)}</p>`;
+    if (!repos.length) return '<p class="note">O repositório ainda não usa git; a primeira execução o inicializa.</p>';
+    const bases = ws.policy?.base_branches || {};
+    const rows = repos.map((r) => `
+      <dt><label for="base-${esc(r.path)}">${esc(r.path === '.' ? '(raiz)' : `${r.path}/`)}</label></dt>
+      <dd><select id="base-${esc(r.path)}" data-repo="${esc(r.path)}">${branchOptions(r, bases[r.path])}</select></dd>`).join('');
+    const note = ws.policy?.git
+      ? 'Cada execução nova parte dessas branches; as branches faztudo/ saem delas.'
+      : 'Git desativado nos portões de qualidade: a branch base não é usada.';
+    return `<dl class="kv">${rows}</dl><p class="note">${note}</p>`;
+  }
+
+  function renderBranches(ws) {
+    if ((ws.path || null) !== reposPath) {
+      loadRepos();
+      return;
+    }
+    // Snapshots arrive continuously; redraw only on change so an open select stays open.
+    const html = branchesHTML(ws);
+    if (html === branchesKey) return;
+    branchesKey = html;
+    el.branches.innerHTML = html;
+  }
+
+  el.branchesRefreshBtn.addEventListener('click', loadRepos);
+  el.branches.addEventListener('change', async (e) => {
+    const select = e.target.closest('select[data-repo]');
+    const policy = snapshot?.workspace?.policy;
+    if (!select || !policy) return;
+    const bases = { ...policy.base_branches, [select.dataset.repo]: select.value };
+    try {
+      await api('PUT', '/api/workspace/policy', { ...policy, base_branches: bases });
+      toast('Branch base salva.', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+      branchesKey = '';
+      renderBranches(snapshot.workspace);
     }
   });
 
@@ -1507,6 +1578,7 @@ Critérios de aceitação:
     }
     renderWorkspace(data.workspace || {});
     renderQuality(data.workspace || {});
+    renderBranches(data.workspace || {});
     renderProviders(data.providers);
     renderProviderPicker(data);
     renderPersistInfo(data.settings);
@@ -1598,6 +1670,7 @@ Critérios de aceitação:
     document.title = `${VIEWS[name]} · FazTudo`;
     setMenu(false);
     if (name === 'logs' && el.autoScroll.checked) el.log.scrollTop = el.log.scrollHeight;
+    if (name === 'repositorio') loadRepos();
   }
   function setMenu(open) {
     el.sidebar.toggleAttribute('data-open', open);

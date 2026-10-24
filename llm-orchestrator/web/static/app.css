@@ -493,6 +493,9 @@ details > .step-row:hover { background: var(--raised); }
 .stack-group { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr); gap: 12px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--rule); }
 .stack-dir { font: var(--fs-small) var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quality { font-size: 13px; }
+.branches { display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+.branches .kv dt { display: flex; align-items: center; overflow-wrap: anywhere; }
+.branches select { width: 100%; }
 .kv { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 0 16px; margin: 0; }
 .kv dt, .kv dd { padding: 8px 0; border-top: 1px solid var(--rule); }
 .kv dt:first-of-type, .kv dt:first-of-type + dd { border-top: 0; }

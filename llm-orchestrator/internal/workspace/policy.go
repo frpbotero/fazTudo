@@ -29,6 +29,10 @@ type Policy struct {
 	// Candidates is how many alternative implementations each implementer
 	// produces (best-of-N, in separate git worktrees); 1 disables it.
 	Candidates int `json:"candidates"`
+	// BaseBranches is the development branch each run starts from, per
+	// repository: "." for the repository itself, or a nested repository's
+	// path. A repository without one starts from its current branch.
+	BaseBranches map[string]string `json:"base_branches,omitempty"`
 }
 
 const (
@@ -40,6 +44,7 @@ const (
 	minCheckTimeout = 10
 	maxCheckTimeout = 3600
 	maxCandidates   = 3
+	maxBranchLen    = 200
 )
 
 // DefaultPolicy is used for repositories without saved settings.
@@ -86,6 +91,16 @@ func (p Policy) Normalize() Policy {
 		}
 	}
 	p.Protected = patterns
+	bases := map[string]string{}
+	for repo, branch := range p.BaseBranches {
+		if repo, branch = strings.TrimSpace(repo), strings.TrimSpace(branch); repo != "" && branch != "" {
+			bases[repo] = branch
+		}
+	}
+	p.BaseBranches = bases
+	if len(bases) == 0 {
+		p.BaseBranches = nil
+	}
 	return p
 }
 
@@ -104,6 +119,14 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("o número de candidatos deve estar entre 1 e %d", maxCandidates)
 	case !p.AutoChecks && len(p.Checks) == 0:
 		return errors.New("informe ao menos um comando ou use os detectados automaticamente")
+	}
+	if len(p.BaseBranches) > maxPatterns {
+		return fmt.Errorf("no máximo %d branches base", maxPatterns)
+	}
+	for repo, branch := range p.BaseBranches {
+		if len(branch) > maxBranchLen || len(repo) > maxBranchLen || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, " \t\n\r~^:?*[\\") {
+			return fmt.Errorf("branch base inválida para %s: %q", repo, branch)
+		}
 	}
 	for _, c := range p.Checks {
 		if len(c.Run) > maxCommandLen || len(c.Name) > 120 {

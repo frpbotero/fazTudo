@@ -196,10 +196,14 @@ func sequentialWaves(n int) [][]int {
 	return waves
 }
 
-// analyzeSequence decides which stories run in parallel. A single story, or
-// an analysis without a readable answer, keeps the document order.
+// analyzeSequence decides which stories run in parallel. A single story, a
+// repository without git isolation, or an analysis without a readable answer
+// keeps the document order.
 func (o *Orchestrator) analyzeSequence(ctx context.Context, ss *session, opts StartOptions) ([][]int, bool) {
-	if len(opts.Stories) < 2 {
+	if len(opts.Stories) > 1 && !canIsolate(ss) && !ss.dry {
+		o.logf(LevelInfo, "Sem git, as US não rodam em paralelo; seguem a ordem do documento.")
+	}
+	if len(opts.Stories) < 2 || (!canIsolate(ss) && !ss.dry) {
 		o.setWaves(sequentialWaves(len(opts.Stories)), nil, nil)
 		return sequentialWaves(len(opts.Stories)), true
 	}
@@ -419,12 +423,13 @@ func (o *Orchestrator) openLanes(ctx context.Context, ss *session, opts StartOpt
 	var lanes []*storyLane
 	tmp := ""
 	cleanup := func() {
+		kept := false
 		for _, l := range lanes {
-			if l.dir != "" {
-				o.closeLane(ctx, ss, l)
+			if l.dir != "" && !o.closeLane(ctx, ss, l) {
+				kept = true
 			}
 		}
-		if tmp != "" {
+		if tmp != "" && !kept {
 			os.RemoveAll(tmp)
 		}
 	}
@@ -480,7 +485,7 @@ func (o *Orchestrator) isolateLane(ctx context.Context, ss *session, lane *story
 		return fmt.Errorf("worktree de %s: %w", storyLabel(setup.story), err)
 	}
 	work := filepath.Join(setup.dir, setup.prefix)
-	linkDependencies(ss.repo, work)
+	linkDependencies(ss.repo, work, ss.git.Nested())
 	lane.dir, lane.ss = setup.dir, ss.inWorktree(work)
 	o.updateStory(setup.si, func(r *StoryRun) { r.Branch = branch })
 	o.logf(LevelInfo, "Branch %s em worktree própria para %s.", branch, setup.story.Title)
@@ -494,14 +499,19 @@ func (o *Orchestrator) storyBranch(si int) string {
 }
 
 // closeLane commits what an interrupted story left in its worktree, so a
-// retry resumes from it, and removes the worktree; the branch stays.
-func (o *Orchestrator) closeLane(ctx context.Context, ss *session, l *storyLane) {
+// retry resumes from it, and removes the worktree; the branch stays. When the
+// commit fails the worktree is kept, so the work is not lost; it reports
+// whether the worktree was removed.
+func (o *Orchestrator) closeLane(ctx context.Context, ss *session, l *storyLane) bool {
 	ctx = context.WithoutCancel(ctx)
 	msg := fmt.Sprintf("faztudo(%s): salva trabalho interrompido", storyLabel(l.st.sc.Story))
-	if _, err := l.ss.git.CommitAll(ctx, msg, dependencyDirs...); err != nil {
-		o.logf(LevelWarn, "Não foi possível salvar o trabalho pendente de %s: %v.", l.st.sc.Story.Title, err)
+	if _, err := l.ss.git.CommitAll(ctx, msg, dependencyPaths(l.ss.git.Nested())...); err != nil {
+		o.logf(LevelWarn, "Não foi possível salvar o trabalho pendente de %s (%v); a worktree %s foi mantida para recuperação manual.",
+			l.st.sc.Story.Title, err, l.dir)
+		return false
 	}
 	_ = ss.git.RemoveWorktree(ctx, l.dir)
+	return true
 }
 
 // inWorktree is the session of a story developed in the worktree work.

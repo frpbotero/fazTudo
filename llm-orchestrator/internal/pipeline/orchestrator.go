@@ -503,8 +503,8 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 		return
 	}
 	ss.report = report
-	if ss.policy.Candidates > 1 && !ss.dry && (ss.git == nil || len(ss.git.Nested()) > 0) {
-		o.logf(LevelWarn, "Best-of-N precisa de git sem repositórios aninhados; cada implementador fará uma única implementação.")
+	if ss.policy.Candidates > 1 && !ss.dry && ss.git == nil {
+		o.logf(LevelWarn, "Best-of-N precisa de git; cada implementador fará uma única implementação.")
 	}
 
 	waves, ok := o.analyzeSequence(ctx, ss, opts)
@@ -676,19 +676,31 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 		o.finish(ResultFailed, LevelError, err.Error())
 		return nil, false
 	}
+	if len(policy.BaseBranches) > 0 {
+		if err := g.SwitchBranches(ctx, policy.BaseBranches); err != nil {
+			o.abortRemaining(-1, StepCanceled)
+			o.finish(ResultFailed, LevelError, fmt.Sprintf("Não foi possível trocar para a branch base: %v.", err))
+			return nil, false
+		}
+		o.logf(LevelInfo, "Branch base: %s.", baseLabels(ctx, g))
+	}
 	if nested := g.Nested(); len(nested) > 0 {
 		o.logf(LevelInfo, "Repositórios aninhados versionados junto: %s.", strings.Join(nested, ", "))
-		if c, err := g.SyncNested(ctx); err != nil {
-			o.logf(LevelWarn, "Não foi possível registrar os commits dos repositórios aninhados: %v.", err)
-		} else if c != nil {
-			o.logf(LevelInfo, "Commit %s: commits feitos dentro dos repositórios aninhados registrados no repositório principal.", c.Hash)
-		}
 	}
 	ss.git = g
 	o.mu.Lock()
 	o.run.BaseBranch = g.Branch(ctx)
 	o.mu.Unlock()
 	return ss, true
+}
+
+// baseLabels names the branch each repository starts from.
+func baseLabels(ctx context.Context, g *vcs.Repo) string {
+	labels := []string{"repositório principal em " + g.Branch(ctx)}
+	for _, n := range g.Nested() {
+		labels = append(labels, n+" em "+vcs.At(g.Path(n)).Branch(ctx))
+	}
+	return strings.Join(labels, ", ")
 }
 
 func dirtyLabels(paths []string) []string {
@@ -740,7 +752,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		switch {
 		case len(lenses) > 1:
 			resp, ok = o.runLenses(ctx, ss, st, stage, lenses, ref)
-		case stage.Implementer && ss.policy.Candidates > 1 && ss.git != nil && len(ss.git.Nested()) == 0 && !ss.dry:
+		case stage.Implementer && ss.policy.Candidates > 1 && canIsolate(ss):
 			resp, ok = o.runCandidates(ctx, ss, st, stage, ref)
 		default:
 			resp, ok = o.runStage(ctx, ref, provider.Request{
@@ -873,7 +885,7 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 		return true
 	}
 	title := o.stepTitle(ref)
-	c, err := ss.git.CommitAll(ctx, fmt.Sprintf("faztudo(%s): %s", storyLabel(st.sc.Story), title))
+	c, err := ss.git.CommitAll(ctx, fmt.Sprintf("faztudo(%s): %s", storyLabel(st.sc.Story), title), dependencyPaths(ss.git.Nested())...)
 	switch {
 	case err != nil:
 		o.logf(LevelWarn, "Commit de \"%s\" falhou: %v.", title, err)

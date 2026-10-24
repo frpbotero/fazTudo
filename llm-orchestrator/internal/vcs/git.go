@@ -130,6 +130,9 @@ func (r *Repo) Nested() []string { return r.nested }
 
 func (r *Repo) sub(path string) *Repo { return &Repo{dir: filepath.Join(r.dir, path)} }
 
+// Path is the directory of the nested repository n.
+func (r *Repo) Path(n string) string { return filepath.Join(r.dir, n) }
+
 // Dirty reports whether tracked files under the directory have changes.
 func (r *Repo) Dirty(ctx context.Context) (bool, error) {
 	paths, err := r.DirtyPaths(ctx)
@@ -217,14 +220,98 @@ func (r *Repo) Branch(ctx context.Context) string {
 }
 
 // CreateBranch creates and switches to a new branch from HEAD, in the
-// nested repositories too.
+// nested repositories too. The new branch then records the nested
+// repositories' current commits, so the user's branch is never committed to.
 func (r *Repo) CreateBranch(ctx context.Context, name string) error {
 	for _, n := range r.nested {
 		if _, err := r.sub(n).git(ctx, "switch", "-q", "-c", name); err != nil {
 			return fmt.Errorf("%s: %w", n, err)
 		}
 	}
-	_, err := r.git(ctx, "switch", "-q", "-c", name)
+	if _, err := r.git(ctx, "switch", "-q", "-c", name); err != nil {
+		return err
+	}
+	_, err := r.SyncNested(ctx)
+	return err
+}
+
+// RepoBranches lists a repository's branches; Path is "." for the directory
+// itself or a nested repository's path.
+type RepoBranches struct {
+	Path     string   `json:"path"`
+	Current  string   `json:"current"`
+	Branches []string `json:"branches"`
+}
+
+// AllBranches lists the branches of the directory's repository and of each
+// nested repository.
+func (r *Repo) AllBranches(ctx context.Context) ([]RepoBranches, error) {
+	var out []RepoBranches
+	for _, p := range append([]string{"."}, r.nested...) {
+		repo := r
+		if p != "." {
+			repo = r.sub(p)
+		}
+		branches, err := repo.Branches(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", p, err)
+		}
+		out = append(out, RepoBranches{Path: p, Current: repo.Branch(ctx), Branches: branches})
+	}
+	return out, nil
+}
+
+// Branches lists the local branches and the remote ones git switch can
+// create from, by name, leaving FazTudo's own branches out.
+func (r *Repo) Branches(ctx context.Context) ([]string, error) {
+	out, err := r.git(ctx, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes")
+	if err != nil {
+		return nil, err
+	}
+	var branches []string
+	for _, ref := range strings.Fields(out) {
+		name, local := strings.CutPrefix(ref, "refs/heads/")
+		if !local {
+			// refs/remotes/<remote>/<branch>
+			parts := strings.SplitN(strings.TrimPrefix(ref, "refs/remotes/"), "/", 2)
+			if len(parts) < 2 || parts[1] == "HEAD" {
+				continue
+			}
+			name = parts[1]
+		}
+		if !strings.HasPrefix(name, BranchPrefix) && !slices.Contains(branches, name) {
+			branches = append(branches, name)
+		}
+	}
+	slices.Sort(branches)
+	return branches, nil
+}
+
+// SwitchBranches checks out each repository's base branch, keyed as in
+// AllBranches; repositories without one stay where they are. A remote branch
+// without a local copy is created tracking it.
+func (r *Repo) SwitchBranches(ctx context.Context, bases map[string]string) error {
+	if err := r.switchTo(ctx, bases["."]); err != nil {
+		return err
+	}
+	// The parent's branch decides which nested repositories exist.
+	r.nested = r.findNested(ctx)
+	for _, n := range r.nested {
+		if err := r.sub(n).switchTo(ctx, bases[n]); err != nil {
+			return fmt.Errorf("%s: %w", n, err)
+		}
+	}
+	return nil
+}
+
+func (r *Repo) switchTo(ctx context.Context, branch string) error {
+	if branch == "" || r.Branch(ctx) == branch {
+		return nil
+	}
+	if _, err := r.git(ctx, "check-ref-format", "--branch", branch); err != nil || strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("branch inválida: %q", branch)
+	}
+	_, err := r.git(ctx, "switch", "-q", branch)
 	return err
 }
 
@@ -247,7 +334,7 @@ func (r *Repo) CommitAll(ctx context.Context, msg string, exclude ...string) (*C
 			}
 		}
 	}
-	c, err := r.commit(ctx, msg, false, exclude...)
+	c, err := r.commit(ctx, msg, false, r.parentExcludes(exclude)...)
 	if err != nil || c == nil {
 		return c, err
 	}
@@ -266,6 +353,14 @@ func nestedExcludes(nested string, exclude []string) []string {
 		}
 	}
 	return out
+}
+
+// parentExcludes drops the excludes inside nested repositories: git rejects
+// a pathspec that reaches into one.
+func (r *Repo) parentExcludes(exclude []string) []string {
+	return slices.DeleteFunc(slices.Clone(exclude), func(e string) bool {
+		return slices.ContainsFunc(r.nested, func(n string) bool { return strings.HasPrefix(e, n+"/") })
+	})
 }
 
 // commitPaths commits only the given paths, when they changed.
@@ -293,7 +388,7 @@ func (r *Repo) commitPaths(ctx context.Context, msg string, paths []string) (*Co
 
 func (r *Repo) commit(ctx context.Context, msg string, allowEmpty bool, exclude ...string) (*Commit, error) {
 	spec := []string{"--", "."}
-	for _, e := range exclude {
+	for _, e := range r.unignored(ctx, exclude) {
 		spec = append(spec, ":(exclude)"+e)
 	}
 	if _, err := r.git(ctx, append([]string{"add", "-A"}, spec...)...); err != nil {
@@ -327,9 +422,25 @@ func (r *Repo) commit(ctx context.Context, msg string, allowEmpty bool, exclude 
 	return c, nil
 }
 
+// unignored drops the paths git already ignores: naming an ignored path in a
+// pathspec, even as an exclusion, makes git add fail.
+func (r *Repo) unignored(ctx context.Context, paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	// Exit status 1 means none is ignored.
+	out, _ := r.git(ctx, append([]string{"check-ignore", "--"}, paths...)...)
+	ignored := strings.Split(strings.TrimSpace(out), "\n")
+	return slices.DeleteFunc(slices.Clone(paths), func(p string) bool { return slices.Contains(ignored, p) })
+}
+
 // At returns a Repo for a directory already known to be inside a repository,
 // such as a worktree created by AddWorktree.
-func At(dir string) *Repo { return &Repo{dir: dir} }
+func At(dir string) *Repo {
+	r := &Repo{dir: dir}
+	r.nested = r.findNested(context.Background())
+	return r
+}
 
 // Head returns the full hash of HEAD.
 func (r *Repo) Head(ctx context.Context) (string, error) {
@@ -346,20 +457,70 @@ func (r *Repo) Prefix(ctx context.Context) (string, error) {
 
 // AddWorktree checks out HEAD, detached, in a new worktree at path.
 func (r *Repo) AddWorktree(ctx context.Context, path string) error {
-	_, err := r.git(ctx, "worktree", "add", "-q", "--detach", path, "HEAD")
+	if _, err := r.git(ctx, "worktree", "add", "-q", "--detach", path, "HEAD"); err != nil {
+		return err
+	}
+	return r.addNestedWorktrees(ctx, path, func(n *Repo, dir string) error {
+		_, err := n.git(ctx, "worktree", "add", "-q", "--detach", dir, "HEAD")
+		return err
+	})
+}
+
+// addNestedWorktrees gives each nested repository its own worktree at its
+// place inside the worktree at path, created by add. On failure the whole
+// worktree is removed.
+func (r *Repo) addNestedWorktrees(ctx context.Context, path string, add func(n *Repo, dir string) error) error {
+	if len(r.nested) == 0 {
+		return nil
+	}
+	prefix, err := r.Prefix(ctx)
+	if err == nil {
+		for _, n := range r.nested {
+			if err = add(r.sub(n), filepath.Join(path, prefix, n)); err != nil {
+				err = fmt.Errorf("%s: %w", n, err)
+				break
+			}
+		}
+	}
+	if err != nil {
+		_ = r.RemoveWorktree(context.WithoutCancel(ctx), path)
+	}
 	return err
 }
 
-// RemoveWorktree deletes a worktree created by AddWorktree.
+// RemoveWorktree deletes a worktree created by AddWorktree, with the worktrees
+// of its nested repositories.
 func (r *Repo) RemoveWorktree(ctx context.Context, path string) error {
+	if prefix, err := r.Prefix(ctx); err == nil {
+		for _, n := range r.nested {
+			_, _ = r.sub(n).git(ctx, "worktree", "remove", "--force", filepath.Join(path, prefix, n))
+		}
+	}
 	_, err := r.git(ctx, "worktree", "remove", "--force", path)
 	return err
 }
 
-// FastForward moves the current branch to hash, which must descend from HEAD.
+// FastForward moves the current branch to hash, which must descend from HEAD;
+// nested repositories move to the commits hash records for them.
 func (r *Repo) FastForward(ctx context.Context, hash string) error {
+	for _, n := range r.nested {
+		if target := r.gitlinkAt(ctx, hash, n); target != "" {
+			if _, err := r.sub(n).git(ctx, "merge", "-q", "--ff-only", target); err != nil {
+				return fmt.Errorf("%s: %w", n, err)
+			}
+		}
+	}
 	_, err := r.git(ctx, "merge", "-q", "--ff-only", hash)
 	return err
+}
+
+// gitlinkAt is the commit rev records for the nested repository n, or "".
+func (r *Repo) gitlinkAt(ctx context.Context, rev, n string) string {
+	out, err := r.git(ctx, "rev-parse", "-q", "--verify", rev+":./"+n)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }
 
 // Merge merges hash into the current branch, fast-forwarding when possible.
@@ -374,34 +535,130 @@ func (r *Repo) Merge(ctx context.Context, hash, msg string) error {
 }
 
 // StartMerge merges rev into the current branch. On conflict the merge is
-// left in progress and the conflicted paths are returned; any other failure
-// is aborted.
+// left in progress and the conflicted paths (relative to the repository
+// root) are returned; any other failure is aborted. Nested repositories merge
+// the commits rev records for them first.
 func (r *Repo) StartMerge(ctx context.Context, rev, msg string) ([]string, error) {
-	_, err := r.git(ctx, r.withIdentity(ctx, "merge", "-q", "--no-edit", "-m", msg, rev)...)
-	if err == nil {
-		return nil, nil
+	if len(r.nested) > 0 {
+		return r.startNestedMerge(ctx, rev, msg)
 	}
-	out, _ := r.git(ctx, "diff", "--name-only", "--diff-filter=U")
-	if conflicts := strings.Fields(out); len(conflicts) > 0 {
+	conflicts, err := r.startMerge(ctx, rev, msg)
+	switch {
+	case len(conflicts) > 0:
 		return conflicts, nil
+	case err != nil:
+		r.AbortMerge(ctx)
 	}
-	r.AbortMerge(ctx)
 	return nil, err
 }
 
-// AbortMerge cancels a merge in progress.
-func (r *Repo) AbortMerge(ctx context.Context) {
-	_, _ = r.git(context.WithoutCancel(ctx), "merge", "--abort")
+func (r *Repo) startMerge(ctx context.Context, rev, msg string, flags ...string) ([]string, error) {
+	args := append([]string{"merge", "-q", "--no-edit", "-m", msg}, flags...)
+	_, err := r.git(ctx, r.withIdentity(ctx, append(args, rev)...)...)
+	if err == nil {
+		return nil, nil
+	}
+	return r.conflicts(ctx), err
 }
 
-// FinishMerge stages the resolved files and concludes the merge in progress.
+func (r *Repo) conflicts(ctx context.Context) []string {
+	out, _ := r.git(ctx, "diff", "--name-only", "--diff-filter=U")
+	return strings.Fields(out)
+}
+
+// startNestedMerge merges each nested repository, then the parent without
+// committing, so the parent records the nested repositories' merged commits.
+func (r *Repo) startNestedMerge(ctx context.Context, rev, msg string) ([]string, error) {
+	prefix, err := r.Prefix(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var conflicts []string
+	for _, n := range r.nested {
+		target := r.gitlinkAt(ctx, rev, n)
+		if target == "" {
+			continue
+		}
+		c, err := r.sub(n).startMerge(ctx, target, msg)
+		if len(c) == 0 && err != nil {
+			r.AbortMerge(ctx)
+			return nil, fmt.Errorf("%s: %w", n, err)
+		}
+		for _, f := range c {
+			conflicts = append(conflicts, prefix+n+"/"+f)
+		}
+	}
+	_, err = r.startMerge(ctx, rev, msg, "--no-ff", "--no-commit")
+	// Conflicts on the nested repositories' pointers resolve to their merged commits.
+	if _, addErr := r.git(ctx, append([]string{"add", "--"}, r.nested...)...); addErr != nil {
+		r.AbortMerge(ctx)
+		return nil, addErr
+	}
+	parent := r.conflicts(ctx)
+	if err != nil && len(parent) == 0 && !r.merging(ctx) {
+		r.AbortMerge(ctx)
+		return nil, err
+	}
+	if conflicts = append(conflicts, parent...); len(conflicts) > 0 {
+		return conflicts, nil
+	}
+	if _, err := r.FinishMerge(ctx); err != nil {
+		r.AbortMerge(ctx)
+		return nil, err
+	}
+	return nil, nil
+}
+
+// merging reports whether a merge is in progress.
+func (r *Repo) merging(ctx context.Context) bool {
+	_, err := r.git(ctx, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	return err == nil
+}
+
+// AbortMerge cancels a merge in progress. Nested repositories go back to the
+// commits the parent's HEAD records, undoing the merges they concluded.
+func (r *Repo) AbortMerge(ctx context.Context) {
+	ctx = context.WithoutCancel(ctx)
+	for _, n := range r.nested {
+		sub := r.sub(n)
+		_, _ = sub.git(ctx, "merge", "--abort")
+		if want := r.gitlinkAt(ctx, "HEAD", n); want != "" {
+			if head, _ := sub.Head(ctx); head != want {
+				_, _ = sub.git(ctx, "reset", "-q", "--hard", want)
+			}
+		}
+	}
+	_, _ = r.git(ctx, "merge", "--abort")
+}
+
+// FinishMerge stages the resolved files and concludes the merge in progress,
+// in the nested repositories first.
 func (r *Repo) FinishMerge(ctx context.Context) (*Commit, error) {
+	for _, n := range r.nested {
+		if sub := r.sub(n); sub.merging(ctx) {
+			if _, err := sub.FinishMerge(ctx); err != nil {
+				return nil, fmt.Errorf("%s: %w", n, err)
+			}
+		}
+	}
 	if _, err := r.git(ctx, "add", "-A", "--", "."); err != nil {
 		return nil, err
+	}
+	if !r.merging(ctx) {
+		// Only the nested repositories had something to merge.
+		c, err := r.commitPaths(ctx, "FazTudo: sincroniza repositórios aninhados", r.nested)
+		if c == nil && err == nil {
+			c, err = r.headCommit(ctx)
+		}
+		return c, err
 	}
 	if _, err := r.git(ctx, r.withIdentity(ctx, "commit", "-q", "--no-verify", "--no-edit")...); err != nil {
 		return nil, err
 	}
+	return r.headCommit(ctx)
+}
+
+func (r *Repo) headCommit(ctx context.Context) (*Commit, error) {
 	hash, err := r.git(ctx, "rev-parse", "--short", "HEAD")
 	return &Commit{Hash: strings.TrimSpace(hash)}, err
 }
@@ -415,21 +672,36 @@ func (r *Repo) withIdentity(ctx context.Context, args ...string) []string {
 }
 
 // AddBranchWorktree creates branch from HEAD and checks it out in a new
-// worktree at path.
+// worktree at path, in the nested repositories too.
 func (r *Repo) AddBranchWorktree(ctx context.Context, path, branch string) error {
-	_, err := r.git(ctx, "worktree", "add", "-q", "-b", branch, path, "HEAD")
-	return err
+	if _, err := r.git(ctx, "worktree", "add", "-q", "-b", branch, path, "HEAD"); err != nil {
+		return err
+	}
+	return r.addNestedWorktrees(ctx, path, func(n *Repo, dir string) error {
+		_, err := n.git(ctx, "worktree", "add", "-q", "-b", branch, dir, "HEAD")
+		return err
+	})
 }
 
 // AddExistingWorktree checks out an existing branch in a new worktree at path.
+// A nested repository without the branch gets it from its HEAD.
 func (r *Repo) AddExistingWorktree(ctx context.Context, path, branch string) error {
-	_, err := r.git(ctx, "worktree", "add", "-q", path, branch)
-	return err
+	if _, err := r.git(ctx, "worktree", "add", "-q", path, branch); err != nil {
+		return err
+	}
+	return r.addNestedWorktrees(ctx, path, func(n *Repo, dir string) error {
+		args := []string{"worktree", "add", "-q", dir, branch}
+		if _, err := n.git(ctx, "rev-parse", "-q", "--verify", "refs/heads/"+branch); err != nil {
+			args = []string{"worktree", "add", "-q", "-b", branch, dir, "HEAD"}
+		}
+		_, err := n.git(ctx, args...)
+		return err
+	})
 }
 
 // Diff returns the patch between two commits, capped in size.
 func (r *Repo) Diff(ctx context.Context, from, to string, max int) (string, error) {
-	out, err := r.git(ctx, "diff", "--no-color", "--no-ext-diff", from, to, "--")
+	out, err := r.git(ctx, "diff", "--no-color", "--no-ext-diff", "--submodule=diff", from, to, "--")
 	if err != nil {
 		return "", err
 	}

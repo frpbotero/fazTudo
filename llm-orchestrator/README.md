@@ -16,6 +16,12 @@ O relatório fica em memória durante a sessão (enquanto o servidor estiver rod
 como contexto em todos os agentes. As execuções seguintes **reutilizam o discovery** sem refazê-lo.
 Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao reiniciar o servidor.
 
+Em **Branch base** o painel lista o repositório e os repositórios git aninhados nele (ex.: api e
+front clonados dentro da pasta), cada um com suas branches locais e remotas. A branch escolhida
+para cada um é a de desenvolvimento: toda execução nova troca para ela antes de criar as branches
+`faztudo/`. Repositório sem escolha fica na branch atual. Os commits do FazTudo nunca vão para a
+branch base.
+
 ## Fluxo dos agentes
 
 0. **US em paralelo** — com mais de uma US no documento, uma **análise de dependências** (somente
@@ -26,8 +32,9 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
    para um agente de **integração**, que resolve os marcadores e roda os testes; se não resolver, o
    merge é desfeito e a US fica *Com pendências* na própria branch. Falha numa US cancela as demais da
    onda (o trabalho interrompido fica salvo em commit na branch); **Refazer etapa** retoma a US na
-   própria branch, sem refazer as que já foram entregues. Sem git (ou com repositórios aninhados) as
-   US rodam em sequência; sem resposta legível da análise, também.
+   própria branch, sem refazer as que já foram entregues. Repositórios aninhados (ex.: api e front
+   clonados dentro do repositório pai) ganham worktree e branch próprias em cada US e são integrados
+   junto. Sem git as US rodam em sequência; sem resposta legível da análise, também.
 1. **Discovery** (uma vez por sessão) → **Passo 0** (verifica o que o repositório já implementa,
    critério a critério, e decide: `reuse` encerra a US sem implementar; `block` pula a US apontando a
    dependência ou decisão que falta; `extend`/`refactor`/`implement` seguem, implementando só o delta)
@@ -44,8 +51,8 @@ Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao 
 3. **Frentes paralelas** — o arquiteto mapeia as atividades em `streams` (agente, arquivos,
    dependências). Frentes sem dependência entre si e com arquivos disjuntos formam uma onda e rodam
    em paralelo, cada uma em uma worktree git própria; no fim da onda são integradas por merge na
-   branch da US. Frente que conflita com outra é refeita sobre o código integrado. Sem git (ou com
-   repositórios aninhados) as frentes rodam em sequência. Sem nada a paralelizar, o fluxo segue
+   branch da US. Frente que conflita com outra é refeita sobre o código integrado. Sem git as
+   frentes rodam em sequência. Sem nada a paralelizar, o fluxo segue
    com frontend e backend como etapas comuns.
 4. **Segurança**, **code review** e **E2E** são portões de qualidade: devolvem um veredito JSON
    (`approved` / `changes_requested`) com os problemas e o agente responsável por cada um. Havendo
@@ -223,7 +230,8 @@ web/static/              # dashboard (HTML/CSS/JS sem dependências externas, em
 | `GET` | `/api/events` | Stream SSE com o mesmo snapshot a cada mudança |
 | `GET` / `PUT` | `/api/workspace` | Repositório alvo (`{"path": "~/projetos/app"}`) e discovery em cache |
 | `DELETE` | `/api/workspace/discovery` | Descarta o discovery da sessão |
-| `PUT` | `/api/workspace/policy` | Portões de qualidade do repositório (`auto_checks`, `checks`, `protected`, `git`, `max_line_length`, `check_timeout_s`, `candidates`) |
+| `PUT` | `/api/workspace/policy` | Portões de qualidade do repositório (`auto_checks`, `checks`, `protected`, `git`, `max_line_length`, `check_timeout_s`, `candidates`, `base_branches`) |
+| `GET` | `/api/workspace/repos` | Repositório e aninhados com a branch atual e as disponíveis para branch base |
 | `GET` | `/api/git/commits/{hash}` | Diff de um commit feito pelo pipeline |
 | `POST` | `/api/stories/parse` | `{"content": "<markdown>"}` → `{"preamble": "...", "stories": [{"id", "title", "content"}]}` |
 | `POST` | `/api/pipeline/start` | `{"stories": [...], "preamble": "...", "source": "markdown", "dry_run": true, "rediscover": false, "document_name": "US.md"}`; ou `{"content": "..."}` com uma única US |
