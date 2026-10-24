@@ -162,8 +162,11 @@ func TestParallelStoriesRunInWorktreesAndIntegrate(t *testing.T) {
 			t.Errorf("%s must be integrated: %v", f, err)
 		}
 	}
-	if len(run.Integrations) != 1 || gitOut(t, repo, "branch", "--show-current") != run.Integrations[0] {
-		t.Errorf("repository must end on the integration branch %v", run.Integrations)
+	if len(run.Integrations) != 1 || gitOut(t, repo, "branch", "--show-current") != run.BaseBranch {
+		t.Errorf("repository must end on the base branch %q, not on %v", run.BaseBranch, run.Integrations)
+	}
+	if out := gitOut(t, repo, "branch", "--contains", run.Integrations[0]); !strings.Contains(out, run.BaseBranch) {
+		t.Errorf("the base branch must contain the integration branch:\n%s", out)
 	}
 	if run.Stories[0].Branch == "" || run.Stories[0].Branch == run.Stories[1].Branch {
 		t.Errorf("each story needs its own branch: %q %q", run.Stories[0].Branch, run.Stories[1].Branch)
@@ -287,5 +290,89 @@ func TestRetryFailedAnalysisStartsAgain(t *testing.T) {
 	}
 	if run = waitDone(t, o); run.Result != ResultSucceeded {
 		t.Fatalf("retry result = %s", run.Result)
+	}
+}
+
+// initRepo versions repo with a first commit, as the user's repository would
+// be, and returns its branch.
+func initRepo(t *testing.T, repo string) string {
+	t.Helper()
+	gitOut(t, repo, "init", "-q")
+	gitOut(t, repo, "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
+	gitOut(t, repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--no-verify", "-m", "inicial")
+	return gitOut(t, repo, "branch", "--show-current")
+}
+
+// baseHas reports whether the base branch already holds file.
+func baseHas(t *testing.T, repo, base, file string) bool {
+	t.Helper()
+	return osexec.Command("git", "-C", repo, "cat-file", "-e", base+":"+file).Run() == nil
+}
+
+func TestEachWaveIsMergedIntoTheBaseBeforeTheNext(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{AnalysisStage.Role: {independentPair}}}
+	o, repo := newParallelStoryTest(t, exec)
+	base := initRepo(t, repo)
+	var sawWave1InBase, startedFromBase bool
+	exec.onCall = func(req provider.Request) {
+		switch m := storyMarker(req.Prompt); {
+		case m == "" || req.Role != "ra":
+		case m == "tres":
+			// Wave 2 starts only once the base holds wave 1.
+			sawWave1InBase = baseHas(t, repo, base, "um.txt") && baseHas(t, repo, base, "dois.txt")
+			_, err := os.Stat(filepath.Join(req.WorkDir, "um.txt"))
+			startedFromBase = err == nil
+			writeFile(t, req.WorkDir, "tres.txt", "tres\n")
+		default:
+			writeFile(t, req.WorkDir, m+".txt", m+"\n")
+		}
+	}
+	_ = o.Start(StartOptions{Stories: threeStories, Source: "Markdown"})
+	run := waitDone(t, o)
+	if run.Result != ResultSucceeded {
+		t.Fatalf("result = %s, logs: %+v", run.Result, run.Logs)
+	}
+	if !sawWave1InBase || !startedFromBase {
+		t.Errorf("wave 2 began before the base held wave 1 (base has it: %v, worktree has it: %v)", sawWave1InBase, startedFromBase)
+	}
+	if got := gitOut(t, repo, "branch", "--show-current"); got != base {
+		t.Errorf("repository must end on %q, got %q", base, got)
+	}
+	for _, f := range []string{"um.txt", "dois.txt", "tres.txt"} {
+		if !baseHas(t, repo, base, f) {
+			t.Errorf("%s is missing from the base branch", f)
+		}
+	}
+	if len(run.Integrations) != 1 {
+		t.Errorf("integrations = %v: only the parallel wave needs an integration branch", run.Integrations)
+	}
+}
+
+func TestSequentialStoriesAreMergedIntoTheBaseOneByOne(t *testing.T) {
+	exec := &fakeExecutor{}
+	o, repo := newParallelStoryTest(t, exec)
+	base := initRepo(t, repo)
+	var firstInBaseForSecond bool
+	exec.onCall = func(req provider.Request) {
+		if req.Role != "ra" {
+			return
+		}
+		switch storyMarker(req.Prompt) {
+		case "um":
+			writeFile(t, repo, "um.txt", "um\n")
+		case "dois":
+			firstInBaseForSecond = baseHas(t, repo, base, "um.txt")
+			writeFile(t, repo, "dois.txt", "dois\n")
+		}
+	}
+	_ = o.Start(twoIndependent())
+	if run := waitDone(t, o); run.Result != ResultSucceeded {
+		t.Fatalf("result = %s, logs: %+v", run.Result, run.Logs)
+	}
+	if !firstInBaseForSecond {
+		t.Error("the second story began before the first was merged into the base")
+	}
+	if !baseHas(t, repo, base, "dois.txt") || gitOut(t, repo, "branch", "--show-current") != base {
+		t.Error("the last story must be merged and the repository left on the base")
 	}
 }

@@ -313,7 +313,37 @@ func (o *Orchestrator) runStoriesInPlace(ctx context.Context, ss *session, opts 
 			return false
 		}
 		o.closeStory(st, len(opts.Stories))
+		if !o.mergeIntoBase(ctx, ss, opts.Stories[si].Title) {
+			return false
+		}
 	}
+	return true
+}
+
+// mergeIntoBase merges what the current branch holds (the story's branch, or
+// the wave's integration branch) into the base branch of every repository, so
+// the next story or wave starts from the base with this one already in it.
+// A merge that fails stops the run: going on would build on code the base
+// does not have.
+func (o *Orchestrator) mergeIntoBase(ctx context.Context, ss *session, label string) bool {
+	if ss.git == nil || ss.bases["."] == "" {
+		return true
+	}
+	from := ss.git.Branch(ctx)
+	if from == "" || from == ss.bases["."] {
+		return true
+	}
+	conflicts, err := ss.git.MergeIntoBases(ctx, from, fmt.Sprintf("faztudo: integra %s na base", label), ss.bases)
+	if err != nil {
+		if len(conflicts) == 0 {
+			err = fmt.Errorf("merge de %s na branch base falhou: %w", label, err)
+		} else {
+			err = fmt.Errorf("merge de %s na branch base falhou (branch %s mantida): %w", label, from, err)
+		}
+		o.failRun(err)
+		return false
+	}
+	o.logf(LevelSuccess, "%s integrada na branch base (%s).", label, baseLabels(ctx, ss.git))
 	return true
 }
 
@@ -554,6 +584,9 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 		if !o.mergeStory(ctx, ss, opts, si) {
 			return false
 		}
+	}
+	if !o.mergeIntoBase(ctx, ss, strings.Join(labels, ", ")) {
+		return false
 	}
 	o.updateGraph(ctx, ss) // the next wave sees the code just integrated
 	return true

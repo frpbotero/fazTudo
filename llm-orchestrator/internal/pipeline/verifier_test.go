@@ -282,6 +282,7 @@ func TestGitBranchAndCommitPerStep(t *testing.T) {
 
 	// Pending changes left on a FazTudo branch (an interrupted run) are
 	// committed and the next run goes on from them.
+	osexec.Command("git", "-C", repo, "switch", "-q", st.Branch).Run()
 	writeFile(t, repo, "index.html", "trabalho interrompido")
 	_ = o.Start(realStory("y"))
 	if run = waitDone(t, o); run.Result != ResultSucceeded {

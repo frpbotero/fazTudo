@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path"
 	"path/filepath"
 	"slices"
@@ -151,6 +152,9 @@ type Run struct {
 	Stories      []StoryRun `json:"stories"`
 	Current      int        `json:"current"` // index into Stories; -1 while discovering
 	Logs         []LogEntry `json:"logs"`
+	// Bases are the branches each repository started from (keyed "." and by
+	// nested path); every wave is merged into them before the next begins.
+	Bases map[string]string `json:"bases,omitempty"`
 	// Resume is where a stopped run continues; nil while running or done.
 	Resume *ResumePoint `json:"resume,omitempty"`
 }
@@ -516,6 +520,8 @@ type session struct {
 	report   *workspace.Report
 	// instructions are the repository's agent instruction files.
 	instructions string
+	// bases are the branches the run started from; waves merge into them.
+	bases map[string]string
 }
 
 func (ss *session) rules() rules {
@@ -633,9 +639,40 @@ func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts Start
 			o.logf(LevelWarn, "Versionamento indisponível ao refazer a etapa: %v.", err)
 		} else {
 			ss.git = g
+			ss.bases = o.basesOfRun(policy)
 		}
 	}
 	return ss
+}
+
+// runBases are the branches each repository started from, which waves merge
+// into. A repository checked out on a FazTudo branch (a resumed interrupted
+// run) has no known base unless the policy names one; it is then not merged.
+func (o *Orchestrator) runBases(ctx context.Context, g *vcs.Repo, policy workspace.Policy) map[string]string {
+	bases := g.CurrentBranches(ctx)
+	for repo, branch := range bases {
+		if !strings.HasPrefix(branch, vcs.BranchPrefix) {
+			continue
+		}
+		if configured := policy.BaseBranches[repo]; configured != "" {
+			bases[repo] = configured
+			continue
+		}
+		delete(bases, repo)
+		o.logf(LevelWarn, "Repositório %s começa em uma branch do FazTudo e não tem branch base configurada; o merge na base não será feito.", repo)
+	}
+	return bases
+}
+
+// basesOfRun are the branches the run being resumed started from: saved with
+// the run, else the policy's base branches.
+func (o *Orchestrator) basesOfRun(policy workspace.Policy) map[string]string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if len(o.run.Bases) > 0 {
+		return maps.Clone(o.run.Bases)
+	}
+	return maps.Clone(policy.BaseBranches)
 }
 
 // protectedPatterns adds the loaded story document to the policy's
@@ -733,8 +770,10 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 		o.logf(LevelInfo, "Repositórios aninhados versionados junto: %s.", strings.Join(nested, ", "))
 	}
 	ss.git = g
+	ss.bases = o.runBases(ctx, g, policy)
 	o.mu.Lock()
 	o.run.BaseBranch = g.Branch(ctx)
+	o.run.Bases = ss.bases
 	o.mu.Unlock()
 	return ss, true
 }

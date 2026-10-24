@@ -315,6 +315,38 @@ func (r *Repo) switchTo(ctx context.Context, branch string) error {
 	return err
 }
 
+// CurrentBranches returns the branch checked out in the repository ("." key)
+// and in each nested repository, keyed as in AllBranches; detached HEADs are
+// left out.
+func (r *Repo) CurrentBranches(ctx context.Context) map[string]string {
+	bases := map[string]string{}
+	if b := r.Branch(ctx); b != "" {
+		bases["."] = b
+	}
+	for _, n := range r.nested {
+		if b := r.sub(n).Branch(ctx); b != "" {
+			bases[n] = b
+		}
+	}
+	return bases
+}
+
+// MergeIntoBases checks out each repository's base branch and merges rev
+// (typically the integration branch, whose HEAD is the current one) into it,
+// fast-forwarding when possible. On conflict the merge is aborted, the base
+// is left as it was and the conflicted paths are returned.
+func (r *Repo) MergeIntoBases(ctx context.Context, rev, msg string, bases map[string]string) ([]string, error) {
+	if err := r.SwitchBranches(ctx, bases); err != nil {
+		return nil, err
+	}
+	conflicts, err := r.StartMerge(ctx, rev, msg)
+	if len(conflicts) > 0 {
+		r.AbortMerge(ctx)
+		return conflicts, fmt.Errorf("git merge: conflito em %s", strings.Join(conflicts, ", "))
+	}
+	return nil, err
+}
+
 // CommitAll stages every change under the directory and commits it. It
 // returns nil when there was nothing to commit. Paths in exclude (relative
 // to the directory) are left out. Nested repositories commit their own

@@ -38,8 +38,8 @@ US já entregues ou em paralelo.
 Em **Branch base** o painel lista o repositório e os repositórios git aninhados nele (ex.: api e
 front clonados dentro da pasta), cada um com suas branches locais e remotas. A branch escolhida
 para cada um é a de desenvolvimento: toda execução nova troca para ela antes de criar as branches
-`faztudo/`. Repositório sem escolha fica na branch atual. Os commits do FazTudo nunca vão para a
-branch base.
+`faztudo/`. Repositório sem escolha fica na branch atual. O trabalho de cada US só entra na branch
+base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto nela.
 
 ## Fluxo dos agentes
 
@@ -47,7 +47,12 @@ branch base.
    leitura, logo após o discovery) decide quais US dependem de quais e agrupa as independentes em
    **ondas**. As US da mesma onda rodam ao mesmo tempo, cada uma na sua branch e worktree git; cada
    agente sabe quais US correm ao lado e não invade o escopo delas. No fim da onda, uma branch
-   `faztudo/integra-…` recebe o merge de todas e a onda seguinte parte dela. Conflito entre US vai
+   `faztudo/integra-…` recebe o merge de todas e **essa branch é mergeada na branch base (ex.:
+   `develop`) antes da onda seguinte começar**: a próxima onda parte da base já com a anterior. Em
+   sequência (uma US por onda, ou sem worktrees) o merge na base acontece ao fim de cada US, e o
+   repositório termina na base. Se o merge na base falhar (a base mudou e conflita), a execução para
+   com a branch preservada para você resolver. Repositório que começa em uma branch `faztudo/`
+   (retomada) sem base configurada não é mergeado. Conflito entre US vai
    para um agente de **integração**, que resolve os marcadores e roda os testes; se não resolver, o
    merge é desfeito e a US fica *Com pendências* na própria branch. Falha numa US cancela as demais da
    onda (o trabalho interrompido fica salvo em commit na branch); **Refazer etapa** retoma a US na
