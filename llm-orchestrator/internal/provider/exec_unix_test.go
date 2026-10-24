@@ -22,3 +22,15 @@ func TestExecRunnerKillsStuckAgent(t *testing.T) {
 		t.Errorf("stuck agent took %s to be killed", elapsed)
 	}
 }
+
+func TestExecRunnerPipesPromptAndExplainsExternalKill(t *testing.T) {
+	cli := CLI{Binary: "sh", Args: func(Invocation) []string { return []string{"-c", "cat; kill -TERM $$"} },
+		Stdin: func(inv Invocation) string { return inv.Prompt }}
+	out, err := ExecRunner{}.Run(context.Background(), Invocation{CLI: cli, Prompt: "ng serve --port 4310", WorkDir: t.TempDir()})
+	if !strings.Contains(out, "ng serve --port 4310") {
+		t.Errorf("stdin not piped, out = %q", out)
+	}
+	if err == nil || !strings.Contains(err.Error(), "sinal externo") {
+		t.Errorf("err = %v, want external-signal note", err)
+	}
+}

@@ -200,8 +200,19 @@ func TestCLIArgs(t *testing.T) {
 	if slices.Contains(codex, "--full-auto") {
 		t.Error("--full-auto was removed from codex exec")
 	}
-	if last := codex[len(codex)-1]; !strings.Contains(last, "sys") || !strings.HasSuffix(last, "task") {
-		t.Errorf("codex prompt should embed system instructions, got %q", last)
+	if last := codex[len(codex)-1]; last != "-" {
+		t.Errorf("codex should read the prompt from stdin, last arg %q", last)
+	}
+	if in := CodexCLI.Stdin(inv); !strings.Contains(in, "sys") || !strings.HasSuffix(in, "task") {
+		t.Errorf("codex stdin should embed system instructions, got %q", in)
+	}
+	if in := ClaudeCLI.Stdin(inv); in != "task" {
+		t.Errorf("claude stdin = %q, want the prompt", in)
+	}
+	for _, args := range [][]string{claude, codex} {
+		if slices.Contains(args, "task") {
+			t.Errorf("prompt must not be in argv (pkill -f matches it): %v", args)
+		}
 	}
 }
 

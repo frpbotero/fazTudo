@@ -1,8 +1,11 @@
 // Package workspace manages the target repository and caches its stack
-// discovery for the lifetime of the server session.
+// discovery, on disk when a cache directory is set.
 package workspace
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +30,8 @@ type Report struct {
 	Model     string    `json:"model,omitempty"`
 	Simulated bool      `json:"simulated"`
 	CreatedAt time.Time `json:"created_at"`
+	// Graph is the absolute path of the code graph (graphify), "" without one.
+	Graph string `json:"graph,omitempty"`
 }
 
 // State is the public view of the workspace.
@@ -46,6 +51,9 @@ type Manager struct {
 	report    *Report
 	suggested []quality.Command
 	policies  map[string]Policy
+	// cacheDir keeps each repository's discovery across restarts; "" keeps
+	// it in memory only.
+	cacheDir string
 }
 
 // NewManager creates a manager, optionally pre-configured with a repository.
@@ -77,7 +85,7 @@ func (m *Manager) SetPath(p string) (string, error) {
 	defer m.mu.Unlock()
 	if resolved != m.path {
 		m.path = resolved
-		m.report = nil
+		m.report = m.loadCachedLocked()
 	}
 	m.suggested = quality.Suggest(resolved)
 	return resolved, nil
@@ -172,6 +180,7 @@ func (m *Manager) Store(r Report) {
 	if r.Path == m.path {
 		m.report = &r
 		m.suggested = quality.Suggest(m.path) // discovery may have run installs
+		m.saveCachedLocked(r)
 	}
 }
 
@@ -180,6 +189,59 @@ func (m *Manager) Invalidate() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.report = nil
+	if file := m.cacheFileLocked(); file != "" {
+		os.Remove(file)
+	}
+}
+
+// SetCacheDir persists discoveries under dir, so a restart reuses the last
+// one of the repository instead of mapping it again.
+func (m *Manager) SetCacheDir(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cacheDir = dir
+	if m.report == nil {
+		m.report = m.loadCachedLocked()
+	}
+}
+
+func (m *Manager) cacheFileLocked() string {
+	if m.cacheDir == "" || m.path == "" {
+		return ""
+	}
+	sum := sha1.Sum([]byte(m.path))
+	return filepath.Join(m.cacheDir, hex.EncodeToString(sum[:])+".json")
+}
+
+// loadCachedLocked reads the saved discovery of the current repository; a
+// missing or unreadable file means there is none.
+func (m *Manager) loadCachedLocked() *Report {
+	file := m.cacheFileLocked()
+	if file == "" {
+		return nil
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	var r Report
+	if json.Unmarshal(data, &r) != nil || r.Path != m.path {
+		return nil
+	}
+	return &r
+}
+
+// saveCachedLocked is best effort: a failed write only costs a rediscovery.
+func (m *Manager) saveCachedLocked(r Report) {
+	file := m.cacheFileLocked()
+	if file == "" {
+		return
+	}
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil || os.MkdirAll(filepath.Dir(file), 0o755) != nil {
+		return
+	}
+	os.WriteFile(file, data, 0o644)
 }
 
 // State returns a snapshot for the UI.

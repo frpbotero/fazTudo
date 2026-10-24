@@ -2,8 +2,11 @@ package pipeline
 
 import (
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/quality"
 )
 
@@ -69,5 +72,38 @@ func TestReviewLensesRunInParallelAndMerge(t *testing.T) {
 		if req.Role != DiscoveryStage.Role && !strings.Contains(req.Prompt, "Sempre escreva testes primeiro.") {
 			t.Errorf("%s prompt lacks the project instructions", req.Role)
 		}
+	}
+}
+
+func TestKilledLensIsRetriedAlone(t *testing.T) {
+	var mu sync.Mutex
+	specFailed := false
+	exec := &fakeExecutor{
+		outputs: map[string][]string{
+			"arch":        {"```json\n{\"agents\":[\"backend\"]}\n```"},
+			"rev · Spec":  {"ok\n```json\n{\"status\":\"approved\",\"issues\":[]}\n```"},
+			"rev · Tests": {"ok\n```json\n{\"status\":\"approved\",\"issues\":[]}\n```"},
+		},
+		failIf: func(req provider.Request) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			if req.Role == "rev · Spec" && !specFailed {
+				specFailed = true // like a reviewer killed by another agent's pkill
+				return true
+			}
+			return false
+		},
+	}
+	o, _ := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
+	o.stages = lensStages
+	o.attempts, o.retryDelay = 2, time.Millisecond
+
+	_ = o.Start(realStory("API de carrinho"))
+	run := waitDone(t, o)
+	if run.Result != ResultSucceeded {
+		t.Fatalf("result = %s, logs: %+v", run.Result, run.Logs)
+	}
+	if exec.count("rev · Spec") != 2 || exec.count("rev · Tests") != 1 {
+		t.Errorf("only the failed lens is retried: spec=%d tests=%d", exec.count("rev · Spec"), exec.count("rev · Tests"))
 	}
 }

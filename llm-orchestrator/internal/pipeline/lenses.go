@@ -12,7 +12,8 @@ import (
 )
 
 // runLenses runs one review per lens in parallel and merges them into a
-// single response whose verdict is the union of the lenses' issues.
+// single response whose verdict is the union of the lenses' issues. Each lens
+// retries on its own, so one killed reviewer does not fail the stage.
 func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyState, stage Stage, lenses []Lens, ref stepRef) (*provider.Response, bool) {
 	started := time.Now()
 	o.updateStep(ref, func(s *Step) {
@@ -33,14 +34,14 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := o.exec.Execute(ctx, provider.Request{
+			resp, err := o.executeRetrying(ctx, ref, provider.Request{
 				Role:     stage.Role + " · " + l.Title,
 				System:   stage.System,
 				Prompt:   base + lensFocus(l),
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
-			}, o.providerLog)
+			})
 			results[i] = result{resp, err}
 		}()
 	}

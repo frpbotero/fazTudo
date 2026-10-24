@@ -72,6 +72,7 @@ func run() error {
 	}
 
 	store := settings.NewStore(*configPath)
+	ws.SetCacheDir(settings.DiscoveryDir(store.Path()))
 	if file, err := store.Load(); err != nil {
 		logger.Warn("configuração salva ignorada", "err", err)
 	} else {

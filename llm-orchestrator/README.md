@@ -12,9 +12,28 @@ A primeira execução da sessão começa por um **discovery**: uma varredura dos
 (`go.mod`, `package.json`, `pyproject.toml`, `pom.xml`, Dockerfile etc.) identifica as stacks por
 diretório e um agente complementa com versões, comandos de build/teste, arquitetura e convenções.
 
-O relatório fica em memória durante a sessão (enquanto o servidor estiver rodando) e é injetado
-como contexto em todos os agentes. As execuções seguintes **reutilizam o discovery** sem refazê-lo.
-Ele é refeito apenas ao trocar de repositório, ao clicar em **Refazer** ou ao reiniciar o servidor.
+O relatório é salvo em `~/.config/faztudo/discovery/` (um arquivo por repositório) e injetado como
+contexto em todos os agentes. As execuções seguintes, mesmo depois de reiniciar o servidor,
+**reutilizam o discovery** sem refazê-lo. Ele é refeito apenas ao clicar em **Refazer**.
+
+**Grafo do código.** Com o [graphify](https://github.com/safishamsi/graphify) instalado
+(`uv tool install graphifyy`), cada execução roda `graphify update .` no repositório antes do discovery
+e de novo após integrar cada onda. É incremental, local (tree-sitter) e sem LLM: segundos. O grafo
+fica em `graphify-out/` (fora do git via `.git/info/exclude`); o discovery recebe o `GRAPH_REPORT.md`
+e todo agente recebe o caminho do `graph.json` para consultar (`graphify query/explain/affected`)
+antes de varrer arquivos. Sem graphify, o pipeline segue sem o grafo (aviso no log).
+
+**Skills.** Cada etapa nomeia as skills de [agent-skills](https://github.com/addyosmani/agent-skills)
+que deve seguir (especificação → `spec-driven-development`; arquiteto → `planning-and-task-breakdown`,
+`api-and-interface-design`; frontend/backend → `incremental-implementation`, `test-driven-development`
+e `frontend-ui-engineering`/`api-and-interface-design`; segurança → `security-and-hardening`; code review →
+`code-review-and-quality`, `code-simplification`; docs → `documentation-and-adrs`; rodadas de correção →
+`debugging-and-error-recovery`, `test-driven-development`). Só entram no prompt as instaladas em
+`~/.claude/skills` ou `~/.agents/skills` (`npx skills add addyosmani/agent-skills -g`).
+
+**Contexto por US.** Cada etapa é um processo novo do CLI (sem `--resume`): nenhuma conversa passa de
+uma US para outra. O que atravessa US é só o que o orquestrador injeta: discovery, grafo e a lista das
+US já entregues ou em paralelo.
 
 Em **Branch base** o painel lista o repositório e os repositórios git aninhados nele (ex.: api e
 front clonados dentro da pasta), cada um com suas branches locais e remotas. A branch escolhida
@@ -35,7 +54,10 @@ branch base.
    própria branch, sem refazer as que já foram entregues. Repositórios aninhados (ex.: api e front
    clonados dentro do repositório pai) ganham worktree e branch próprias em cada US e são integrados
    junto. Sem git as US rodam em sequência; sem resposta legível da análise, também.
-1. **Discovery** (uma vez por sessão) → **Passo 0** (verifica o que o repositório já implementa,
+   Cada US paralela recebe sua faixa de portas (4400 + 20 por US) para servidores locais, e os agentes
+   só encerram processos pelo PID ou pela porta, nunca por nome (`pkill`/`killall`). O prompt vai pelo
+   stdin do CLI, fora da linha de comando, para que um `pkill -f` não derrube o agente de outra US.
+1. **Discovery** (uma vez por repositório) → **Passo 0** (verifica o que o repositório já implementa,
    critério a critério, e decide: `reuse` encerra a US sem implementar; `block` pula a US apontando a
    dependência ou decisão que falta; `extend`/`refactor`/`implement` seguem, implementando só o delta)
    → **Especificação** → **Arquiteto**. Essas etapas, a segurança e o code review
@@ -129,8 +151,8 @@ Provedor padrão, failover, modelos/esforço e o repositório são salvos a cada
 `~/.config/faztudo/config.json` (ou `$XDG_CONFIG_HOME/faztudo/config.json`), com escrita atômica e
 permissão `0600`, e recarregados ao iniciar. Flags e variáveis de ambiente explícitas (`-provider`,
 `-repo`) têm prioridade sobre o arquivo. Entradas inválidas (repositório removido, modelo com esforço
-não suportado) são ignoradas com aviso no log, sem descartar o resto. O discovery **não** é salvo:
-continua valendo por sessão.
+não suportado) são ignoradas com aviso no log, sem descartar o resto. O discovery é salvo ao lado,
+em `discovery/`; **Refazer** apaga o do repositório.
 
 ## Requisitos
 
@@ -229,7 +251,7 @@ web/static/              # dashboard (HTML/CSS/JS sem dependências externas, em
 | `GET` | `/api/status` | Snapshot completo (execução, etapas, eventos, provedores) |
 | `GET` | `/api/events` | Stream SSE com o mesmo snapshot a cada mudança |
 | `GET` / `PUT` | `/api/workspace` | Repositório alvo (`{"path": "~/projetos/app"}`) e discovery em cache |
-| `DELETE` | `/api/workspace/discovery` | Descarta o discovery da sessão |
+| `DELETE` | `/api/workspace/discovery` | Descarta o discovery salvo do repositório |
 | `PUT` | `/api/workspace/policy` | Portões de qualidade do repositório (`auto_checks`, `checks`, `protected`, `git`, `max_line_length`, `check_timeout_s`, `candidates`, `base_branches`) |
 | `GET` | `/api/workspace/repos` | Repositório e aninhados com a branch atual e as disponíveis para branch base |
 | `GET` | `/api/git/commits/{hash}` | Diff de um commit feito pelo pipeline |

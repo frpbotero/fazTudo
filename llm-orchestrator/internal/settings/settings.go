@@ -67,6 +67,15 @@ func DefaultPath() string {
 	return filepath.Join(home, ".config", "faztudo", "config.json")
 }
 
+// DiscoveryDir is where repository discoveries are saved, beside the
+// configuration file; "" (persistence disabled) keeps them in memory.
+func DiscoveryDir(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(configPath), "discovery")
+}
+
 // Path returns the file location, or "" when disabled.
 func (s *Store) Path() string { return s.path }
 

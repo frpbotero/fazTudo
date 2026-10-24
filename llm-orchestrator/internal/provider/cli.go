@@ -74,6 +74,10 @@ type CLI struct {
 	LoadCatalog func() (Catalog, error)
 	// Args builds the argument list for a non-interactive run.
 	Args func(inv Invocation) []string
+	// Stdin is the text piped to the CLI. The prompt goes there, not in
+	// Args: `pkill -f <pattern>` run by an agent matches every command line
+	// in the machine, and a prompt quoting that pattern got its own agent killed.
+	Stdin func(inv Invocation) string
 }
 
 // ClaudeCLI runs Anthropic's Claude Code in print mode.
@@ -91,7 +95,7 @@ var ClaudeCLI = CLI{
 	Defaults:   Settings{HeavyModel: "claude-opus-5-5", StdModel: "claude-sonnet-5-5", Effort: "high"},
 	LightModel: "claude-haiku-5-5",
 	Args: func(inv Invocation) []string {
-		args := []string{"-p", inv.Prompt, "--append-system-prompt", inv.System}
+		args := []string{"-p", "--append-system-prompt", inv.System}
 		if inv.ReadOnly {
 			args = append(args, "--permission-mode", "plan")
 		} else {
@@ -105,6 +109,7 @@ var ClaudeCLI = CLI{
 		}
 		return args
 	},
+	Stdin: func(inv Invocation) string { return inv.Prompt },
 }
 
 // CodexCLI runs OpenAI's Codex CLI through `codex exec`. Its models come from
@@ -135,8 +140,11 @@ var CodexCLI = CLI{
 		if inv.Effort != "" {
 			args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", inv.Effort))
 		}
-		// Codex has no system-prompt flag; prepend the instructions instead.
-		return append(args, fmt.Sprintf("<instructions>\n%s\n</instructions>\n\n%s", inv.System, inv.Prompt))
+		return append(args, "-") // prompt read from stdin
+	},
+	// Codex has no system-prompt flag; prepend the instructions instead.
+	Stdin: func(inv Invocation) string {
+		return fmt.Sprintf("<instructions>\n%s\n</instructions>\n\n%s", inv.System, inv.Prompt)
 	},
 }
 
@@ -176,6 +184,9 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (string, error) {
 
 	cmd := exec.CommandContext(ctx, inv.CLI.Binary, inv.CLI.Args(inv)...)
 	cmd.Dir = inv.WorkDir
+	if inv.CLI.Stdin != nil {
+		cmd.Stdin = strings.NewReader(inv.CLI.Stdin(inv))
+	}
 	isolate(cmd)
 	cmd.WaitDelay = 5 * time.Second // children holding the pipes must not keep Wait blocked
 	var buf bytes.Buffer
@@ -188,9 +199,22 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (string, error) {
 		return out, fmt.Errorf("%s excedeu o tempo limite de %s", inv.CLI.Binary, timeout)
 	}
 	if err != nil {
-		return out, fmt.Errorf("%s falhou: %w: %s", inv.CLI.Binary, err, truncate(strings.TrimSpace(out), 2000))
+		return out, fmt.Errorf("%s falhou: %w%s: %s", inv.CLI.Binary, err, killedNote(err), truncate(strings.TrimSpace(out), 2000))
 	}
 	return out, nil
+}
+
+// killedNote explains an exit caused by a signal the orchestrator did not
+// send (143 = SIGTERM, 137 = SIGKILL): usually another agent's pkill/killall.
+func killedNote(err error) string {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return ""
+	}
+	if code := exitErr.ExitCode(); code == 143 || code == 137 || code == -1 {
+		return " (encerrado por sinal externo: outro processo matou o agente, ex.: pkill/killall)"
+	}
+	return ""
 }
 
 // SimulatedRunner fakes a successful run without spending tokens.

@@ -363,6 +363,9 @@ func (o *Orchestrator) newStoryContext(si int, opts StartOptions, ss *session) s
 			sc.Parallel = append(sc.Parallel, s)
 		}
 	}
+	if len(sc.Parallel) > 0 {
+		sc.PortBase = lanePortBase + lanePortSpan*si
+	}
 	return sc
 }
 
@@ -552,6 +555,7 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 			return false
 		}
 	}
+	o.updateGraph(ctx, ss) // the next wave sees the code just integrated
 	return true
 }
 

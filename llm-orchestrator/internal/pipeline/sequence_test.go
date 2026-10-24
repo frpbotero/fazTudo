@@ -90,6 +90,10 @@ func TestParallelStoriesInSimulation(t *testing.T) {
 		switch p := r.Prompt; {
 		case strings.Contains(p, "<<um>>") && !strings.Contains(p, "outras branches"):
 			t.Error("US-1 must know US-2 runs beside it")
+		case strings.Contains(p, "<<um>>") && !strings.Contains(p, "só portas 4400 a 4419"):
+			t.Error("US-1 must get its own port range")
+		case strings.Contains(p, "<<dois>>") && !strings.Contains(p, "só portas 4420 a 4439"):
+			t.Error("US-2 must get a port range apart from US-1")
 		case strings.Contains(p, "<<tres>>") && !strings.Contains(p, "- US-2 Perfil"):
 			t.Error("US-3 must see US-1 and US-2 as delivered")
 		}

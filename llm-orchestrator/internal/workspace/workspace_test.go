@@ -85,6 +85,40 @@ func TestManagerCachesDiscoveryPerRepository(t *testing.T) {
 	}
 }
 
+func TestDiscoverySurvivesRestartWithCacheDir(t *testing.T) {
+	repo, cache := t.TempDir(), t.TempDir()
+	first, _ := NewManager(repo)
+	first.SetCacheDir(cache)
+	first.Store(Report{Path: repo, Summary: "mapa", CreatedAt: time.Now()})
+
+	restarted, _ := NewManager(repo)
+	restarted.SetCacheDir(cache)
+	if r := restarted.Discovery(); r == nil || r.Summary != "mapa" {
+		t.Fatalf("restart must reuse the saved discovery, got %+v", r)
+	}
+
+	other := t.TempDir()
+	if _, err := restarted.SetPath(other); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.Discovery() != nil {
+		t.Error("another repository has no saved discovery")
+	}
+	if _, err := restarted.SetPath(repo); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.Discovery() == nil {
+		t.Error("switching back must load the repository's saved discovery")
+	}
+
+	restarted.Invalidate()
+	again, _ := NewManager(repo)
+	again.SetCacheDir(cache)
+	if again.Discovery() != nil {
+		t.Error("Refazer (Invalidate) must delete the saved discovery")
+	}
+}
+
 func TestResolveRejectsInvalidPaths(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "f")
 	write(t, filepath.Dir(file), "f", "x")

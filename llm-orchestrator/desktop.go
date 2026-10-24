@@ -52,6 +52,7 @@ func runDesktop() error {
 		return err
 	}
 	store := settings.NewStore(desktopEnvOr("FAZTUDO_CONFIG", settings.DefaultPath()))
+	ws.SetCacheDir(settings.DiscoveryDir(store.Path()))
 	if file, loadErr := store.Load(); loadErr != nil {
 		logger.Warn("configuração salva ignorada", "err", loadErr)
 	} else {

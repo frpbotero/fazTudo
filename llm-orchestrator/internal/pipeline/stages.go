@@ -43,6 +43,9 @@ type Stage struct {
 	// Lenses split the stage into parallel reviews, each with its own focus;
 	// their verdicts are merged.
 	Lenses []Lens
+	// Skills are the agent skills (addyosmani/agent-skills) the stage follows
+	// when installed.
+	Skills []string
 }
 
 // Lens is one focus of a parallel review.
@@ -160,9 +163,13 @@ const browserRule = "- Navegador de teste: Chromium do Playwright em headless (`
 
 // processRule keeps agents from hanging the run: a foreground dev server or
 // watch-mode test never returns, and the orchestrator kills the CLI at its
-// time limit.
+// time limit. Killing by name is banned: other stories' agents run on the
+// same machine and `pkill -f` matched one of them.
 const processRule = "- Servidor (ng serve, npm start, vite…) só em background, com espera por porta e encerrado no fim. " +
-	"Testes sem modo watch (`CI=1`, `--watch=false`, `--run`) e com timeout.\n"
+	"Testes sem modo watch (`CI=1`, `--watch=false`, `--run`) e com timeout.\n" +
+	"- Encerrar processo só pelo PID que você iniciou (`cmd & echo $! > pidfile` … `kill $(cat pidfile)`) " +
+	"ou pela porta (`lsof -ti tcp:PORTA -sTCP:LISTEN | xargs kill`). Nunca `pkill`, `killall` nem kill por nome: " +
+	"outros agentes rodam na mesma máquina.\n"
 
 // DiscoveryStage maps the repository before any implementation. Its report is
 // cached per repository for the session and shared with every other stage.
@@ -213,6 +220,7 @@ var DefaultStages = []Stage{
 			"Plano TDD: um ID por caso de teste. Sem código de implementação.",
 		Specifier: true,
 		ReadOnly:  true,
+		Skills:    []string{"spec-driven-development"},
 	},
 	{
 		ID:       "arch",
@@ -229,6 +237,7 @@ var DefaultStages = []Stage{
 			"2. Mapeie as atividades e quais podem rodar em paralelo: frentes com arquivos disjuntos e sem depender do código da outra.\n" +
 			"3. Por frente: agente, o que faz, arquivos, dependências.\n" +
 			"4. Documentação necessária (cliente final ou mantenedor)? Se sim, inclua docs.",
+		Skills: []string{"planning-and-task-breakdown", "api-and-interface-design"},
 	},
 	{
 		ID:          "frontend",
@@ -239,7 +248,8 @@ var DefaultStages = []Stage{
 		Implementer: true,
 		System: "Agente de frontend. Interface acessível (WCAG 2.2 AA), responsiva e caprichada: hierarquia, contraste, " +
 			"estados de hover/foco/erro/vazio, transições discretas." + engineeringRules,
-		Task: "Implemente interface e componentes conforme EDD e plano do arquiteto.",
+		Task:   "Implemente interface e componentes conforme EDD e plano do arquiteto.",
+		Skills: []string{"incremental-implementation", "test-driven-development", "frontend-ui-engineering"},
 	},
 	{
 		ID:          "backend",
@@ -250,6 +260,7 @@ var DefaultStages = []Stage{
 		Implementer: true,
 		System:      "Agente de backend e dados. APIs resilientes, regras determinísticas, entrada validada." + engineeringRules,
 		Task:        "Implemente endpoints, serviços e algoritmos até todos os testes do plano TDD passarem.",
+		Skills:      []string{"incremental-implementation", "test-driven-development", "api-and-interface-design"},
 	},
 	{
 		ID:       "checks",
@@ -268,6 +279,7 @@ var DefaultStages = []Stage{
 		ReadOnly:   true,
 		System:     "Revisor de segurança (OWASP Top 10). Só leitura; orquestrador já roda os testes.",
 		Task:       "Procure: entrada sem validação/sanitização, XSS, injeção, auth/autorização falha, segredo exposto, header inseguro. Avalie também os testes unitários.",
+		Skills:     []string{"security-and-hardening"},
 	},
 	{
 		ID:       "review",
@@ -284,6 +296,7 @@ var DefaultStages = []Stage{
 			"3. Testes: cada critério coberto, ID no nome, expectativas corretas.\n" +
 			"4. Robustez: entrada validada, erro tratado, sem duplicação.\n" +
 			"5. Interface: acessível, responsiva, nada cobrindo controle.",
+		Skills: []string{"code-review-and-quality", "code-simplification"},
 	},
 	{
 		ID:         "e2e",
@@ -309,6 +322,7 @@ var DefaultStages = []Stage{
 			"contratos, configuração, pontos de extensão, como testar.\n" +
 			"Siga onde o projeto já documenta (README, docs/, ADR, CHANGELOG); sem lugar, crie docs/<id-da-us>.md. " +
 			"Nada a documentar: diga em uma frase e não crie arquivo.",
+		Skills: []string{"documentation-and-adrs"},
 	},
 }
 
@@ -317,9 +331,27 @@ const maxArtifactBytes = 12_000
 
 // buildDiscoveryPrompt gives the discovery agent the deterministic scan as a
 // starting point.
-func buildDiscoveryPrompt(repo string, stacks []workspace.Stack) string {
-	return fmt.Sprintf("## Repositório\n\n`%s`\n\n## Manifestos detectados automaticamente\n\n%s\n\n## Sua tarefa\n\n%s",
-		repo, workspace.FormatStacks(stacks), DiscoveryStage.Task)
+func buildDiscoveryPrompt(repo string, stacks []workspace.Stack, graph string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Repositório\n\n`%s`\n\n## Manifestos detectados automaticamente\n\n%s\n\n",
+		repo, workspace.FormatStacks(stacks))
+	writeGraph(&b, graph)
+	if report := strings.TrimSpace(workspace.GraphReport(graph)); report != "" {
+		fmt.Fprintf(&b, "Relatório do grafo (hubs e comunidades):\n\n%s\n\n", clip(report, maxArtifactBytes))
+	}
+	fmt.Fprintf(&b, "## Sua tarefa\n\n%s", DiscoveryStage.Task)
+	return b.String()
+}
+
+// writeGraph points agents at the code graph, cheaper than reading files to
+// find where something lives or what a change affects.
+func writeGraph(b *strings.Builder, graph string) {
+	if graph == "" {
+		return
+	}
+	fmt.Fprintf(b, "### Grafo do código (graphify)\n\n`%s`, atualizado pelo orquestrador (não reconstrua; caminhos relativos à raiz). "+
+		"Antes de varrer arquivos, consulte: `graphify query \"<pergunta>\" --graph %[1]s`, "+
+		"`graphify explain \"<símbolo>\" --graph %[1]s`, `graphify affected \"<símbolo>\" --graph %[1]s` (impacto de mudança).\n\n", graph)
 }
 
 // storyContext places a story within its document and sequence.
@@ -333,7 +365,16 @@ type storyContext struct {
 	Rules     rules
 	// Instructions are the project's agent instruction files (AGENTS.md…).
 	Instructions string
+	// PortBase starts the port range of a story run beside others; 0 alone.
+	PortBase int
 }
+
+// Parallel stories share the machine: each gets its own port range so their
+// dev servers neither collide nor get killed by another story's cleanup.
+const (
+	lanePortBase = 4400
+	lanePortSpan = 20
+)
 
 // rules are the delivery requirements the orchestrator enforces, stated up
 // front so agents meet them instead of discovering them in fix rounds.
@@ -380,6 +421,7 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 		if summary := strings.TrimSpace(discovery.Summary); summary != "" {
 			fmt.Fprintf(&b, "### Discovery (não refaça)\n\n%s\n\n", clip(summary, maxArtifactBytes))
 		}
+		writeGraph(&b, discovery.Graph)
 	}
 	writeInstructions(&b, sc.Instructions)
 
@@ -399,6 +441,8 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 			for _, p := range sc.Parallel {
 				fmt.Fprintf(&b, "- %s\n", p.Title)
 			}
+			fmt.Fprintf(&b, "\nServidores locais desta US (dev server, API, E2E): só portas %d a %d; as outras US usam outras faixas.\n",
+				sc.PortBase, sc.PortBase+lanePortSpan-1)
 		}
 		b.WriteString("\n\n")
 	}
@@ -415,6 +459,7 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 	}
 
 	writeRules(&b, sc.Rules)
+	writeSkills(&b, stage.Skills)
 	b.WriteString("## Sua tarefa\n\n")
 	b.WriteString(stage.Task)
 	b.WriteString(stageInstructions(stage))
@@ -442,6 +487,7 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 	if discovery != nil {
 		fmt.Fprintf(b, "## Repositório\n\n`%s`\n\nStacks:\n%s\n\n",
 			discovery.Path, workspace.FormatStacks(discovery.Stacks))
+		writeGraph(b, discovery.Graph)
 	}
 	writeInstructions(b, sc.Instructions)
 	if sc.Preamble != "" {
@@ -451,6 +497,24 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 	b.WriteString(strings.TrimSpace(sc.Story.Content))
 	b.WriteString("\n\n")
 	writeRules(b, sc.Rules)
+}
+
+// fixSkills guide fix rounds: find the root cause, prove it with a test.
+var fixSkills = []string{"debugging-and-error-recovery", "test-driven-development"}
+
+// installedSkills filters skill names to the installed ones; tests replace it.
+var installedSkills = workspace.InstalledSkills
+
+// writeSkills names the installed skills the agent must follow, so the
+// methodology comes from maintained playbooks instead of the prompt alone.
+func writeSkills(b *strings.Builder, skills []string) {
+	names := installedSkills(skills)
+	if len(names) == 0 {
+		return
+	}
+	b.WriteString("## Skills (obrigatório)\n\nCarregue e siga antes de começar: ")
+	b.WriteString(strings.Join(quoteAll(names), ", "))
+	b.WriteString(". Saída final continua no formato pedido abaixo.\n\n")
 }
 
 func writeInstructions(b *strings.Builder, text string) {
@@ -481,6 +545,7 @@ func buildFixPrompt(stage, gate Stage, sc storyContext, discovery *workspace.Rep
 		fmt.Fprintf(&b, "## Plano do arquiteto\n\n%s\n\n", clip(plan, maxArtifactBytes))
 	}
 	fmt.Fprintf(&b, "## Relatório de %s (rodada %d)\n\n%s\n\n", gate.Title, round, clip(stripJSONBlocks(report), maxArtifactBytes))
+	writeSkills(&b, fixSkills)
 	b.WriteString("## Correções obrigatórias atribuídas a você\n\n")
 	writeIssues(&b, issues)
 	b.WriteString("\n## Sua tarefa\n\nCorrija só os itens acima. Não mexa em comportamento não relacionado. " +
@@ -498,6 +563,7 @@ func buildVerifyPrompt(gate Stage, sc storyContext, discovery *workspace.Report,
 	for _, f := range fixes {
 		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), maxArtifactBytes))
 	}
+	writeSkills(&b, gate.Skills)
 	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação, rodada %d: cada problema acima resolvido? Correção quebrou algo? %s", round, gate.Task)
 	b.WriteString(verdictInstructions)
 	return b.String()

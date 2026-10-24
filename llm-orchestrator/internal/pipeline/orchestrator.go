@@ -498,10 +498,12 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 	if !ok {
 		return
 	}
-	report, ok := o.discover(ctx, repo)
+	graph := o.updateGraph(ctx, ss)
+	report, ok := o.discover(ctx, repo, graph)
 	if !ok || !o.guardInputs(ss, discoveryRef) {
 		return
 	}
+	report.Graph = graph
 	ss.report = report
 	if ss.policy.Candidates > 1 && !ss.dry && ss.git == nil {
 		o.logf(LevelWarn, "Best-of-N precisa de git; cada implementador fará uma única implementação.")
@@ -562,6 +564,7 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 		o.failStep(stepRef{story, o.stages[stageAt].ID}, 0, errors.New("discovery indisponível; inicie uma nova execução"))
 		return
 	}
+	report.Graph = o.updateGraph(ctx, ss)
 	ss.report = report
 
 	waves := o.Snapshot().Waves
@@ -1117,15 +1120,15 @@ func (o *Orchestrator) scheduleFixes(si int, gate Stage, afterID string, issues 
 
 // discover returns the session's discovery for repo, running it only when
 // there is no cached report.
-func (o *Orchestrator) discover(ctx context.Context, repo string) (*workspace.Report, bool) {
+func (o *Orchestrator) discover(ctx context.Context, repo, graph string) (*workspace.Report, bool) {
 	if cached := o.ws.Discovery(); cached != nil && cached.Path == repo {
 		o.updateStep(discoveryRef, func(s *Step) {
 			s.Status = StepSkipped
 			s.Provider, s.Model = cached.Provider, cached.Model
 			s.Output = cached.Summary
-			s.Note = fmt.Sprintf("Reutilizado da sessão (%s)", cached.CreatedAt.Format("15:04:05"))
+			s.Note = fmt.Sprintf("Reutilizado (%s)", cached.CreatedAt.Format("02/01 15:04"))
 		})
-		o.logf(LevelInfo, "Discovery reutilizado da sessão (realizado às %s).", cached.CreatedAt.Format("15:04:05"))
+		o.logf(LevelInfo, "Discovery reutilizado (realizado em %s); Refazer mapeia de novo.", cached.CreatedAt.Format("02/01 15:04"))
 		return cached, true
 	}
 
@@ -1139,7 +1142,7 @@ func (o *Orchestrator) discover(ctx context.Context, repo string) (*workspace.Re
 	resp, ok := o.runStage(ctx, discoveryRef, provider.Request{
 		Role:     DiscoveryStage.Role,
 		System:   DiscoveryStage.System,
-		Prompt:   buildDiscoveryPrompt(repo, stacks),
+		Prompt:   buildDiscoveryPrompt(repo, stacks, graph),
 		Tier:     DiscoveryStage.Tier,
 		WorkDir:  repo,
 		ReadOnly: true,
@@ -1158,8 +1161,27 @@ func (o *Orchestrator) discover(ctx context.Context, repo string) (*workspace.Re
 		CreatedAt: time.Now(),
 	}
 	o.ws.Store(report)
-	o.logf(LevelSuccess, "Discovery concluído e salvo para esta sessão.")
+	o.logf(LevelSuccess, "Discovery concluído e salvo.")
 	return &report, true
+}
+
+// updateCodeGraph builds the code graph; tests replace it.
+var updateCodeGraph = workspace.UpdateGraph
+
+// updateGraph refreshes the repository's code graph, which agents query
+// instead of scanning files. Without graphify the run goes on, only slower.
+// Simulation leaves the repository untouched.
+func (o *Orchestrator) updateGraph(ctx context.Context, ss *session) string {
+	if ss.dry {
+		return ""
+	}
+	graph, err := updateCodeGraph(ctx, ss.repo)
+	if err != nil {
+		o.logf(LevelWarn, "Grafo do código indisponível: %v", err)
+		return ""
+	}
+	o.logf(LevelInfo, "Grafo do código atualizado: %s.", graph)
+	return graph
 }
 
 // runStage executes a step and records its outcome. A failing call (CLI
