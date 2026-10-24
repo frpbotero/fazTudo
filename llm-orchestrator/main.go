@@ -93,6 +93,7 @@ func run() error {
 	}
 	hub := server.NewHub()
 	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
+	orch.SetJournalDir(settings.RunsDir(store.Path()))
 	srv := server.New(ctx, server.Deps{
 		Orchestrator: orch, Router: router, Workspace: ws, Settings: store, Hub: hub,
 		Static: web.Static, Version: version, Logger: logger,
@@ -135,6 +136,7 @@ func run() error {
 	if err := orch.Wait(shutdownCtx); err != nil {
 		logger.Warn("pipeline não finalizou a tempo", "err", err)
 	}
+	orch.FlushJournal() // the interruption is saved, ready to resume
 	return httpSrv.Shutdown(shutdownCtx)
 }
 

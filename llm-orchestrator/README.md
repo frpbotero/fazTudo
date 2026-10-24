@@ -154,6 +154,14 @@ permissão `0600`, e recarregados ao iniciar. Flags e variáveis de ambiente exp
 não suportado) são ignoradas com aviso no log, sem descartar o resto. O discovery é salvo ao lado,
 em `discovery/`; **Refazer** apaga o do repositório.
 
+**Última execução.** A execução de cada repositório é salva em `runs/` (ao lado da configuração)
+enquanto roda: etapas e saídas (plano do arquiteto, especificação, relatórios), branches, ondas,
+logs e as US com o contexto do documento. Ao abrir o app ou trocar de repositório, a última execução
+volta à tela. Se ela parou (falha, **Parar**, app fechado ou travado no meio), o botão
+**Continuar de onde parou** retoma na etapa marcada *Parou aqui*, na branch da US, reaproveitando as
+etapas concluídas (`POST /api/pipeline/resume`). Só a janela que executou grava o arquivo, para uma
+janela ociosa no mesmo repositório não sobrescrever uma execução mais nova.
+
 ## Requisitos
 
 - Go 1.22+ (app desktop: CLI do Wails; Linux: libgtk-3-dev e libwebkit2gtk-4.1-dev)
@@ -263,6 +271,8 @@ web/static/              # dashboard (HTML/CSS/JS sem dependências externas, em
 | `POST` | `/api/stories/parse` | `{"content": "<markdown>"}` → `{"preamble": "...", "stories": [{"id", "title", "content"}]}` |
 | `POST` | `/api/pipeline/start` | `{"stories": [...], "preamble": "...", "source": "markdown", "dry_run": true, "rediscover": false, "document_name": "US.md"}`; ou `{"content": "..."}` com uma única US |
 | `POST` | `/api/pipeline/stop` | Cancela a execução em andamento |
+| `POST` | `/api/pipeline/retry` | Refaz a etapa com falha (`{"story": 0, "step": "review"}`; `story` -1 para discovery/análise) |
+| `POST` | `/api/pipeline/resume` | Continua a última execução parada (falha, cancelada ou app fechado) de onde parou |
 | `GET` / `PUT` | `/api/config` | `{"default_provider": "codex", "failover": true, "providers": {"claude": {"heavy_model", "std_model", "effort"}}}` (atualização parcial) |
 | `POST` | `/api/providers/{id}/exhaust` | Simula limite de uso (`{"seconds": 45}`) |
 | `POST` | `/api/providers/{id}/restore` | Restaura a cota de um provedor |

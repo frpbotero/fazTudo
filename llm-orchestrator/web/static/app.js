@@ -40,7 +40,7 @@ Critérios de aceitação:
     version: $('version'), conn: $('conn'), connText: $('connText'),
     themeBtn: $('themeBtn'), configBtn: $('configBtn'),
     runForm: $('runForm'), source: $('source'), story: $('story'), storyCount: $('storyCount'),
-    modeNote: $('modeNote'), startBtn: $('startBtn'), startLabel: $('startLabel'), stopBtn: $('stopBtn'),
+    modeNote: $('modeNote'), startBtn: $('startBtn'), startLabel: $('startLabel'), stopBtn: $('stopBtn'), resumeBtn: $('resumeBtn'),
     repoForm: $('repoForm'), repoPath: $('repoPath'), repoSaveBtn: $('repoSaveBtn'),
     discovery: $('discovery'), discoveryBadge: $('discoveryBadge'),
     openMdBtn: $('openMdBtn'), mdFile: $('mdFile'), fileInfo: $('fileInfo'),
@@ -389,6 +389,23 @@ Critérios de aceitação:
     if (await startRun(picked, pendingDoc.preamble || '')) {
       el.storyDialog.close();
       toast(picked.length > 1 ? `Desenvolvimento contínuo de ${picked.length} US iniciado.` : `${picked[0].title} iniciada.`, 'success');
+    }
+  });
+
+  // Continues a failed, stopped or app-closed run from the step where it stopped, on the story's own branch.
+  el.resumeBtn.addEventListener('click', async () => {
+    el.resumeBtn.disabled = true;
+    try {
+      await api('POST', '/api/pipeline/resume');
+      openDetails.clear();
+      userClosed.clear();
+      viewStory = null;
+      viewWave = null;
+      toast('Execução retomada de onde parou.', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      el.resumeBtn.disabled = false;
     }
   });
 
@@ -810,7 +827,8 @@ Critérios de aceitação:
     fallback: 'O arquiteto não retornou um plano; todos os agentes foram executados.',
   };
   const finished = (s) => ['done', 'skipped', 'omitted', 'warning'].includes(s.status);
-  const isHidden = (s) => s.status === 'canceled' || s.status === 'omitted';
+  // Canceled steps are hidden, except the one an interrupted run resumes from.
+  const isHidden = (s) => (s.status === 'canceled' && !s.stoppedHere) || s.status === 'omitted';
   const isVerifier = (s) => /^checks(-verify-\d+)?$/.test(s.id);
   const storyLabel = (st, i) => st.id || `#${i + 1}`;
   // The title without the ID it usually starts with ("US-B01 — Modelar…").
@@ -1080,6 +1098,7 @@ Critérios de aceitação:
     if (s.status === 'running') parts.push(pill({ label: 'Executando', tone: 'accent' }));
     if (s.status === 'failed') parts.push(pill({ label: 'Falhou', tone: 'danger' }));
     if (s.status === 'warning') parts.push(pill({ label: 'Com pendências', tone: 'warn' }));
+    if (s.stoppedHere && s.status === 'canceled') parts.push(pill({ label: 'Parou aqui', tone: 'warn' }));
     if (s.status === 'skipped') parts.push(`<span>${ctx.isRunStep ? 'Reutilizado' : 'Dispensada'}</span>`);
     if (s.status === 'failed' && !ctx.run.running) {
       parts.push(`<button class="btn btn-sm" type="button" data-retry-step="${esc(s.id)}" data-retry-story="${ctx.isRunStep ? -1 : ctx.si}">${icon('rotate')}Refazer</button>`);
@@ -1157,9 +1176,12 @@ Critérios de aceitação:
     if (run.result === 'failed') {
       const step = failedStory?.steps.find((s) => s.status === 'failed') || [run.discovery, run.analysis].find((s) => s?.status === 'failed');
       const where = failedStory ? `${label(failedStory)} · ` : '';
-      return `Parou em ${where}${esc(step?.title || 'uma etapa')}. Abra a etapa para refazer.`;
+      return `Parou em ${where}${esc(step?.title || 'uma etapa')}. Continue de onde parou ou abra a etapa para refazer.`;
     }
-    if (run.result === 'canceled') return 'Execução cancelada.';
+    if (run.result === 'canceled') {
+      const at = run.resume;
+      return at ? `Interrompida em ${esc([at.story_title, at.title].filter(Boolean).join(' · '))}. Continue de onde parou.` : 'Execução cancelada.';
+    }
     const delivered = list.filter((s) => s.status === 'done' || s.status === 'warning').length;
     const pending = list.filter((s) => s.status === 'warning' || s.status === 'skipped').length;
     const took = run.finished_at ? ` em ${fmtDuration(Date.parse(run.finished_at) - Date.parse(run.started_at))}` : '';
@@ -1229,7 +1251,17 @@ Critérios de aceitação:
   }
 
   // ----- the run -----
+  // Flags the step a stopped run resumes from, so it stays visible and marked.
+  function markResumeStep(run) {
+    const at = run.running ? null : run.resume;
+    if (!at) return;
+    const steps = at.story < 0 ? [run.discovery, run.analysis] : run.stories?.[at.story]?.steps || [];
+    const step = steps.find((s) => s?.id === at.step);
+    if (step) step.stoppedHere = true;
+  }
+
   function renderRun(run) {
+    markResumeStep(run);
     renderHeader(run);
     artifacts = new Map();
     const list = run.stories || [];
@@ -1563,6 +1595,9 @@ Critérios de aceitação:
     el.repoSaveBtn.disabled = running;
     el.stopBtn.disabled = !running;
     el.stopBtn.hidden = !running;
+    const resume = running ? null : snapshot?.run.resume;
+    el.resumeBtn.hidden = !resume;
+    el.resumeBtn.title = resume ? `Retoma em ${[resume.story_title, resume.title].filter(Boolean).join(' · ')}` : '';
     el.newRunLink.hidden = running;
     el.startLabel.textContent = running ? 'Execução em andamento…' : 'Iniciar execução';
   }

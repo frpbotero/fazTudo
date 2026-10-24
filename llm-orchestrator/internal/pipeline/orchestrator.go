@@ -151,6 +151,8 @@ type Run struct {
 	Stories      []StoryRun `json:"stories"`
 	Current      int        `json:"current"` // index into Stories; -1 while discovering
 	Logs         []LogEntry `json:"logs"`
+	// Resume is where a stopped run continues; nil while running or done.
+	Resume *ResumePoint `json:"resume,omitempty"`
 }
 
 // StartOptions configures a run.
@@ -194,6 +196,13 @@ type Orchestrator struct {
 	attempts   int
 	retryDelay time.Duration
 
+	// journalDir keeps each repository's last run on disk; isJournalOwner is
+	// set once this window starts a run, the only case in which it writes.
+	journalDir     string
+	journalDirty   chan struct{}
+	journalMu      sync.Mutex
+	isJournalOwner bool
+
 	mu     sync.RWMutex
 	run    Run
 	last   StartOptions
@@ -229,6 +238,7 @@ func (o *Orchestrator) Snapshot() Run {
 		r.Analysis = &analysis
 	}
 	r.Integrations = slices.Clone(o.run.Integrations)
+	r.Resume = o.resumePointLocked()
 	return r
 }
 
@@ -256,7 +266,12 @@ func (o *Orchestrator) SetRepository(path string) (string, error) {
 	if o.busyLocked() {
 		return "", ErrAlreadyRunning
 	}
-	return o.ws.SetPath(path)
+	before := o.ws.Path()
+	resolved, err := o.ws.SetPath(path)
+	if err == nil && resolved != before {
+		o.loadJournalLocked(resolved)
+	}
+	return resolved, err
 }
 
 // Start launches a new run in the background. The simulation mode is applied
@@ -307,6 +322,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		o.run.Analysis = &analysis
 	}
 	o.last = opts
+	o.isJournalOwner = true
 	done := o.done
 	o.mu.Unlock()
 
@@ -335,18 +351,18 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 		o.mu.Unlock()
 		return ErrAlreadyRunning
 	}
-	if story == -1 && o.run.Result == ResultFailed && len(o.last.Stories) > 0 && o.runStepFailed(stepID) {
+	if story == -1 && o.isResumableLocked() && len(o.last.Stories) > 0 && o.runStepStopped(stepID) {
 		opts := o.last
 		o.mu.Unlock()
 		return o.Start(opts)
 	}
-	if o.run.Result != ResultFailed || story < 0 || story >= len(o.run.Stories) || len(o.last.Stories) != len(o.run.Stories) {
+	if !o.isResumableLocked() || story < 0 || story >= len(o.run.Stories) || len(o.last.Stories) != len(o.run.Stories) {
 		o.mu.Unlock()
 		return ErrNoFailedStep
 	}
 
 	failed := stepIndex(o.run.Stories[story].Steps, stepID)
-	if failed < 0 || o.run.Stories[story].Steps[failed].Status != StepFailed {
+	if failed < 0 || !o.isStoppedLocked(o.run.Stories[story].Steps[failed].Status) {
 		o.mu.Unlock()
 		return ErrNoFailedStep
 	}
@@ -401,6 +417,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	o.run.Result = ""
 	o.run.FinishedAt = nil
 	o.run.Current = story
+	o.isJournalOwner = true
 	ctx, cancel := context.WithCancel(context.Background())
 	o.cancel = cancel
 	o.done = make(chan struct{})
@@ -419,14 +436,26 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	return nil
 }
 
-// runStepFailed reports whether the run-level step id (discovery or
-// analysis) failed; retrying it starts the run again.
-func (o *Orchestrator) runStepFailed(id string) bool {
+// isResumableLocked reports whether the last run stopped before the end:
+// it failed, or it was canceled (stopped, or the app closed mid-run).
+func (o *Orchestrator) isResumableLocked() bool {
+	return !o.run.Running && (o.run.Result == ResultFailed || o.run.Result == ResultCanceled)
+}
+
+// isStoppedLocked reports whether a step with status is where the run stopped:
+// the failed step, or in a canceled run the interrupted (canceled) one.
+func (o *Orchestrator) isStoppedLocked(status StepStatus) bool {
+	return status == StepFailed || (o.run.Result == ResultCanceled && status == StepCanceled)
+}
+
+// runStepStopped reports whether the run-level step id (discovery or
+// analysis) is where the run stopped; resuming it starts the run again.
+func (o *Orchestrator) runStepStopped(id string) bool {
 	switch {
 	case id == DiscoveryStage.ID:
-		return o.run.Discovery.Status == StepFailed
+		return o.isStoppedLocked(o.run.Discovery.Status)
 	case id == AnalysisStage.ID && o.run.Analysis != nil:
-		return o.run.Analysis.Status == StepFailed
+		return o.isStoppedLocked(o.run.Analysis.Status)
 	}
 	return false
 }
@@ -572,12 +601,12 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 	if ss == nil {
 		return
 	}
-	report := o.ws.Discovery()
-	if report == nil || report.Path != repo {
-		o.failStep(stepRef{story, o.stages[stageAt].ID}, 0, errors.New("discovery indisponível; inicie uma nova execução"))
+	graph := o.updateGraph(ctx, ss)
+	report, ok := o.discover(ctx, repo, graph) // the saved one, or a new one
+	if !ok {
 		return
 	}
-	report.Graph = o.updateGraph(ctx, ss)
+	report.Graph = graph
 	ss.report = report
 
 	waves := o.Snapshot().Waves
@@ -1459,6 +1488,7 @@ func newStep(s Stage) Step {
 }
 
 func (o *Orchestrator) notify() {
+	o.requestJournalSave()
 	if o.onChange != nil {
 		o.onChange()
 	}

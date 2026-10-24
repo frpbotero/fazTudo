@@ -110,6 +110,7 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/pipeline/start", s.handleStart)
 	mux.HandleFunc("POST /api/pipeline/stop", s.handleStop)
 	mux.HandleFunc("POST /api/pipeline/retry", s.handleRetry)
+	mux.HandleFunc("POST /api/pipeline/resume", s.handleResume)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
 	mux.HandleFunc("PUT /api/workspace", s.handlePutWorkspace)
 	mux.HandleFunc("DELETE /api/workspace/discovery", s.handleResetDiscovery)
@@ -353,6 +354,20 @@ func (s *Server) handleStop(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+}
+
+// handleResume continues the stopped run (failed, canceled or cut by the app
+// closing) from where it stopped.
+func (s *Server) handleResume(w http.ResponseWriter, _ *http.Request) {
+	if err := s.orch.Resume(); err != nil {
+		status := http.StatusUnprocessableEntity
+		if errors.Is(err, pipeline.ErrAlreadyRunning) || errors.Is(err, workspace.ErrRepositoryBusy) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "resuming"})
 }
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {

@@ -67,6 +67,7 @@ func runDesktop() error {
 
 	hub := server.NewHub()
 	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
+	orch.SetJournalDir(settings.RunsDir(store.Path()))
 	srv := server.New(ctx, server.Deps{
 		Orchestrator: orch, Router: router, Workspace: ws, Settings: store, Hub: hub,
 		Static: web.Static, Version: version, Desktop: true, Logger: logger,
@@ -81,6 +82,7 @@ func runDesktop() error {
 		if waitErr := orch.Wait(stopCtx); waitErr != nil {
 			logger.Warn("pipeline não finalizou a tempo", "err", waitErr)
 		}
+		orch.FlushJournal() // the interruption is saved, ready to resume
 	}
 
 	return wails.Run(&options.App{

@@ -76,6 +76,15 @@ func DiscoveryDir(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "discovery")
 }
 
+// RunsDir is where the last run of each repository is saved, beside the
+// configuration file; "" keeps runs in memory only.
+func RunsDir(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(configPath), "runs")
+}
+
 // Path returns the file location, or "" when disabled.
 func (s *Store) Path() string { return s.path }
 
