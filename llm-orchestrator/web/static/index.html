@@ -395,6 +395,29 @@
       <p class="note">Paralelo: as US independentes (análise de dependências) e as frentes independentes de cada US rodam ao mesmo tempo, em worktrees git separados, e cada onda é mergeada na branch base antes da seguinte. Sequencial: uma US de cada vez, na ordem do documento, e os agentes de cada US um após o outro; gasta menos de uma vez e evita conflitos, mas demora mais.</p>
       <p class="note">Com 2 ou 3 candidatos, cada implementador gera alternativas em paralelo (worktrees git separados); a que passa nas verificações vence e um seletor desempata. Multiplica o consumo de tokens. Requer git.</p>
 
+      <div class="field">
+        <label for="qFlow">Fluxo de agentes</label>
+        <select id="qFlow">
+          <option value="full">Completo (padrão)</option>
+          <option value="balanced">Equilibrado — sem segurança, E2E e documentação</option>
+          <option value="fast">Rápido — Passo 0, plano de testes, arquiteto, devs e verificação</option>
+          <option value="audit">Auditoria — testes, code review e segurança do que já foi desenvolvido</option>
+          <option value="custom">Personalizado</option>
+        </select>
+        <p class="note" id="qFlowNote"></p>
+      </div>
+      <fieldset class="field" id="qStages" hidden>
+        <legend>Etapas ativas</legend>
+        <label class="check"><input type="checkbox" data-stage="context"> Passo 0: o que já existe</label>
+        <label class="check"><input type="checkbox" data-stage="spec"> Especificação EDD e plano de testes</label>
+        <label class="check"><input type="checkbox" data-stage="checks"> Verificação executável (comandos do projeto)</label>
+        <label class="check"><input type="checkbox" data-stage="security"> Segurança (OWASP)</label>
+        <label class="check"><input type="checkbox" data-stage="review"> Code review</label>
+        <label class="check"><input type="checkbox" data-stage="e2e"> QA E2E com Playwright</label>
+        <label class="check"><input type="checkbox" data-stage="docs"> Documentação</label>
+        <p class="note">O arquiteto e os desenvolvedores sempre rodam. Segurança, E2E e documentação ainda dependem do plano do arquiteto.</p>
+      </fieldset>
+
       <label class="check"><input type="checkbox" id="qGit"> Versionar com git: uma branch por US e um commit por etapa (repositórios sem git são inicializados)</label>
 
       <p class="form-error" id="qualityError" hidden></p>

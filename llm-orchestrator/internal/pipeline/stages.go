@@ -327,6 +327,11 @@ var DefaultStages = []Stage{
 	},
 }
 
+// auditNotice replaces "the changes of this story" for code already written.
+const auditNotice = "## Modo auditoria\n\nEsta US já foi desenvolvida: não há mudança nova a revisar. " +
+	"Localize o código que a implementa (grafo e Discovery), revise-o por inteiro e só aponte o que ainda é problema. " +
+	"Ninguém vai corrigir nesta execução: cada issue vira pendência no relatório, então seja específico (arquivo:linha e correção).\n\n"
+
 // maxArtifactBytes caps how much of each previous stage's output is forwarded.
 const maxArtifactBytes = 4_000
 
@@ -369,6 +374,9 @@ type storyContext struct {
 	Rules     rules
 	// Instructions are the project's agent instruction files (AGENTS.md…).
 	Instructions string
+	// Audit marks a story already developed: the stages review the existing
+	// code instead of a change.
+	Audit bool
 	// PortBase starts the port range of a story run beside others; 0 alone.
 	PortBase int
 }
@@ -454,6 +462,9 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 	b.WriteString("## User Story\n\n")
 	b.WriteString(strings.TrimSpace(sc.Story.Content))
 	b.WriteString("\n\n")
+	if sc.Audit {
+		b.WriteString(auditNotice)
+	}
 
 	if len(previous) > 0 {
 		b.WriteString("## Etapas anteriores\n\n")

@@ -61,7 +61,7 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qGit: $('qGit'), qualityError: $('qualityError'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qualityError: $('qualityError'),
     branches: $('branches'), branchesRefreshBtn: $('branchesRefreshBtn'),
     diffDialog: $('diffDialog'), diffTitle: $('diffTitle'), diffMeta: $('diffMeta'), diffBody: $('diffBody'),
     toasts: $('toasts'),
@@ -512,6 +512,33 @@ Critérios de aceitação:
     });
   }
 
+  const FLOW_LABELS = {
+    full: 'completo: todas as etapas',
+    balanced: 'equilibrado: sem segurança, E2E e documentação',
+    fast: 'rápido: Passo 0, plano de testes, arquiteto, devs e verificação',
+    audit: 'auditoria: testes, code review e segurança do código existente',
+  };
+  const FLOW_OFF = {
+    full: [],
+    balanced: ['security', 'e2e', 'docs'],
+    fast: ['security', 'review', 'e2e', 'docs'],
+    audit: ['context', 'spec', 'arch', 'frontend', 'backend', 'e2e', 'docs'],
+  };
+  const stageBoxes = () => [...el.qStages.querySelectorAll('input[data-stage]')];
+
+  function flowLabel(p) {
+    if (p.flow !== 'custom') return FLOW_LABELS[p.flow] || FLOW_LABELS.full;
+    const off = p.disabled_stages || [];
+    return off.length ? `personalizado: sem ${off.join(', ')}` : 'personalizado: todas as etapas';
+  }
+
+  // Presets show their stages ticked or not; only "custom" can be edited.
+  function syncFlowForm() {
+    const flow = el.qFlow.value;
+    el.qStages.hidden = flow !== 'custom';
+    el.qFlowNote.textContent = flow === 'custom' ? '' : `Etapas desligadas: ${FLOW_OFF[flow].join(', ') || 'nenhuma'}.`;
+  }
+
   function renderQuality(ws) {
     el.qualityEditBtn.disabled = !ws.path;
     if (!ws.path) {
@@ -532,6 +559,7 @@ Critérios de aceitação:
         <dt>Linhas</dt><dd>até ${esc(p.max_line_length)} caracteres</dd>
         <dt>Git</dt><dd>${p.git ? 'branch por US, commit por etapa' : 'desativado'}</dd>
         <dt>Desenvolvimento</dt><dd>${p.sequential ? 'sequencial: uma US de cada vez' : 'paralelo: US e frentes independentes juntas'}</dd>
+        <dt>Fluxo</dt><dd>${esc(flowLabel(p))}</dd>
         <dt>Candidatos</dt><dd>${p.candidates > 1 ? `best-of-${esc(p.candidates)}` : '1 por implementação'}</dd>
       </dl>`;
   }
@@ -559,12 +587,17 @@ Critérios de aceitação:
     el.qCandidates.value = String(p.candidates || 1);
     el.qMode.value = p.sequential ? 'sequential' : 'parallel';
     el.qGit.checked = p.git;
+    el.qFlow.value = p.flow || 'full';
+    const off = p.disabled_stages || [];
+    stageBoxes().forEach((b) => { b.checked = !off.includes(b.dataset.stage); });
+    syncFlowForm();
     syncQualityForm();
     el.qualityDialog.showModal();
   }
 
   el.qualityEditBtn.addEventListener('click', openQuality);
   el.qAuto.addEventListener('change', syncQualityForm);
+  el.qFlow.addEventListener('change', syncFlowForm);
   el.qualityDialog.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => el.qualityDialog.close()));
   el.qualityDialog.addEventListener('click', (e) => { if (e.target === el.qualityDialog) el.qualityDialog.close(); });
 
@@ -579,6 +612,10 @@ Critérios de aceitação:
       check_timeout_s: Number(el.qTimeout.value) || 0,
       candidates: Number(el.qCandidates.value) || 1,
       sequential: el.qMode.value === 'sequential',
+      flow: el.qFlow.value,
+      disabled_stages: stageBoxes().filter((b) => !b.checked).map((b) => b.dataset.stage),
+      parallel_lenses: snapshot?.workspace?.policy?.parallel_lenses,
+      max_fix_rounds: snapshot?.workspace?.policy?.max_fix_rounds,
       base_branches: snapshot?.workspace?.policy?.base_branches,
     };
     try {

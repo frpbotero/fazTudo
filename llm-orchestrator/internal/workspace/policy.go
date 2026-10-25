@@ -42,6 +42,38 @@ type Policy struct {
 	ParallelLenses bool `json:"parallel_lenses"`
 	// MaxFixRounds limits fix-and-verify loops; default is 1 (max 3).
 	MaxFixRounds int `json:"max_fix_rounds"`
+	// Flow picks which stages run: FlowFull (default), FlowBalanced, FlowFast
+	// FlowAudit or FlowCustom, which turns off DisabledStages. Only FlowAudit
+	// skips the architect and the implementers.
+	Flow           string   `json:"flow,omitempty"`
+	DisabledStages []string `json:"disabled_stages,omitempty"`
+}
+
+// Flow presets.
+const (
+	FlowFull     = "full"     // every stage
+	FlowBalanced = "balanced" // no security, E2E or documentation
+	FlowFast     = "fast"     // Passo 0, test plan, architect, implementers and project checks
+	FlowAudit    = "audit"    // no development: checks, review and security of code already written
+	FlowCustom   = "custom"   // DisabledStages decides
+)
+
+// OptionalStages are the stages a flow may turn off, in pipeline order. The
+// architect (it plans the work) and the implementers are not among them.
+var OptionalStages = []string{"context", "spec", "checks", "security", "review", "e2e", "docs"}
+
+var presetDisabled = map[string][]string{
+	FlowBalanced: {"security", "e2e", "docs"},
+	FlowFast:     {"security", "review", "e2e", "docs"},
+	FlowAudit:    {"context", "spec", "arch", "frontend", "backend", "e2e", "docs"},
+}
+
+// StageDisabled reports whether the flow turns the stage off.
+func (p Policy) StageDisabled(id string) bool {
+	if p.Flow == FlowCustom {
+		return slices.Contains(p.DisabledStages, id)
+	}
+	return slices.Contains(presetDisabled[p.Flow], id)
 }
 
 const (
@@ -67,6 +99,7 @@ func DefaultPolicy() Policy {
 		CheckTimeoutS:  600,
 		Candidates:     1,
 		ParallelLenses: false,
+		Flow:           FlowFull,
 		MaxFixRounds:   0, // 0 defaults to the engine's maxFixRounds (2)
 	}
 }
@@ -83,6 +116,16 @@ func (p Policy) Normalize() Policy {
 	if p.Candidates == 0 {
 		p.Candidates = def.Candidates
 	}
+	if p.Flow == "" {
+		p.Flow = FlowFull
+	}
+	var disabled []string
+	for _, id := range OptionalStages {
+		if p.Flow == FlowCustom && slices.Contains(p.DisabledStages, id) {
+			disabled = append(disabled, id)
+		}
+	}
+	p.DisabledStages = disabled
 	checks := make([]quality.Command, 0, len(p.Checks))
 	for _, c := range p.Checks {
 		c.Name, c.Run = strings.TrimSpace(c.Name), strings.TrimSpace(c.Run)
@@ -128,6 +171,8 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("o tempo limite deve estar entre %d e %d segundos", minCheckTimeout, maxCheckTimeout)
 	case p.Candidates < 1 || p.Candidates > maxCandidates:
 		return fmt.Errorf("o número de candidatos deve estar entre 1 e %d", maxCandidates)
+	case !slices.Contains([]string{FlowFull, FlowBalanced, FlowFast, FlowAudit, FlowCustom}, p.Flow):
+		return fmt.Errorf("fluxo desconhecido: %q", p.Flow)
 	case p.MaxFixRounds < 0 || p.MaxFixRounds > 3:
 		return errors.New("o número de rodadas de correção deve estar entre 0 e 3")
 	case !p.AutoChecks && len(p.Checks) == 0:

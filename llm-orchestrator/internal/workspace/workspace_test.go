@@ -178,3 +178,24 @@ func TestPolicyDefaultsToParallelAndKeepsSequential(t *testing.T) {
 		t.Fatalf("sequential not kept: %+v %v", saved, err)
 	}
 }
+
+func TestPolicyFlowNormalization(t *testing.T) {
+	p := DefaultPolicy()
+	p.Flow, p.DisabledStages = FlowCustom, []string{"docs", "arch", "bogus", "docs"}
+	p = p.Normalize()
+	if len(p.DisabledStages) != 1 || p.DisabledStages[0] != "docs" {
+		t.Fatalf("disabled = %v; the architect and unknown ids must be dropped", p.DisabledStages)
+	}
+	if !p.StageDisabled("docs") || p.StageDisabled("review") {
+		t.Error("custom flow must disable only the chosen stages")
+	}
+	if !(Policy{Flow: FlowFast}).StageDisabled("review") || (Policy{Flow: FlowFast}).StageDisabled("spec") {
+		t.Error("fast flow keeps the test plan and drops the review")
+	}
+	if (Policy{}).StageDisabled("review") {
+		t.Error("an empty flow runs everything")
+	}
+	if err := (Policy{Flow: "x"}).Validate(); err == nil {
+		t.Error("an unknown flow must be rejected")
+	}
+}

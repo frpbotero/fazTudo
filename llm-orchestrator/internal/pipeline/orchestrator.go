@@ -64,6 +64,9 @@ const (
 	LevelError   = "error"
 )
 
+// flowOffNote marks a stage the configured flow turns off.
+const flowOffNote = "Desativada no fluxo configurado"
+
 const (
 	maxLogs = 500
 	// maxFixRounds is how many fix-and-verify rounds a gate may trigger
@@ -806,6 +809,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		o.startBranch(ctx, ss, st)
 	}
 
+	o.planAudit(ss, st)
 	streamed := false
 	for stageIndex, stage := range o.stages {
 		if stageIndex < startAt {
@@ -813,6 +817,9 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		}
 		if stage.Selectable && !st.plan.Includes(stage.ID) {
 			continue // already marked as omitted when the plan was applied
+		}
+		if ss.policy.StageDisabled(stage.ID) {
+			continue // marked as omitted when the story's steps were created
 		}
 		ref := stepRef{st.si, stage.ID}
 		if waves := st.plan.parallelWaves(); stage.Implementer && waves != nil && !ss.policy.Sequential {
@@ -888,6 +895,28 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		}
 	}
 	return true
+}
+
+// planAudit stands in for the architect when the flow turns it off (audit of
+// code already written): every enabled reviewer runs and nothing is built.
+func (o *Orchestrator) planAudit(ss *session, st *storyState) {
+	var planner *Stage
+	for i := range o.stages {
+		if o.stages[i].Planner {
+			planner = &o.stages[i]
+		}
+	}
+	if planner == nil || !ss.policy.StageDisabled(planner.ID) {
+		return
+	}
+	plan := Plan{Source: "audit", Reason: "Auditoria do código existente: sem arquiteto nem desenvolvimento."}
+	for _, s := range o.stages {
+		if s.Selectable && !s.Implementer && !ss.policy.StageDisabled(s.ID) {
+			plan.Agents = append(plan.Agents, s.ID)
+		}
+	}
+	st.plan = plan
+	o.updateStory(st.si, func(r *StoryRun) { r.Plan = &plan })
 }
 
 // applyAssessment records the Passo 0 decision. It returns true when the
@@ -1027,6 +1056,8 @@ func (o *Orchestrator) applyPlan(si int, sc storyContext, resp *provider.Respons
 		o.logf(LevelWarn, "O arquiteto não retornou um plano em JSON; todos os agentes serão executados.")
 	}
 
+	policy := o.ws.Policy()
+	plan.Agents = slices.DeleteFunc(plan.Agents, policy.StageDisabled)
 	var names []string
 	o.mu.Lock()
 	st := &o.run.Stories[si]
@@ -1039,7 +1070,7 @@ func (o *Orchestrator) applyPlan(si int, sc storyContext, resp *provider.Respons
 			names = append(names, stage.Title)
 			continue
 		}
-		if i := stepIndex(st.Steps, stage.ID); i >= 0 {
+		if i := stepIndex(st.Steps, stage.ID); i >= 0 && !policy.StageDisabled(stage.ID) {
 			st.Steps[i].Status = StepOmitted
 			st.Steps[i].Note = "Não selecionado pelo arquiteto"
 		}
@@ -1165,10 +1196,11 @@ type scheduledFix struct {
 // scheduleFixes groups issues by implementer and inserts one pending fix
 // step per implementer right after the gate step.
 func (o *Orchestrator) scheduleFixes(si int, gate Stage, afterID string, issues []Issue, round int) []scheduledFix {
+	policy := o.ws.Policy()
 	var fixes []scheduledFix
 	var names []string
 	for _, impl := range o.stages {
-		if !impl.Implementer {
+		if !impl.Implementer || policy.StageDisabled(impl.ID) {
 			continue
 		}
 		var mine []Issue
@@ -1374,6 +1406,7 @@ func (o *Orchestrator) finish(result Result, level, msg string) {
 	o.run.Result = result
 	o.run.FinishedAt = &now
 	o.mu.Unlock()
+	o.writePendencies(o.Snapshot())
 	o.logf(level, "%s", msg)
 	o.logger.Info("pipeline finished", "result", result)
 }
@@ -1518,9 +1551,13 @@ func (o *Orchestrator) providerLog(level slog.Level, format string, args ...any)
 }
 
 func (o *Orchestrator) freshSteps() []Step {
+	policy := o.ws.Policy()
 	steps := make([]Step, len(o.stages))
 	for i, s := range o.stages {
 		steps[i] = newStep(s)
+		if policy.StageDisabled(s.ID) {
+			steps[i].Status, steps[i].Note = StepOmitted, flowOffNote
+		}
 	}
 	return steps
 }
