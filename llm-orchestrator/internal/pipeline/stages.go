@@ -139,6 +139,7 @@ const engineeringRules = "\n\nRegras:\n" +
 	"- Mudança mínima, solução simples.\n" +
 	"- Reutilize helpers e componentes existentes. Não reimplemente.\n" +
 	"- Passo 0 diz o que já existe: implemente só o que falta, não reescreva o que já atende.\n" +
+	"- Não faça varreduras cegas ou recursivas com grep/find no repositório inteiro. Use o grafo graphify e inspecione apenas arquivos relevantes.\n" +
 	"- Mudou símbolo exportado: atualize todas as referências.\n" +
 	"- Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.\n" +
 	"- Valide: rode testes, typecheck e lint da área alterada antes de terminar.\n" +
@@ -285,7 +286,7 @@ var DefaultStages = []Stage{
 		ID:       "review",
 		Title:    "Code review",
 		Role:     "Staff Reviewer",
-		Tier:     provider.TierHeavy,
+		Tier:     provider.TierStandard,
 		Gate:     true,
 		ReadOnly: true,
 		Lenses:   reviewLenses,
@@ -327,7 +328,10 @@ var DefaultStages = []Stage{
 }
 
 // maxArtifactBytes caps how much of each previous stage's output is forwarded.
-const maxArtifactBytes = 12_000
+const maxArtifactBytes = 4_000
+
+// maxPreambleBytes caps how much document context is forwarded to stages.
+const maxPreambleBytes = 2_000
 
 // buildDiscoveryPrompt gives the discovery agent the deterministic scan as a
 // starting point.
@@ -426,7 +430,7 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 	writeInstructions(&b, sc.Instructions)
 
 	if sc.Preamble != "" {
-		fmt.Fprintf(&b, "## Contexto do documento\n\n%s\n\n", clip(sc.Preamble, maxArtifactBytes))
+		fmt.Fprintf(&b, "## Contexto do documento\n\n%s\n\n", clip(sc.Preamble, maxPreambleBytes))
 	}
 	if sc.Total > 1 {
 		fmt.Fprintf(&b, "## Sequência de desenvolvimento\n\nUS %d de %d.", sc.Position, sc.Total)
@@ -491,7 +495,7 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 	}
 	writeInstructions(b, sc.Instructions)
 	if sc.Preamble != "" {
-		fmt.Fprintf(b, "## Contexto do documento\n\n%s\n\n", clip(sc.Preamble, maxArtifactBytes))
+		fmt.Fprintf(b, "## Contexto do documento\n\n%s\n\n", clip(sc.Preamble, maxPreambleBytes))
 	}
 	b.WriteString("## User Story\n\n")
 	b.WriteString(strings.TrimSpace(sc.Story.Content))

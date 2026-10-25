@@ -81,7 +81,7 @@ func buildAnalysisPrompt(opts StartOptions, keys []string, discovery *workspace.
 		}
 	}
 	if opts.Preamble != "" {
-		fmt.Fprintf(&b, "## Contexto do documento\n\n%s\n\n", clip(opts.Preamble, maxArtifactBytes))
+		fmt.Fprintf(&b, "## Contexto do documento\n\n%s\n\n", clip(opts.Preamble, maxPreambleBytes))
 	}
 	b.WriteString("## User Stories\n\n")
 	for i, s := range opts.Stories {

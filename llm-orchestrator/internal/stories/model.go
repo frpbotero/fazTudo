@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -20,19 +21,48 @@ Responda SOMENTE com JSON, sem texto extra nem bloco de código:
 {"stories":[{"line":<número da linha onde a US começa>,"id":"<identificador, ex.: US-A01; vazio se não houver>"}]}
 Liste todas as US, na ordem do documento.`
 
+// largeDocLineThreshold triggers structural outline filtering for large backlogs,
+// keeping token usage low instead of forwarding thousands of body lines.
+const largeDocLineThreshold = 100
+
+var reRolePattern = regexp.MustCompile(`(?i)\bcomo\s+(?:um|uma|o|a)?\b|\bcomo\b.*\bquero\b`)
+
+func isStructuralLine(l string) bool {
+	return reHeading.MatchString(l) ||
+		reStoryID.MatchString(l) ||
+		reStory.MatchString(l) ||
+		reRolePattern.MatchString(l) ||
+		strings.HasPrefix(l, "**") ||
+		strings.HasPrefix(l, "- ") ||
+		strings.HasPrefix(l, "* ")
+}
+
 // DetectPrompt renders md with line numbers for the model.
 func DetectPrompt(md string) string {
 	var b strings.Builder
 	b.WriteString("Documento:\n\n")
-	for i, l := range splitLines(md) {
-		l = strings.TrimSpace(l)
-		if l == "" {
+	lines := splitLines(md)
+	isLarge := len(lines) > largeDocLineThreshold
+	inFence := false
+	for i, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed == "" {
 			continue
 		}
-		if r := []rune(l); len(r) > maxOutlineLine {
-			l = string(r[:maxOutlineLine]) + "…"
+		if reFence.MatchString(trimmed) {
+			inFence = !inFence
+			continue
 		}
-		fmt.Fprintf(&b, "%d| %s\n", i+1, l)
+		if inFence {
+			continue
+		}
+		if isLarge && !isStructuralLine(trimmed) {
+			continue
+		}
+		if r := []rune(trimmed); len(r) > maxOutlineLine {
+			trimmed = string(r[:maxOutlineLine]) + "…"
+		}
+		fmt.Fprintf(&b, "%d| %s\n", i+1, trimmed)
 	}
 	return b.String()
 }

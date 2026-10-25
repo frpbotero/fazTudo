@@ -41,6 +41,11 @@ func TestReviewLensesRunInParallelAndMerge(t *testing.T) {
 		"rev":         {"```json\n{\"status\":\"approved\",\"issues\":[]}\n```"},
 	}}
 	o, repo := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
+	pol := o.ws.Policy()
+	pol.ParallelLenses = true
+	if _, err := o.ws.SetPolicy(pol); err != nil {
+		t.Fatal(err)
+	}
 	o.stages = lensStages
 	writeFile(t, repo, "AGENTS.md", "Sempre escreva testes primeiro.")
 
@@ -75,6 +80,27 @@ func TestReviewLensesRunInParallelAndMerge(t *testing.T) {
 	}
 }
 
+func TestReviewRunsAsUnifiedByDefault(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{
+		"arch": {"```json\n{\"agents\":[\"backend\"]}\n```"},
+		"rev":  {"ok\n```json\n{\"status\":\"approved\",\"issues\":[]}\n```"},
+	}}
+	o, _ := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
+	o.stages = lensStages
+
+	_ = o.Start(realStory("API de carrinho"))
+	run := waitDone(t, o)
+	if run.Result != ResultSucceeded {
+		t.Fatalf("result = %s, logs: %+v", run.Result, run.Logs)
+	}
+	if exec.count("rev") != 1 {
+		t.Errorf("expected unified review to run exactly once, got %d", exec.count("rev"))
+	}
+	if exec.count("rev · Spec") != 0 || exec.count("rev · Tests") != 0 {
+		t.Error("parallel lenses should not run when ParallelLenses is false")
+	}
+}
+
 func TestKilledLensIsRetriedAlone(t *testing.T) {
 	var mu sync.Mutex
 	specFailed := false
@@ -95,6 +121,11 @@ func TestKilledLensIsRetriedAlone(t *testing.T) {
 		},
 	}
 	o, _ := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
+	polKilled := o.ws.Policy()
+	polKilled.ParallelLenses = true
+	if _, err := o.ws.SetPolicy(polKilled); err != nil {
+		t.Fatal(err)
+	}
 	o.stages = lensStages
 	o.attempts, o.retryDelay = 2, time.Millisecond
 

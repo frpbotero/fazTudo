@@ -834,7 +834,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		var ok bool
 		lenses := activeLenses(stage.Lenses, st.plan)
 		switch {
-		case len(lenses) > 1:
+		case len(lenses) > 1 && ss.policy.ParallelLenses:
 			resp, ok = o.runLenses(ctx, ss, st, stage, lenses, ref)
 		case stage.Implementer && ss.policy.Candidates > 1 && canIsolate(ss):
 			resp, ok = o.runCandidates(ctx, ss, st, stage, ref)
@@ -1076,6 +1076,9 @@ func (o *Orchestrator) llmEvaluation(resp *provider.Response, plan Plan) evaluat
 func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storyState, gate Stage, ev evaluation, recheck recheckFunc) bool {
 	stepID := gate.ID
 	rounds := maxFixRounds
+	if ss.policy.MaxFixRounds > 0 {
+		rounds = ss.policy.MaxFixRounds
+	}
 	if gate.Verifier {
 		rounds = maxVerifierRounds
 	}

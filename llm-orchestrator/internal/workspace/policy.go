@@ -37,6 +37,11 @@ type Policy struct {
 	// repository: "." for the repository itself, or a nested repository's
 	// path. A repository without one starts from its current branch.
 	BaseBranches map[string]string `json:"base_branches,omitempty"`
+	// ParallelLenses runs each review lens as a separate concurrent agent call;
+	// the default (false) evaluates all lenses together in a single consolidated review.
+	ParallelLenses bool `json:"parallel_lenses"`
+	// MaxFixRounds limits fix-and-verify loops; default is 1 (max 3).
+	MaxFixRounds int `json:"max_fix_rounds"`
 }
 
 const (
@@ -54,13 +59,15 @@ const (
 // DefaultPolicy is used for repositories without saved settings.
 func DefaultPolicy() Policy {
 	return Policy{
-		AutoChecks:    true,
-		Checks:        []quality.Command{},
-		Protected:     slices.Clone(quality.DefaultProtected),
-		Git:           true,
-		MaxLineLength: 160,
-		CheckTimeoutS: 600,
-		Candidates:    1,
+		AutoChecks:     true,
+		Checks:         []quality.Command{},
+		Protected:      slices.Clone(quality.DefaultProtected),
+		Git:            true,
+		MaxLineLength:  160,
+		CheckTimeoutS:  600,
+		Candidates:     1,
+		ParallelLenses: false,
+		MaxFixRounds:   0, // 0 defaults to the engine's maxFixRounds (2)
 	}
 }
 
@@ -121,6 +128,8 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("o tempo limite deve estar entre %d e %d segundos", minCheckTimeout, maxCheckTimeout)
 	case p.Candidates < 1 || p.Candidates > maxCandidates:
 		return fmt.Errorf("o número de candidatos deve estar entre 1 e %d", maxCandidates)
+	case p.MaxFixRounds < 0 || p.MaxFixRounds > 3:
+		return errors.New("o número de rodadas de correção deve estar entre 0 e 3")
 	case !p.AutoChecks && len(p.Checks) == 0:
 		return errors.New("informe ao menos um comando ou use os detectados automaticamente")
 	}

@@ -92,15 +92,16 @@ var ClaudeCLI = CLI{
 		{ID: "claude-haiku-5-5", Label: "Claude Haiku 5.5"},
 		{ID: "claude-fable-5-1", Label: "Claude Fable 5.1"},
 	},
-	Defaults:   Settings{HeavyModel: "claude-opus-5-5", StdModel: "claude-sonnet-5-5", Effort: "high"},
+	Defaults:   Settings{HeavyModel: "claude-sonnet-5-5", StdModel: "claude-sonnet-5-5", Effort: "medium"},
 	LightModel: "claude-haiku-5-5",
 	Args: func(inv Invocation) []string {
 		args := []string{"-p", "--append-system-prompt", inv.System}
 		if inv.ReadOnly {
-			args = append(args, "--permission-mode", "plan")
+			args = append(args, "--permission-mode", "plan", "--tools", "Read,Grep,Glob")
 		} else {
 			args = append(args, "--dangerously-skip-permissions")
 		}
+		args = append(args, "--autocompact", "auto")
 		if inv.Model != "" {
 			args = append(args, "--model", inv.Model)
 		}

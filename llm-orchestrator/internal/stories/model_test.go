@@ -56,3 +56,28 @@ func TestFromModelRejectsBadOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestDetectPromptFiltersStructuralLinesForLargeDocs(t *testing.T) {
+	var lines []string
+	for i := 1; i <= 150; i++ {
+		lines = append(lines, "parágrafo longo de texto descritivo irrelevante para a lista de US")
+	}
+	lines[50] = "### US-101 Login"
+	lines[100] = "- Como usuário, quero sair"
+	lines[120] = "```go\ncode block\n```"
+	doc := strings.Join(lines, "\n")
+
+	p := DetectPrompt(doc)
+	if !strings.Contains(p, "51| ### US-101 Login") {
+		t.Errorf("heading missing from prompt:\n%s", p)
+	}
+	if !strings.Contains(p, "101| - Como usuário, quero sair") {
+		t.Errorf("role bullet missing from prompt:\n%s", p)
+	}
+	if strings.Contains(p, "parágrafo longo") {
+		t.Error("body paragraphs must be omitted in large document outline")
+	}
+	if strings.Contains(p, "code block") {
+		t.Error("code fences must be omitted")
+	}
+}
