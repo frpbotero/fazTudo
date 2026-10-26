@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"llm-orchestrator/internal/provider"
+	"llm-orchestrator/internal/stories"
 	"llm-orchestrator/internal/workspace"
 )
 
@@ -165,5 +166,77 @@ func TestStoppedRunResumesInTheSameWindow(t *testing.T) {
 	}
 	if run := waitDone(t, o); run.Result != ResultSucceeded {
 		t.Fatalf("result = %s", run.Result)
+	}
+}
+
+// Sequential development never runs the dependency analysis; its step must
+// not be left pending, or an interruption makes it the resume point and the
+// whole run starts over.
+func TestSequentialRunResumesInsideTheInterruptedStory(t *testing.T) {
+	repo, config := t.TempDir(), t.TempDir()
+	release := make(chan struct{})
+	var killed atomic.Bool
+	exec := &fakeExecutor{
+		onCall: func(req provider.Request) {
+			if req.Role == "rb" && strings.Contains(req.Prompt, "story two") && !killed.Load() {
+				<-release
+			}
+		},
+		failIf: func(req provider.Request) bool {
+			return req.Role == "rb" && strings.Contains(req.Prompt, "story two") && killed.CompareAndSwap(true, false)
+		},
+	}
+	o := journalWindow(t, exec, repo, config)
+	policy := o.ws.Policy()
+	policy.Sequential, policy.Git = true, false
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	opts := StartOptions{DryRun: true, Source: "Markdown", Stories: []stories.Story{
+		{ID: "US-1", Title: "US-1 one", Content: "story one"},
+		{ID: "US-2", Title: "US-2 two", Content: "story two"},
+	}}
+	if err := o.Start(opts); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(o.Snapshot().Stories) == 2 && o.Snapshot().Stories[1].Steps[1].Status != StepRunning && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	o.Stop()
+	killed.Store(true)
+	close(release)
+	run := waitDone(t, o)
+	if run.Resume == nil || run.Resume.Story != 1 || run.Resume.Step != "b" {
+		t.Fatalf("resume point = %+v, want story 1 step b", run.Resume)
+	}
+
+	exec.mu.Lock()
+	before := len(exec.roles)
+	exec.mu.Unlock()
+	if err := o.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if run = waitDone(t, o); run.Result != ResultSucceeded {
+		t.Fatalf("result = %s, logs: %+v", run.Result, run.Logs)
+	}
+	exec.mu.Lock()
+	after := strings.Join(exec.roles[before:], ",")
+	exec.mu.Unlock()
+	if after != "rb,rc" {
+		t.Errorf("calls after resume = %s, want only B and C of the second story", after)
+	}
+}
+
+func TestSavedRunWithCanceledUnusedAnalysisResumesInTheStory(t *testing.T) {
+	run := Run{Result: ResultCanceled, Waves: [][]int{{0}, {1}}, Analysis: &Step{ID: AnalysisStage.ID, Status: StepCanceled}}
+	skipUnusedAnalysis(&run)
+	if run.Analysis.Status != StepSkipped {
+		t.Fatalf("analysis = %s", run.Analysis.Status)
+	}
+	noWaves := Run{Analysis: &Step{ID: AnalysisStage.ID, Status: StepCanceled}}
+	skipUnusedAnalysis(&noWaves)
+	if noWaves.Analysis.Status != StepCanceled {
+		t.Fatal("an analysis that never finished must stay the resume point")
 	}
 }

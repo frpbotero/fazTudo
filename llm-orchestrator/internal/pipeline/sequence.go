@@ -206,6 +206,9 @@ func (o *Orchestrator) analyzeSequence(ctx context.Context, ss *session, opts St
 		o.logf(LevelInfo, "Sem git, as US não rodam em paralelo; seguem a ordem do documento.")
 	}
 	if len(opts.Stories) < 2 || ss.policy.Sequential || (!canIsolate(ss) && !ss.dry) {
+		// Left pending, the step would be canceled with the run and become
+		// the resume point, so resuming would start everything over.
+		o.updateStep(analysisRef, func(s *Step) { s.Status, s.Note = StepSkipped, "Sem análise: as US seguem a ordem do documento" })
 		o.setWaves(sequentialWaves(len(opts.Stories)), nil, nil)
 		return sequentialWaves(len(opts.Stories)), true
 	}

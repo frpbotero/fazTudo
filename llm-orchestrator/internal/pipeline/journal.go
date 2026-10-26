@@ -170,6 +170,7 @@ func (o *Orchestrator) loadJournalLocked(repo string) {
 	if json.Unmarshal(data, &j) != nil || j.Run.Repository != repo {
 		return
 	}
+	skipUnusedAnalysis(&j.Run)
 	if j.Run.Running {
 		markInterrupted(&j.Run, j.SavedAt)
 	}
@@ -177,6 +178,15 @@ func (o *Orchestrator) loadJournalLocked(repo string) {
 		Message: "Última execução deste repositório carregada (" + j.SavedAt.Format("02/01 15:04") + ")."})
 	o.run, o.last = j.Run, j.Options
 	o.isJournalOwner = false
+}
+
+// skipUnusedAnalysis repairs runs saved before sequential development marked
+// its bypassed dependency analysis as skipped: with the waves already set the
+// analysis is over, and leaving it pending would make it the resume point.
+func skipUnusedAnalysis(run *Run) {
+	if a := run.Analysis; a != nil && len(run.Waves) > 0 && (a.Status == StepPending || a.Status == StepCanceled) {
+		a.Status, a.Note = StepSkipped, "Sem análise: as US seguem a ordem do documento"
+	}
 }
 
 // markInterrupted closes a run the app never finished: running and pending
