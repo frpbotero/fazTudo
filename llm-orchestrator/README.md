@@ -106,6 +106,15 @@ worktrees. *Sequencial*: sem análise de dependências; uma US de cada vez, na o
 os agentes de cada US um após o outro. Nos dois modos cada US/onda é mergeada na branch base antes da
 seguinte.
 
+**Fluxo de agentes** (campo *Fluxo de agentes*, por repositório): `full` (padrão), `balanced` (sem
+segurança, E2E e docs), `fast` (Passo 0, especificação, arquiteto, devs e verificação), `audit`
+(verificação, segurança e review do código já desenvolvido, sem arquiteto nem devs; os achados viram
+pendências) e `custom` (`disabled_stages`). Etapas desligadas aparecem como *omitidas*.
+
+**Pendências.** Ao fim de toda execução real, o que ficou sem solução é gravado em
+`~/.config/faztudo/pendencias/<repo>-<hash>.md` (fora do repositório, para não contar como alteração
+pendente). Veja o [README da raiz](../README.md).
+
 - **Verificação executável** — depois da implementação (e após cada rodada de correção pedida por
   segurança, review ou E2E, antes de chamar o revisor de novo; sem etapa extra), o próprio
   orquestrador roda os comandos do projeto (detectados em `package.json`, `go.mod`, `pyproject.toml`…
@@ -276,7 +285,7 @@ web/static/              # dashboard (HTML/CSS/JS sem dependências externas, em
 | `GET` | `/api/events` | Stream SSE com o mesmo snapshot a cada mudança |
 | `GET` / `PUT` | `/api/workspace` | Repositório alvo (`{"path": "~/projetos/app"}`) e discovery em cache |
 | `DELETE` | `/api/workspace/discovery` | Descarta o discovery salvo do repositório |
-| `PUT` | `/api/workspace/policy` | Portões de qualidade do repositório (`auto_checks`, `checks`, `protected`, `git`, `max_line_length`, `check_timeout_s`, `candidates`, `base_branches`) |
+| `PUT` | `/api/workspace/policy` | Portões de qualidade do repositório (`auto_checks`, `checks`, `protected`, `git`, `max_line_length`, `check_timeout_s`, `candidates`, `sequential`, `flow`, `disabled_stages`, `base_branches`) |
 | `GET` | `/api/workspace/repos` | Repositório e aninhados com a branch atual e as disponíveis para branch base |
 | `GET` | `/api/git/commits/{hash}` | Diff de um commit feito pelo pipeline |
 | `POST` | `/api/stories/parse` | `{"content": "<markdown>"}` → `{"preamble": "...", "stories": [{"id", "title", "content"}]}` |
