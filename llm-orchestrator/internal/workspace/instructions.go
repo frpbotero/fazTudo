@@ -22,7 +22,8 @@ const (
 )
 
 // ReadInstructions returns the repository's agent instructions, one section
-// per file, capped in size. It returns "" when there are none.
+// per file, capped in size, followed by its Spec Kit artifacts. It returns ""
+// when there are none.
 func ReadInstructions(root string) string {
 	var b strings.Builder
 	for _, name := range instructionFiles {
@@ -45,5 +46,6 @@ func ReadInstructions(root string) string {
 		}
 		b.WriteString(section)
 	}
+	b.WriteString(specKitSection(root))
 	return strings.TrimSpace(b.String())
 }

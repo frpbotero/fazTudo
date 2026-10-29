@@ -199,3 +199,23 @@ func TestPolicyFlowNormalization(t *testing.T) {
 		t.Error("an unknown flow must be rejected")
 	}
 }
+
+func TestReadInstructionsListsSpecKit(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, ".specify/memory/constitution.md", "# Regras")
+	write(t, root, "specs/001-login/spec.md", "spec")
+	write(t, root, "specs/002-checkout/spec.md", "spec")
+	write(t, root, "specs/002-checkout/tasks.md", "- [ ] T001")
+	if err := os.MkdirAll(filepath.Join(root, "specs", "003-vazia"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := ReadInstructions(root)
+	for _, want := range []string{"### Spec Kit", "`.specify/memory/constitution.md`", "- `specs/002-checkout/`: spec.md, tasks.md\n- `specs/001-login/`: spec.md"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("instructions miss %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "003-vazia") || strings.Contains(got, "T001") {
+		t.Errorf("only feature paths with artifacts belong in the prompt:\n%s", got)
+	}
+}

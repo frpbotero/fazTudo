@@ -725,7 +725,7 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
 	o.useLimits(policy, ss.checks)
 	if ss.instructions != "" {
-		o.logf(LevelInfo, "Instruções do projeto (AGENTS.md/CLAUDE.md) repassadas a todos os agentes.")
+		o.logf(LevelInfo, "Instruções do projeto (AGENTS.md/CLAUDE.md/Spec Kit) repassadas a todos os agentes.")
 	}
 
 	ss.patterns = protectedPatterns(policy, opts)

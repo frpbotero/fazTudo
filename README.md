@@ -208,19 +208,19 @@ Se uma etapa falhou, **Refazer etapa** repete só ela. A retomada refaz a etapa 
 |------|-------|
 | **Provedores** | Provedor padrão, failover, modelos e nível de esforço por provedor. A lista do Codex vem do catálogo do CLI instalado. |
 | **Repositório → Branch base** | Branch de desenvolvimento de cada repositório (inclusive repositórios aninhados). Toda execução troca para ela antes de criar as branches `faztudo/`. |
-| **Repositório → Portões de qualidade** | Comandos de verificação (detectados ou manuais), arquivos protegidos, limite de linha, tempo limite, git, paralelo ou sequencial, candidatos por implementação (best-of-N) e fluxo de agentes. |
+| **Repositório → Portões de qualidade** | Comandos de verificação (detectados ou manuais), arquivos protegidos, limite de linha, tempo limite, git, paralelo ou sequencial, candidatos por implementação (best-of-N), fluxo de agentes e limites dos agentes (turnos, parar ao esgotar, comandos de shell liberados). |
 
 Tudo é salvo a cada alteração em `~/.config/faztudo/config.json` (permissão `0600`), e as políticas de
 qualidade valem por repositório. Flags e variáveis de ambiente explícitas têm prioridade sobre o
 arquivo.
 
-Sem tela própria, editáveis no `config.json` (política de cada repositório):
+Limites dos agentes (em **Portões de qualidade**, campo do `config.json` entre parênteses):
 
 | Campo | Padrão | O que faz |
 |-------|--------|-----------|
-| `max_turns` | `0` (60 em etapas que escrevem, 30 nas de leitura) | Turnos por chamada do Claude (`--max-turns`). Leitura recebe metade. |
-| `stop_on_turn_limit` | `false` | `true` encerra a execução quando um agente esgota os turnos; `false` segue e registra pendência. |
-| `agent_commands` | `npx playwright test`, `npx playwright install chromium` | Comandos que os agentes podem rodar além dos de verificação (ex.: `npm install`). |
+| Turnos (`max_turns`) | `0` (60 em etapas que escrevem, 30 nas de leitura) | Turnos por chamada do Claude (`--max-turns`). Leitura recebe metade. |
+| Parar ao esgotar (`stop_on_turn_limit`) | desligado | Encerra a execução quando um agente esgota os turnos; desligado, segue e registra pendência. |
+| Comandos liberados (`agent_commands`) | `npx playwright test`, `npx playwright install chromium` | Comandos que os agentes podem rodar além dos de verificação (ex.: `npm install`). |
 
 ---
 
@@ -236,6 +236,9 @@ Cada etapa é uma chamada headless nova, sem `--resume`, com só o contexto de q
   (teste, mensagem, até 50 linhas).
 - **Ambiente mínimo.** O Claude roda com `--safe-mode` (sem skills, plugins, hooks, MCP nem CLAUDE.md do
   usuário; o login continua valendo) e só as ferramentas da etapa; o Codex não relê o `AGENTS.md`.
+- **Spec Kit no repositório alvo.** Se ele tem `.specify/memory/constitution.md` ou `specs/*/`, os
+  agentes recebem só os caminhos (constituição e features com `spec.md`, `plan.md`, `tasks.md`) e leem
+  a feature da US; quem implementa segue `tasks.md` e marca `[X]`.
 - **Limites.** `--max-turns` em cada chamada do Claude e até 2 ou 3 rodadas de correção por portão.
 - **Modelo por nível.** Claude: Opus no *heavy* (arquitetura, segurança), Sonnet no *standard*, Haiku no
   *light*. Ajuste em **Provedores**.
