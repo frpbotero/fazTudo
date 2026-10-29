@@ -3,7 +3,7 @@
 Servidor Go com dashboard web que conduz uma User Story por um pipeline de agentes LLM
 (Passo 0 → especificação EDD/TDD → arquitetura → frontend/backend em frentes paralelas →
 verificação executável → segurança → code review → E2E → documentação),
-usando os CLIs **Claude Code** e **Codex** com failover automático quando um deles atinge o limite de uso.
+usando os CLIs **Claude Code**, **Codex** e **Gemini CLI** com failover automático quando um deles atinge o limite de uso.
 
 ## Repositório e discovery
 
@@ -155,14 +155,15 @@ Quando o documento tem mais de uma US, o painel pergunta como desenvolver:
 
 ## Provedores e modelos
 
-No formulário de execução escolha o **provedor padrão** (Claude Code ou Codex CLI) e se o
+No formulário de execução escolha o **provedor padrão** (Claude Code, Codex CLI ou Gemini CLI) e se o
 **failover** para o outro provedor fica ativo. Em **Modelos** defina, por provedor, o modelo
 *heavy* (arquitetura, segurança, review), o *standard* (demais etapas) e o nível de esforço —
 a lista do **Codex** vem do catálogo do próprio CLI instalado (`~/.codex/models_cache.json`, ou
 `$CODEX_HOME`), relido a cada minuto, e só oferece os níveis de esforço que os modelos escolhidos
 suportam; o padrão inicial segue o `model`/`model_reasoning_effort` do `~/.codex/config.toml`.
-A lista do Claude é interna. A opção "Outro…" aceita qualquer ID (com aviso se não estiver no catálogo).
-O discovery roda em modo somente leitura (`--sandbox read-only` no Codex, `--permission-mode plan` no Claude). Sem failover, um limite
+As listas do Claude e do Gemini são internas. A opção "Outro…" aceita qualquer ID (com aviso se não estiver no catálogo).
+As etapas de leitura rodam em modo somente leitura (`--sandbox read-only` no Codex, `--permission-mode plan` no Claude,
+`--approval-mode plan` no Gemini). Sem failover, um limite
 de uso faz a execução aguardar a liberação do provedor padrão.
 
 ### Persistência
@@ -245,9 +246,11 @@ make dev          # go run com logs em nível debug
 | `-sim-delay` | — | `1.4s` | Duração de cada etapa simulada |
 | `-eval` | — | — | Roda uma suíte de avaliação e sai |
 | `-version` | — | — | Exibe a versão |
+| `-tokens` | — | — | Soma `logs/tokens.jsonl` por execução e sai |
 
-> **Segurança.** Em execução real os CLIs rodam com permissões automáticas
-> (`--dangerously-skip-permissions` / `--sandbox workspace-write`), e os comandos de verificação
+> **Segurança.** Em execução real os agentes editam o repositório e só rodam os comandos de verificação
+> e os de `agent_commands` (`--permission-mode dontAsk` + `--allowedTools` no Claude,
+> `--sandbox workspace-write` no Codex, `--approval-mode auto_edit` no Gemini), e os comandos de verificação
 > configurados rodam no shell. Por isso o servidor escuta apenas em
 > `127.0.0.1` por padrão e rejeita requisições de escrita vindas de outras origens.
 > Não exponha a porta em redes não confiáveis.
@@ -265,7 +268,7 @@ make docker   # imagem distroless (modo simulação)
 
 ```text
 main.go                  # flags, wiring e graceful shutdown
-internal/provider/       # definição dos CLIs, parser de quota e router com failover
+internal/provider/       # definição dos CLIs, uso de tokens, parser de quota e router com failover
 internal/settings/       # persistência da configuração em JSON
 internal/stories/        # parser de Markdown em User Stories
 internal/workspace/      # repositório alvo, stacks, discovery, política de qualidade e instruções

@@ -5,8 +5,8 @@ Orquestrador de agentes de IA para desenvolver software a partir de User Stories
 Você carrega um documento com User Stories (Markdown), aponta o repositório do projeto e o FazTudo
 conduz cada história por um pipeline de agentes: verifica o que já existe, especifica, planeja,
 implementa, roda os testes do projeto, revisa segurança e código, e documenta. Os agentes são os CLIs
-**Claude Code** e **Codex** que você já tem instalados, com troca automática de um para o outro
-quando um atinge o limite de uso.
+**Claude Code**, **Codex** e **Gemini CLI** que você já tem instalados, com troca automática de um
+para o outro quando um atinge o limite de uso.
 
 Roda como aplicativo desktop (macOS, Windows e Linux) ou como servidor local com dashboard web.
 
@@ -24,6 +24,7 @@ Roda como aplicativo desktop (macOS, Windows e Linux) ou como servidor local com
 - [Pendências](#pendências)
 - [Retomar uma execução](#retomar-uma-execução)
 - [Configurações](#configurações)
+- [Consumo de tokens](#consumo-de-tokens)
 - [Várias janelas](#várias-janelas)
 - [Modo servidor](#modo-servidor)
 - [Desenvolvimento](#desenvolvimento)
@@ -74,8 +75,9 @@ Pontos que valem saber:
 ### Requisitos
 
 - **Go 1.22+** para compilar.
-- Para execução real: [`claude`](https://docs.claude.com/claude-code) e/ou
-  [`codex`](https://github.com/openai/codex) no `PATH`, já autenticados.
+- Para execução real: [`claude`](https://docs.claude.com/claude-code),
+  [`codex`](https://github.com/openai/codex) e/ou [`gemini`](https://github.com/google-gemini/gemini-cli)
+  no `PATH`, já autenticados.
 - **git** (o FazTudo inicializa o repositório se ele ainda não for um).
 - Opcional: [graphify](https://github.com/safishamsi/graphify) (`uv tool install graphifyy`) para o
   grafo do código, que reduz a varredura de arquivos pelos agentes.
@@ -118,7 +120,7 @@ Ao publicar uma tag (`git tag v0.2.0 && git push origin v0.2.0`), o workflow
 
 1. **Abra o app** e vá em **Repositório**. Informe a pasta do projeto onde os agentes vão trabalhar.
    O FazTudo detecta as stacks e os comandos de teste.
-2. Em **Provedores**, escolha o provedor padrão (Claude Code ou Codex), se o failover fica ativo e os
+2. Em **Provedores**, escolha o provedor padrão (Claude Code, Codex ou Gemini), se o failover fica ativo e os
    modelos de cada nível (*heavy* para arquitetura, segurança e review; *standard* para o resto).
 3. Em **Repositório → Portões de qualidade → Editar**, ajuste o que valer para o projeto: comandos de
    verificação, arquivos protegidos, git, desenvolvimento paralelo ou sequencial e o
@@ -129,8 +131,8 @@ Ao publicar uma tag (`git tag v0.2.0 && git push origin v0.2.0`), o workflow
    decida se é **simulação** ou **execução real** e inicie.
 6. Acompanhe em **Execução**: etapas, saídas dos agentes, commits, diffs e o log em tempo real.
 
-> Comece em simulação para ver o fluxo. A execução real roda os CLIs com permissões automáticas e os
-> comandos de verificação no shell: use em repositórios que você controla e com o git limpo
+> Comece em simulação para ver o fluxo. A execução real deixa os agentes editar arquivos e rodar só os
+> comandos de verificação e os liberados na política, e roda esses comandos no shell: use em repositórios que você controla e com o git limpo
 > (alterações pendentes em arquivos versionados impedem a execução, para os commits dos agentes não
 > se misturarem com os seus).
 
@@ -212,6 +214,40 @@ Tudo é salvo a cada alteração em `~/.config/faztudo/config.json` (permissão 
 qualidade valem por repositório. Flags e variáveis de ambiente explícitas têm prioridade sobre o
 arquivo.
 
+Sem tela própria, editáveis no `config.json` (política de cada repositório):
+
+| Campo | Padrão | O que faz |
+|-------|--------|-----------|
+| `max_turns` | `0` (60 em etapas que escrevem, 30 nas de leitura) | Turnos por chamada do Claude (`--max-turns`). Leitura recebe metade. |
+| `stop_on_turn_limit` | `false` | `true` encerra a execução quando um agente esgota os turnos; `false` segue e registra pendência. |
+| `agent_commands` | `npx playwright test`, `npx playwright install chromium` | Comandos que os agentes podem rodar além dos de verificação (ex.: `npm install`). |
+
+---
+
+## Consumo de tokens
+
+Cada etapa é uma chamada headless nova, sem `--resume`, com só o contexto de que precisa:
+
+- **Contexto fixo primeiro.** Repositório, discovery, instruções, regras e a US abrem todo prompt da
+  US, na mesma ordem; o papel da etapa vem no fim. O cache de prompt dos CLIs reaproveita esse início.
+- **Só as entradas da etapa.** Implementadores recebem Passo 0, especificação e plano; revisores recebem
+  especificação, plano e implementação. Relatórios de teste não seguem adiante.
+- **Testes fora do LLM.** O FazTudo roda testes, lint e build e devolve ao agente só o resumo da falha
+  (teste, mensagem, até 50 linhas).
+- **Ambiente mínimo.** O Claude roda com `--safe-mode` (sem skills, plugins, hooks, MCP nem CLAUDE.md do
+  usuário; o login continua valendo) e só as ferramentas da etapa; o Codex não relê o `AGENTS.md`.
+- **Limites.** `--max-turns` em cada chamada do Claude e até 2 ou 3 rodadas de correção por portão.
+- **Modelo por nível.** Claude: Opus no *heavy* (arquitetura, segurança), Sonnet no *standard*, Haiku no
+  *light*. Ajuste em **Provedores**.
+
+Cada chamada real grava uma linha em `~/.config/faztudo/logs/tokens.jsonl`: agente, modelo, US, etapa,
+tentativa, tokens de entrada (com os de cache), saída e custo (o Claude informa; Codex e Gemini, só tokens).
+Para somar por execução:
+
+```bash
+cd llm-orchestrator && go run . -tokens     # ou ./bin/faztudo -tokens
+```
+
 ---
 
 ## Várias janelas
@@ -242,13 +278,15 @@ make docker               # imagem distroless (modo simulação)
 |------|----------|--------|-----------|
 | `-addr` | `ADDR` / `PORT` | `127.0.0.1:8081` | Endereço HTTP |
 | `-repo` | `REPO_PATH` | — | Repositório alvo inicial |
-| `-provider` | `DEFAULT_PROVIDER` | `claude` | `claude` ou `codex` |
+| `-provider` | `DEFAULT_PROVIDER` | `claude` | `claude`, `codex` ou `gemini` |
 | `-config` | `FAZTUDO_CONFIG` | `~/.config/faztudo/config.json` | Arquivo de configuração (`""` desativa) |
 | `-dry-run` | `DRY_RUN` | `true` | Começa em simulação |
 | `-log-level` | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `-tokens` | — | — | Soma o uso de tokens por execução e sai |
 
-> **Segurança.** Em execução real os CLIs rodam com permissões automáticas e os comandos de
-> verificação rodam no shell. Por isso o servidor escuta só em `127.0.0.1` e recusa escritas vindas de
+> **Segurança.** Em execução real os agentes editam arquivos do repositório e rodam os comandos
+> liberados (Claude: `--permission-mode dontAsk` com `--allowedTools`; Codex: `--sandbox workspace-write`;
+> Gemini: `--approval-mode auto_edit`), e os comandos de verificação rodam no shell. Por isso o servidor escuta só em `127.0.0.1` e recusa escritas vindas de
 > outras origens. Não exponha a porta em redes não confiáveis.
 
 ---
@@ -278,7 +316,7 @@ Backend em Go; interface em HTML, CSS e JS puros, embutidos no binário; app des
 start.sh                      # compila e abre o app (--web para o modo servidor)
 llm-orchestrator/
   main.go, desktop*.go        # entrada: servidor e app Wails
-  internal/provider/          # CLIs (Claude, Codex), parser de quota e failover
+  internal/provider/          # CLIs (Claude, Codex, Gemini), uso de tokens, parser de quota e failover
   internal/pipeline/          # etapas, prompts, ondas, frentes, review, best-of-N, retomada, pendências
   internal/workspace/         # repositório alvo, discovery, política de qualidade e fluxos
   internal/quality/           # comandos, sintaxe, legibilidade, rastreabilidade, arquivos protegidos
