@@ -1,50 +1,58 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+- Version: template → 1.0.0 (first ratified version)
+- Principles added: I Go simples e testado; II Português na interface; III Agentes seguros;
+  IV Economia de contexto; V Determinístico fora do LLM
+- Templates: plan/spec/tasks templates sem mudança necessária
+- Deferred: nenhum
+-->
+# FazTudo Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Go simples e testado
+Código em `llm-orchestrator/` (Go 1.25, stdlib primeiro; UI em HTML/CSS/JS puros embutidos).
+Antes de terminar: `make lint` (gofmt + go vet) e `make test` (go test -race ./...) passam.
+Toda mudança de comportamento vem com teste no pacote (`*_test.go` ao lado). Comentários
+explicam o porquê, em inglês, na densidade do código vizinho. Sem dependência nova sem motivo.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. Português na interface
+Mensagens, logs da UI, prompts dos agentes e README em português do Brasil. Identificadores e
+comentários de código em inglês.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Agentes seguros
+- Saída de agente nunca vira comando de shell; comandos vêm da política do repositório ou de
+  listas fixas.
+- Permissões mínimas por etapa: leitura onde só se lê; ferramentas listadas onde se escreve.
+  Nenhuma flag que pule todas as confirmações sem decisão explícita do usuário.
+- Sem credenciais em código, scripts, logs ou workflows. Servidor só em `127.0.0.1`.
+- Arquivos de entrada (US, EDD) e protegidos nunca são alterados por agentes.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Economia de contexto (vale para todo agente: Claude, Codex, Gemini)
+- Leia só os arquivos da tarefa atual. Use o grafo (`graphify query/explain/affected`) e busca
+  pontual (`rg -n` em caminho específico) antes de abrir arquivos. Nada de varredura recursiva cega.
+- Não releia arquivo que não mudou desde a última leitura na mesma sessão.
+- Não despeje logs inteiros: `| tail -n 50`, filtre por falha (`-run TestX`, `--grep`), e cite
+  só a linha decisiva.
+- Resposta final curta: o que mudou, por arquivo, em uma linha cada.
+- Uma tarefa por sessão; o contexto necessário vem no prompt, não da exploração.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Determinístico fora do LLM
+Testes, lint, build, formatação, busca de arquivos e parsing ficam no código do orquestrador.
+O LLM recebe só o resumo das falhas (teste, mensagem, trecho do stack de até ~50 linhas).
+Toda chamada de agente registra uso de tokens e custo quando o CLI informar.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+## Fluxo de trabalho
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
-
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
-
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+Specs em `specs/` pelo Spec Kit (`/speckit.specify` → `/speckit.plan` → `/speckit.tasks` →
+`/speckit.implement`). Commits pequenos, mensagem convencional (`feat:`, `fix:`, `refactor:`,
+`docs:`, `chore:`). Branch por mudança; nada direto em `main`.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+Esta constitution prevalece sobre CLAUDE.md, AGENTS.md e GEMINI.md, que só apontam para cá e
+guardam o que é específico de cada agente. Emenda: PR que altera este arquivo, com versão
+semântica (MAJOR remove/redefine princípio, MINOR adiciona, PATCH esclarece) e Sync Impact Report
+atualizado. Revisões de PR conferem aderência aos princípios.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-10-21 | **Last Amended**: 2026-10-28
