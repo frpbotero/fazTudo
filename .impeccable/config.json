@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "llm-orchestrator/web/static/index.html"
+        ],
+        "createdAt": "2026-10-29T10:38:45.437Z",
+        "reason": "Claude: pulse só aparece com execução em andamento (navLive hidden = !run.running; pill accent = running) e respeita prefers-reduced-motion"
+      }
+    ]
+  }
+}
