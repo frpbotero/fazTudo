@@ -61,7 +61,7 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qualityError: $('qualityError'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qualityError: $('qualityError'),
     branches: $('branches'), branchesRefreshBtn: $('branchesRefreshBtn'),
     diffDialog: $('diffDialog'), diffTitle: $('diffTitle'), diffMeta: $('diffMeta'), diffBody: $('diffBody'),
     toasts: $('toasts'),
@@ -561,6 +561,8 @@ Critérios de aceitação:
         <dt>Desenvolvimento</dt><dd>${p.sequential ? 'sequencial: uma US de cada vez' : 'paralelo: US e frentes independentes juntas'}</dd>
         <dt>Fluxo</dt><dd>${esc(flowLabel(p))}</dd>
         <dt>Candidatos</dt><dd>${p.candidates > 1 ? `best-of-${esc(p.candidates)}` : '1 por implementação'}</dd>
+        <dt>Turnos</dt><dd>${p.max_turns ? `até ${esc(p.max_turns)} por chamada` : 'padrão (60 / 30)'}${p.stop_on_turn_limit ? '; para ao esgotar' : ''}</dd>
+        <dt>Shell liberado</dt><dd class="wrap">${(p.agent_commands || []).map((x) => `<code>${esc(x)}</code>`).join(' ') || '<span class="note">só verificação e git de leitura</span>'}</dd>
       </dl>`;
   }
 
@@ -587,6 +589,9 @@ Critérios de aceitação:
     el.qCandidates.value = String(p.candidates || 1);
     el.qMode.value = p.sequential ? 'sequential' : 'parallel';
     el.qGit.checked = p.git;
+    el.qMaxTurns.value = p.max_turns || '';
+    el.qStopOnTurnLimit.checked = !!p.stop_on_turn_limit;
+    el.qAgentCommands.value = (p.agent_commands || []).join('\n');
     el.qFlow.value = p.flow || 'full';
     const off = p.disabled_stages || [];
     stageBoxes().forEach((b) => { b.checked = !off.includes(b.dataset.stage); });
@@ -616,9 +621,9 @@ Critérios de aceitação:
       disabled_stages: stageBoxes().filter((b) => !b.checked).map((b) => b.dataset.stage),
       parallel_lenses: snapshot?.workspace?.policy?.parallel_lenses,
       max_fix_rounds: snapshot?.workspace?.policy?.max_fix_rounds,
-      max_turns: snapshot?.workspace?.policy?.max_turns,
-      stop_on_turn_limit: snapshot?.workspace?.policy?.stop_on_turn_limit,
-      agent_commands: snapshot?.workspace?.policy?.agent_commands,
+      max_turns: Number(el.qMaxTurns.value) || 0,
+      stop_on_turn_limit: el.qStopOnTurnLimit.checked,
+      agent_commands: el.qAgentCommands.value.split('\n').map((l) => l.trim()).filter(Boolean),
       base_branches: snapshot?.workspace?.policy?.base_branches,
     };
     try {

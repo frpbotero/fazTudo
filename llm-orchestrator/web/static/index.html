@@ -418,6 +418,23 @@
         <p class="note">O arquiteto e os desenvolvedores sempre rodam. Segurança, E2E e documentação ainda dependem do plano do arquiteto.</p>
       </fieldset>
 
+      <fieldset class="field">
+        <legend>Limites dos agentes</legend>
+        <div class="q-row">
+          <div class="field">
+            <label for="qMaxTurns">Turnos por chamada que escreve código</label>
+            <input type="number" id="qMaxTurns" min="0" max="500" step="5" placeholder="60">
+          </div>
+        </div>
+        <p class="note">0 usa o padrão: 60 turnos para quem escreve, 30 para as etapas de leitura (sempre a metade, no mínimo 10). Vale para o Claude; Codex e Gemini não têm esse limite.</p>
+        <label class="check"><input type="checkbox" id="qStopOnTurnLimit"> Parar a execução quando um agente esgotar os turnos (por padrão o trabalho parcial segue como pendência)</label>
+        <div class="field">
+          <label for="qAgentCommands">Comandos liberados aos agentes</label>
+          <textarea id="qAgentCommands" rows="3" spellcheck="false" placeholder="npx playwright test&#10;npm install"></textarea>
+          <p class="note">Prefixos, um por linha, além dos comandos de verificação, de <code>graphify</code> e do git de leitura. Qualquer outro comando de shell é negado.</p>
+        </div>
+      </fieldset>
+
       <label class="check"><input type="checkbox" id="qGit"> Versionar com git: uma branch por US e um commit por etapa (repositórios sem git são inicializados)</label>
 
       <p class="form-error" id="qualityError" hidden></p>
