@@ -250,7 +250,8 @@ make dev          # go run com logs em nível debug
 
 > **Segurança.** Em execução real os agentes editam o repositório e só rodam os comandos de verificação
 > e os de `agent_commands` (`--permission-mode dontAsk` + `--allowedTools` no Claude,
-> `--sandbox workspace-write` no Codex, `--approval-mode auto_edit` no Gemini), e os comandos de verificação
+> `--sandbox workspace-write` no Codex, `--approval-mode auto_edit` no Gemini, que confia na pasta só durante a chamada com `--skip-trust` e
+> roda sem extensões), e os comandos de verificação
 > configurados rodam no shell. Por isso o servidor escuta apenas em
 > `127.0.0.1` por padrão e rejeita requisições de escrita vindas de outras origens.
 > Não exponha a porta em redes não confiáveis.

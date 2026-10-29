@@ -72,7 +72,8 @@ func TestWriteArgsAllowOnlyListedCommands(t *testing.T) {
 		slices.Contains(gemini, "--yolo") {
 		t.Errorf("gemini write args: %v", gemini)
 	}
-	if ro := GeminiCLI.Args(Invocation{ReadOnly: true}); !containsSeq(ro, "--approval-mode", "plan") {
+	if ro := GeminiCLI.Args(Invocation{ReadOnly: true}); !containsSeq(ro, "--approval-mode", "plan") ||
+		!slices.Contains(ro, "--skip-trust") || !containsSeq(ro, "-e", "none") {
 		t.Errorf("gemini read-only args: %v", ro)
 	}
 	codex := CodexCLI.Args(inv)

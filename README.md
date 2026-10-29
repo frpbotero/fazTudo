@@ -77,7 +77,7 @@ Pontos que valem saber:
 - **Go 1.22+** para compilar.
 - Para execução real: [`claude`](https://docs.claude.com/claude-code),
   [`codex`](https://github.com/openai/codex) e/ou [`gemini`](https://github.com/google-gemini/gemini-cli)
-  no `PATH`, já autenticados.
+  no `PATH`, já autenticados (Gemini: `npm i -g @google/gemini-cli` e `gemini` uma vez para entrar com a conta Google).
 - **git** (o FazTudo inicializa o repositório se ele ainda não for um).
 - Opcional: [graphify](https://github.com/safishamsi/graphify) (`uv tool install graphifyy`) para o
   grafo do código, que reduz a varredura de arquivos pelos agentes.

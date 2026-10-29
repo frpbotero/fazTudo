@@ -229,7 +229,10 @@ var GeminiCLI = CLI{
 	Defaults:   Settings{HeavyModel: "gemini-3.1-pro-preview", StdModel: "gemini-3-flash-preview"},
 	LightModel: "gemini-2.5-flash",
 	Args: func(inv Invocation) []string {
-		args := []string{"-p", "Execute a tarefa descrita acima.", "--output-format", "json"}
+		// An untrusted folder forces the approval mode to "default", which
+		// headless runs cannot answer; --skip-trust trusts it for this call
+		// only. Extensions stay off, like Claude's --safe-mode.
+		args := []string{"-p", "Execute a tarefa descrita acima.", "--output-format", "json", "--skip-trust", "-e", "none"}
 		if inv.ReadOnly {
 			args = append(args, "--approval-mode", "plan")
 		} else {
