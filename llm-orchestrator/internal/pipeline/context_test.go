@@ -23,7 +23,7 @@ func TestPromptsNameOnlyInstalledSkills(t *testing.T) {
 	}
 	stage := Stage{ID: "backend", Task: "faça", Skills: []string{"test-driven-development", "api-and-interface-design"}}
 	prompt := buildPrompt(stage, storyContext{}, nil, nil)
-	if !strings.Contains(prompt, "## Skills (obrigatório)") || !strings.Contains(prompt, "`test-driven-development`") {
+	if !strings.Contains(prompt, "## Skills de referência") || !strings.Contains(prompt, "`test-driven-development`") {
 		t.Errorf("installed skill missing from prompt:\n%s", prompt)
 	}
 	if strings.Contains(prompt, "api-and-interface-design") {

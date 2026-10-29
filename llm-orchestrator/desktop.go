@@ -39,7 +39,7 @@ func runDesktop() error {
 
 	dryRun := desktopEnvBool("DRY_RUN", true)
 	defaultProvider := provider.ID(desktopEnvOr("DEFAULT_PROVIDER", string(provider.Claude)))
-	router := provider.NewRouter(dryRun, []provider.CLI{provider.ClaudeCLI, provider.CodexCLI},
+	router := provider.NewRouter(dryRun, []provider.CLI{provider.ClaudeCLI, provider.CodexCLI, provider.GeminiCLI},
 		provider.WithSimulationDelay(1400*time.Millisecond), provider.WithDefaultProvider(defaultProvider))
 	if err := router.Validate(); err != nil {
 		cancel()
@@ -68,6 +68,7 @@ func runDesktop() error {
 	hub := server.NewHub()
 	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
 	orch.SetJournalDir(settings.RunsDir(store.Path()))
+	orch.SetUsageLog(settings.UsageLog(store.Path()))
 	srv := server.New(ctx, server.Deps{
 		Orchestrator: orch, Router: router, Workspace: ws, Settings: store, Hub: hub,
 		Static: web.Static, Version: version, Desktop: true, Logger: logger,

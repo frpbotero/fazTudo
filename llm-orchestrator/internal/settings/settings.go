@@ -85,6 +85,15 @@ func RunsDir(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "runs")
 }
 
+// UsageLog is the token log next to the configuration: one JSON line per
+// agent call. It stays out of the target repository, which must be clean.
+func UsageLog(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(configPath), "logs", "tokens.jsonl")
+}
+
 // Path returns the file location, or "" when disabled.
 func (s *Store) Path() string { return s.path }
 

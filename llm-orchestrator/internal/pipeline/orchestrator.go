@@ -210,7 +210,12 @@ type Orchestrator struct {
 	journalMu      sync.Mutex
 	isJournalOwner bool
 
+	// usagePath is the token log (tokens.jsonl); see SetUsageLog.
+	usageMu   sync.Mutex
+	usagePath string
+
 	mu     sync.RWMutex
+	limits agentLimits
 	run    Run
 	last   StartOptions
 	cancel context.CancelFunc
@@ -634,6 +639,7 @@ func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts Start
 	o.exec.SetDryRun(opts.DryRun)
 	policy := o.ws.Policy()
 	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
+	o.useLimits(policy, ss.checks)
 	ss.patterns = protectedPatterns(policy, opts)
 	ss.guard = quality.NewGuard(repo, ss.patterns)
 	if !opts.DryRun && policy.Git {
@@ -717,6 +723,7 @@ func (o *Orchestrator) restoreStoryState(si int, started time.Time, opts StartOp
 func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptions) (*session, bool) {
 	policy := o.ws.Policy()
 	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
+	o.useLimits(policy, ss.checks)
 	if ss.instructions != "" {
 		o.logf(LevelInfo, "Instruções do projeto (AGENTS.md/CLAUDE.md) repassadas a todos os agentes.")
 	}
@@ -1313,6 +1320,7 @@ func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.R
 		return nil, false
 	}
 	o.recordDone(ref, resp, elapsed)
+	o.markTurnLimited(ref, resp, o.limited(req).MaxTurns)
 	return resp, true
 }
 
@@ -1326,9 +1334,14 @@ func (o *Orchestrator) markRunning(ref stepRef, started time.Time) {
 // executeRetrying calls the provider, retrying failures until the attempts
 // run out or ctx is canceled.
 func (o *Orchestrator) executeRetrying(ctx context.Context, ref stepRef, req provider.Request) (*provider.Response, error) {
+	req = o.limited(req)
 	prompt := req.Prompt
 	for attempt := 1; ; attempt++ {
 		resp, err := o.exec.Execute(ctx, req, o.providerLog)
+		o.recordUsage(ref, req, resp, attempt)
+		if errors.Is(err, provider.ErrTurnLimit) {
+			return o.turnLimited(ref, req, resp, err)
+		}
 		if err == nil || ctx.Err() != nil || attempt >= o.attempts {
 			return resp, err
 		}

@@ -15,8 +15,12 @@ import (
 // failing commands usually need more attempts than review remarks.
 const maxVerifierRounds = 3
 
-// maxIssueOutput caps the command output quoted in a fix request.
-const maxIssueOutput = 3000
+// maxIssueOutput caps the command output quoted in a fix request, after it is
+// reduced to the failures (maxIssueLines).
+const (
+	maxIssueOutput = 3000
+	maxIssueLines  = 50
+)
 
 // runVerifier executes a deterministic gate and its fix rounds. A verifier
 // whose repository did not change since the last approval is skipped.
@@ -71,7 +75,8 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 		s.Output = report
 		s.DurationMS = time.Since(started).Milliseconds()
 	})
-	return &evaluation{verdict: Verdict{Status: VerdictChangesRequested, Issues: a.issues}, parsed: true, report: report}, true
+	// No report for the fixers: each issue already quotes its failures.
+	return &evaluation{verdict: Verdict{Status: VerdictChangesRequested, Issues: a.issues}, parsed: true}, true
 }
 
 // verify runs the project commands, the static checks on files changed by
@@ -114,7 +119,7 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 		s.Output = report
 		s.DurationMS = elapsed.Milliseconds()
 	})
-	return evaluation{verdict: verdict, parsed: true, report: report}, true
+	return evaluation{verdict: verdict, parsed: true}, true // issues quote the failures; no report
 }
 
 // assessment is the outcome of the deterministic checks on one directory.
@@ -255,7 +260,7 @@ func (o *Orchestrator) traceIssues(traces []quality.Trace, plan Plan) []Issue {
 
 func commandIssue(c quality.Command, r quality.Result) string {
 	return fmt.Sprintf("`%s` (%s) %s. Corrija o código até passar. Mude teste só se contrariar a especificação, com motivo. "+
-		"Fim da saída:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(r.Output, maxIssueOutput))
+		"Falhas:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(quality.FailureSummary(r.Output, maxIssueLines), maxIssueOutput))
 }
 
 func exitLabel(r quality.Result) string {

@@ -128,13 +128,18 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := o.exec.Execute(ctx, provider.Request{
+			req := o.limited(provider.Request{
 				Role:    fmt.Sprintf("%s · candidato %s", stage.Role, c.ID),
 				System:  stage.System,
 				Prompt:  prompt + "\n\n## Estratégia\n\n" + c.Strategy,
 				Tier:    stage.Tier,
 				WorkDir: c.work,
-			}, o.providerLog)
+			})
+			resp, err := o.exec.Execute(ctx, req, o.providerLog)
+			o.recordUsage(ref, req, resp, 1)
+			if errors.Is(err, provider.ErrTurnLimit) {
+				resp, err = o.turnLimited(ref, req, resp, err)
+			}
 			if err != nil {
 				errs[i] = err
 				return
@@ -268,10 +273,12 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 	b.WriteString("## Sua tarefa\n\nEscolha a melhor. Fim da resposta: bloco ```json obrigatório:\n" +
 		"```json\n{\"choice\": \"A\", \"reason\": \"motivo em uma frase\"}\n```")
 
-	resp, err := o.exec.Execute(ctx, provider.Request{
+	req := o.limited(provider.Request{
 		Role: SelectorStage.Role, System: SelectorStage.System, Prompt: b.String(),
 		Tier: SelectorStage.Tier, WorkDir: ss.repo, ReadOnly: true,
-	}, o.providerLog)
+	})
+	resp, err := o.exec.Execute(ctx, req, o.providerLog)
+	o.recordUsage(stepRef{-1, SelectorStage.ID}, req, resp, 1)
 	if err != nil {
 		o.logf(LevelWarn, "Seletor indisponível (%v); usando o candidato %s.", err, tied[0].ID)
 		return tied[0], reason

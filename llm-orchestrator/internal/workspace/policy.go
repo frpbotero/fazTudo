@@ -47,7 +47,20 @@ type Policy struct {
 	// skips the architect and the implementers.
 	Flow           string   `json:"flow,omitempty"`
 	DisabledStages []string `json:"disabled_stages,omitempty"`
+	// MaxTurns bounds each agent call that writes code (Claude --max-turns);
+	// read-only stages get half. 0 uses the engine default.
+	MaxTurns int `json:"max_turns,omitempty"`
+	// StopOnTurnLimit ends the run when an agent runs out of turns; by
+	// default the partial work goes on and the step becomes a pendency.
+	StopOnTurnLimit bool `json:"stop_on_turn_limit,omitempty"`
+	// AgentCommands are shell command prefixes writing agents may run besides
+	// the project checks (e.g. "npm install"). Nil uses DefaultAgentCommands.
+	AgentCommands []string `json:"agent_commands"`
 }
+
+// DefaultAgentCommands let the E2E agent run Playwright, which starts the
+// application itself through the webServer of playwright.config.
+var DefaultAgentCommands = []string{"npx playwright test", "npx playwright install chromium"}
 
 // Flow presets.
 const (
@@ -86,6 +99,7 @@ const (
 	maxCheckTimeout = 3600
 	maxCandidates   = 3
 	maxBranchLen    = 200
+	maxAgentTurns   = 500
 )
 
 // DefaultPolicy is used for repositories without saved settings.
@@ -101,6 +115,7 @@ func DefaultPolicy() Policy {
 		ParallelLenses: false,
 		Flow:           FlowFull,
 		MaxFixRounds:   0, // 0 defaults to the engine's maxFixRounds (2)
+		AgentCommands:  slices.Clone(DefaultAgentCommands),
 	}
 }
 
@@ -145,6 +160,16 @@ func (p Policy) Normalize() Policy {
 		}
 	}
 	p.Protected = patterns
+	if p.AgentCommands == nil {
+		p.AgentCommands = slices.Clone(def.AgentCommands)
+	}
+	commands := []string{}
+	for _, c := range p.AgentCommands {
+		if c = strings.TrimSpace(c); c != "" && !slices.Contains(commands, c) {
+			commands = append(commands, c)
+		}
+	}
+	p.AgentCommands = commands
 	bases := map[string]string{}
 	for repo, branch := range p.BaseBranches {
 		if repo, branch = strings.TrimSpace(repo), strings.TrimSpace(branch); repo != "" && branch != "" {
@@ -175,6 +200,10 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("fluxo desconhecido: %q", p.Flow)
 	case p.MaxFixRounds < 0 || p.MaxFixRounds > 3:
 		return errors.New("o número de rodadas de correção deve estar entre 0 e 3")
+	case p.MaxTurns < 0 || p.MaxTurns > maxAgentTurns:
+		return fmt.Errorf("o limite de turnos deve estar entre 0 e %d", maxAgentTurns)
+	case len(p.AgentCommands) > maxChecks:
+		return fmt.Errorf("no máximo %d comandos liberados aos agentes", maxChecks)
 	case !p.AutoChecks && len(p.Checks) == 0:
 		return errors.New("informe ao menos um comando ou use os detectados automaticamente")
 	}
@@ -184,6 +213,12 @@ func (p Policy) Validate() error {
 	for repo, branch := range p.BaseBranches {
 		if len(branch) > maxBranchLen || len(repo) > maxBranchLen || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, " \t\n\r~^:?*[\\") {
 			return fmt.Errorf("branch base inválida para %s: %q", repo, branch)
+		}
+	}
+	for _, c := range p.AgentCommands {
+		// A prefix becomes a permission rule; it must read as a plain command.
+		if len(c) > 200 || strings.HasPrefix(c, "-") || strings.ContainsAny(c, "\n\r()") {
+			return fmt.Errorf("comando liberado inválido: %q", c)
 		}
 	}
 	for _, c := range p.Checks {

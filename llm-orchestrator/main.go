@@ -39,17 +39,21 @@ func run() error {
 	addr := flag.String("addr", defaultAddr(), "endereço HTTP (env ADDR ou PORT)")
 	dryRun := flag.Bool("dry-run", envBool("DRY_RUN", true), "inicia em modo simulação (env DRY_RUN)")
 	repo := flag.String("repo", os.Getenv("REPO_PATH"), "repositório alvo inicial (env REPO_PATH)")
-	defaultProvider := flag.String("provider", envOr("DEFAULT_PROVIDER", string(provider.Claude)), "provider padrão: claude ou codex (env DEFAULT_PROVIDER)")
+	defaultProvider := flag.String("provider", envOr("DEFAULT_PROVIDER", string(provider.Claude)), "provider padrão: claude, codex ou gemini (env DEFAULT_PROVIDER)")
 	simDelay := flag.Duration("sim-delay", 1400*time.Millisecond, "duração de cada etapa simulada")
 	logLevel := flag.String("log-level", envOr("LOG_LEVEL", "info"), "debug, info, warn ou error (env LOG_LEVEL)")
 	configPath := flag.String("config", envOr("FAZTUDO_CONFIG", settings.DefaultPath()), `arquivo de configuração; "" desativa a persistência (env FAZTUDO_CONFIG)`)
 	evalPath := flag.String("eval", "", "executa a suíte de avaliação (JSON) e sai; veja evals/README.md")
 	showVersion := flag.Bool("version", false, "exibe a versão e sai")
+	showTokens := flag.Bool("tokens", false, "soma o uso de tokens por execução (logs/tokens.jsonl ao lado da configuração) e sai")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(version)
 		return nil
+	}
+	if *showTokens {
+		return printTokens(settings.UsageLog(settings.NewStore(*configPath).Path()))
 	}
 
 	var level slog.Level
@@ -61,7 +65,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	router := provider.NewRouter(*dryRun, []provider.CLI{provider.ClaudeCLI, provider.CodexCLI},
+	router := provider.NewRouter(*dryRun, []provider.CLI{provider.ClaudeCLI, provider.CodexCLI, provider.GeminiCLI},
 		provider.WithSimulationDelay(*simDelay), provider.WithDefaultProvider(provider.ID(*defaultProvider)))
 	if err := router.Validate(); err != nil {
 		return fmt.Errorf("-provider: %w", err)
@@ -94,6 +98,7 @@ func run() error {
 	hub := server.NewHub()
 	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
 	orch.SetJournalDir(settings.RunsDir(store.Path()))
+	orch.SetUsageLog(settings.UsageLog(store.Path()))
 	srv := server.New(ctx, server.Deps{
 		Orchestrator: orch, Router: router, Workspace: ws, Settings: store, Hub: hub,
 		Static: web.Static, Version: version, Logger: logger,
@@ -214,4 +219,18 @@ func envBool(key string, fallback bool) bool {
 		return false
 	}
 	return fallback
+}
+
+// printTokens summarises the token log for comparing runs.
+func printTokens(path string) error {
+	if path == "" {
+		return errors.New("sem arquivo de configuração, não há log de tokens")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("log de tokens: %w", err)
+	}
+	defer f.Close()
+	fmt.Println(path)
+	return pipeline.WriteUsageSummary(f, os.Stdout)
 }

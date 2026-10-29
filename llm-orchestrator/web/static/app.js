@@ -616,6 +616,9 @@ Critérios de aceitação:
       disabled_stages: stageBoxes().filter((b) => !b.checked).map((b) => b.dataset.stage),
       parallel_lenses: snapshot?.workspace?.policy?.parallel_lenses,
       max_fix_rounds: snapshot?.workspace?.policy?.max_fix_rounds,
+      max_turns: snapshot?.workspace?.policy?.max_turns,
+      stop_on_turn_limit: snapshot?.workspace?.policy?.stop_on_turn_limit,
+      agent_commands: snapshot?.workspace?.policy?.agent_commands,
       base_branches: snapshot?.workspace?.policy?.base_branches,
     };
     try {
