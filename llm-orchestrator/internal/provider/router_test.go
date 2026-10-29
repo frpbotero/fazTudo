@@ -188,8 +188,12 @@ func TestCLIArgs(t *testing.T) {
 	inv := Invocation{Model: "opus", Effort: "high", System: "sys", Prompt: "task"}
 	claude := ClaudeCLI.Args(inv)
 	if !containsSeq(claude, "--model", "opus") || !containsSeq(claude, "--effort", "high") ||
-		!containsSeq(claude, "--append-system-prompt", "sys") || !slices.Contains(claude, "--dangerously-skip-permissions") {
+		!containsSeq(claude, "--append-system-prompt", agentSystem) || !containsSeq(claude, "--output-format", "json") ||
+		!slices.Contains(claude, "--safe-mode") || !containsSeq(claude, "--permission-mode", "dontAsk") {
 		t.Errorf("unexpected claude args: %v", claude)
+	}
+	if slices.Contains(claude, "--dangerously-skip-permissions") || slices.Contains(claude, "--max-turns") {
+		t.Errorf("no permission bypass, no turn limit unless asked: %v", claude)
 	}
 
 	inv.Model = "gpt-6-astra"
@@ -203,11 +207,11 @@ func TestCLIArgs(t *testing.T) {
 	if last := codex[len(codex)-1]; last != "-" {
 		t.Errorf("codex should read the prompt from stdin, last arg %q", last)
 	}
-	if in := CodexCLI.Stdin(inv); !strings.Contains(in, "sys") || !strings.HasSuffix(in, "task") {
-		t.Errorf("codex stdin should embed system instructions, got %q", in)
+	if in := CodexCLI.Stdin(inv); !strings.HasPrefix(in, "<instructions>\n"+agentSystem) || !strings.HasSuffix(in, "task\n\n## Seu papel\n\nsys") {
+		t.Errorf("codex stdin should start with the fixed instructions and end with the role, got %q", in)
 	}
-	if in := ClaudeCLI.Stdin(inv); in != "task" {
-		t.Errorf("claude stdin = %q, want the prompt", in)
+	if in := ClaudeCLI.Stdin(inv); in != "task\n\n## Seu papel\n\nsys" {
+		t.Errorf("claude stdin = %q, want the prompt followed by the role", in)
 	}
 	for _, args := range [][]string{claude, codex} {
 		if slices.Contains(args, "task") {

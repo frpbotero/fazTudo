@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -17,6 +19,7 @@ type ID string
 const (
 	Claude ID = "claude"
 	Codex  ID = "codex"
+	Gemini ID = "gemini"
 )
 
 // Tier selects which of a provider's two configured models a task uses.
@@ -78,6 +81,57 @@ type CLI struct {
 	// Args: `pkill -f <pattern>` run by an agent matches every command line
 	// in the machine, and a prompt quoting that pattern got its own agent killed.
 	Stdin func(inv Invocation) string
+	// Parse reads the CLI's structured output (final text and token usage);
+	// false means the output was not structured and is used as is.
+	Parse func(out string) (parsed, bool)
+}
+
+// agentSystem is the system prompt of every call. It never changes, so the
+// CLI's prompt cache covers it and the shared context that follows; the
+// stage's own role goes at the end of the prompt (withRole).
+const agentSystem = "Agente de engenharia em execução automática: ninguém vai responder perguntas; decida e siga. " +
+	"Economia de contexto: leia só os arquivos da tarefa; consulte o grafo do código e busque em caminhos específicos antes de abrir arquivos; " +
+	"não releia arquivo que não mudou; nunca despeje log inteiro (filtre a falha, `| tail -n 50`); resposta final curta."
+
+// withRole appends the stage's role after the prompt, keeping the start of
+// the prompt identical across the stages of a story.
+func withRole(inv Invocation) string {
+	if strings.TrimSpace(inv.System) == "" {
+		return inv.Prompt
+	}
+	return inv.Prompt + "\n\n## Seu papel\n\n" + inv.System
+}
+
+// instructionsFirst is the stdin of CLIs without a system-prompt flag.
+func instructionsFirst(inv Invocation) string {
+	return fmt.Sprintf("<instructions>\n%s\n</instructions>\n\n%s", agentSystem, withRole(inv))
+}
+
+// claudeReadTools and claudeWriteTools are the only tools loaded per mode:
+// fewer tool definitions, smaller prompt.
+const (
+	claudeReadTools  = "Read,Grep,Glob"
+	claudeWriteTools = "Read,Grep,Glob,Edit,Write,Bash"
+)
+
+// safeCommands are the shell commands any writing agent may run besides the
+// project's own: code-graph queries and read-only git.
+var safeCommands = []string{
+	"graphify query", "graphify explain", "graphify affected",
+	"git status", "git diff", "git log", "git show", "ls",
+}
+
+// claudeAllowed pre-approves the edit tools and, for Bash, only the safe
+// commands and the ones the repository policy lists. Anything else is denied
+// (--permission-mode dontAsk), never prompted.
+func claudeAllowed(commands []string) []string {
+	rules := []string{"Read", "Grep", "Glob", "Edit", "Write"}
+	for _, c := range append(slices.Clone(safeCommands), commands...) {
+		if c = strings.TrimSpace(c); c != "" {
+			rules = append(rules, fmt.Sprintf("Bash(%s)", c), fmt.Sprintf("Bash(%s *)", c))
+		}
+	}
+	return rules
 }
 
 // ClaudeCLI runs Anthropic's Claude Code in print mode.
@@ -92,16 +146,25 @@ var ClaudeCLI = CLI{
 		{ID: "claude-haiku-5-5", Label: "Claude Haiku 5.5"},
 		{ID: "claude-fable-5-1", Label: "Claude Fable 5.1"},
 	},
-	Defaults:   Settings{HeavyModel: "claude-sonnet-5-5", StdModel: "claude-sonnet-5-5", Effort: "medium"},
+	// Opus plans (heavy: architecture, security); Sonnet implements.
+	Defaults:   Settings{HeavyModel: "claude-opus-5-5", StdModel: "claude-sonnet-5-5", Effort: "medium"},
 	LightModel: "claude-haiku-5-5",
 	Args: func(inv Invocation) []string {
-		args := []string{"-p", "--append-system-prompt", inv.System}
+		// --safe-mode drops the user's skills, plugins, hooks, MCP servers and
+		// CLAUDE.md (the orchestrator passes the project instructions itself)
+		// and, unlike --bare, keeps the claude.ai login.
+		args := []string{"-p", "--safe-mode", "--no-session-persistence", "--output-format", "json",
+			"--append-system-prompt", agentSystem}
 		if inv.ReadOnly {
-			args = append(args, "--permission-mode", "plan", "--tools", "Read,Grep,Glob")
+			args = append(args, "--permission-mode", "plan", "--tools", claudeReadTools)
 		} else {
-			args = append(args, "--dangerously-skip-permissions")
+			args = append(args, "--permission-mode", "dontAsk", "--tools", claudeWriteTools, "--allowedTools")
+			args = append(args, claudeAllowed(inv.Commands)...)
 		}
 		args = append(args, "--autocompact", "auto")
+		if inv.MaxTurns > 0 {
+			args = append(args, "--max-turns", strconv.Itoa(inv.MaxTurns))
+		}
 		if inv.Model != "" {
 			args = append(args, "--model", inv.Model)
 		}
@@ -110,7 +173,8 @@ var ClaudeCLI = CLI{
 		}
 		return args
 	},
-	Stdin: func(inv Invocation) string { return inv.Prompt },
+	Stdin: withRole,
+	Parse: parseClaude,
 }
 
 // CodexCLI runs OpenAI's Codex CLI through `codex exec`. Its models come from
@@ -134,7 +198,9 @@ var CodexCLI = CLI{
 		if inv.ReadOnly {
 			sandbox = "read-only"
 		}
-		args := []string{"exec", "--sandbox", sandbox, "--skip-git-repo-check"}
+		// project_doc_max_bytes=0: AGENTS.md already comes in the prompt.
+		args := []string{"exec", "--json", "--ephemeral", "--sandbox", sandbox, "--skip-git-repo-check",
+			"-c", "project_doc_max_bytes=0"}
 		if inv.Model != "" {
 			args = append(args, "--model", inv.Model)
 		}
@@ -144,9 +210,44 @@ var CodexCLI = CLI{
 		return append(args, "-") // prompt read from stdin
 	},
 	// Codex has no system-prompt flag; prepend the instructions instead.
-	Stdin: func(inv Invocation) string {
-		return fmt.Sprintf("<instructions>\n%s\n</instructions>\n\n%s", inv.System, inv.Prompt)
+	Stdin: instructionsFirst,
+	Parse: parseCodex,
+}
+
+// GeminiCLI runs Google's Gemini CLI in headless mode. The prompt comes on
+// stdin; -p only adds a fixed line after it. Gemini has no turn limit flag.
+var GeminiCLI = CLI{
+	ID:     Gemini,
+	Name:   "Gemini CLI",
+	Binary: "gemini",
+	Models: []Model{
+		{ID: "gemini-3.1-pro-preview", Label: "Gemini 3.1 Pro (preview)"},
+		{ID: "gemini-3-flash-preview", Label: "Gemini 3 Flash (preview)"},
+		{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro"},
+		{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash"},
 	},
+	Defaults:   Settings{HeavyModel: "gemini-3.1-pro-preview", StdModel: "gemini-3-flash-preview"},
+	LightModel: "gemini-2.5-flash",
+	Args: func(inv Invocation) []string {
+		args := []string{"-p", "Execute a tarefa descrita acima.", "--output-format", "json"}
+		if inv.ReadOnly {
+			args = append(args, "--approval-mode", "plan")
+		} else {
+			// auto_edit approves file edits only; shell runs just the listed commands.
+			args = append(args, "--approval-mode", "auto_edit")
+			for _, c := range append(slices.Clone(safeCommands), inv.Commands...) {
+				if c = strings.TrimSpace(c); c != "" {
+					args = append(args, "--allowed-tools", fmt.Sprintf("run_shell_command(%s)", c))
+				}
+			}
+		}
+		if inv.Model != "" {
+			args = append(args, "--model", inv.Model)
+		}
+		return args
+	},
+	Stdin: instructionsFirst,
+	Parse: parseGemini,
 }
 
 // Invocation is a single resolved call to a provider.
@@ -158,6 +259,12 @@ type Invocation struct {
 	Prompt   string
 	WorkDir  string
 	ReadOnly bool // the agent may read the repository but not change it
+	// MaxTurns bounds the agent's turns where the CLI supports it; 0 = no limit.
+	MaxTurns int
+	// Commands are the shell commands a writing agent may run (the
+	// repository's checks and policy); they come from configuration, never
+	// from an agent's output.
+	Commands []string
 }
 
 // Runner executes an invocation and returns the combined output. On failure
@@ -190,12 +297,24 @@ func (r ExecRunner) Run(ctx context.Context, inv Invocation) (string, error) {
 	}
 	isolate(cmd)
 	cmd.WaitDelay = 5 * time.Second // children holding the pipes must not keep Wait blocked
-	var buf bytes.Buffer
+	// Structured CLIs print JSON on stdout; stderr is kept apart so warnings
+	// do not break it, and joins stdout only when the run fails.
+	var buf, stdout bytes.Buffer
 	cmd.Stdout = &buf
+	if inv.CLI.Parse != nil {
+		cmd.Stdout = &stdout
+	}
 	cmd.Stderr = &buf
 
 	err := cmd.Run()
 	out := buf.String()
+	if inv.CLI.Parse != nil {
+		if err == nil {
+			out = stdout.String()
+		} else {
+			out = stdout.String() + "\n" + out
+		}
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return out, fmt.Errorf("%s excedeu o tempo limite de %s", inv.CLI.Binary, timeout)
 	}

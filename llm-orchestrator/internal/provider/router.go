@@ -47,6 +47,10 @@ type Request struct {
 	Tier    Tier
 	// ReadOnly runs the CLI in a mode that cannot modify the repository.
 	ReadOnly bool
+	// MaxTurns bounds the agent's turns (CLIs that support it); 0 = no limit.
+	MaxTurns int
+	// Commands are the shell commands a writing agent may run.
+	Commands []string
 }
 
 // Response is the result of a successful task.
@@ -58,6 +62,10 @@ type Response struct {
 	Effort    string
 	Simulated bool
 	Duration  time.Duration
+	// Usage is the token accounting reported by the CLI; nil when it reports none.
+	Usage *Usage
+	// TurnLimited marks partial work: the agent ran out of turns.
+	TurnLimited bool
 }
 
 // State is the public snapshot of a provider.
@@ -349,7 +357,8 @@ func (r *Router) Restore(id ID) error {
 }
 
 // Execute runs the request on the first available provider, failing over on
-// quota errors and waiting when every provider is cooling down.
+// quota errors and waiting when every provider is cooling down. An agent that
+// ran out of turns returns its partial response together with ErrTurnLimit.
 func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response, error) {
 	handoff := false
 	var announced time.Time
@@ -389,6 +398,8 @@ func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response
 			Prompt:   req.Prompt,
 			WorkDir:  req.WorkDir,
 			ReadOnly: req.ReadOnly,
+			MaxTurns: req.MaxTurns,
+			Commands: req.Commands,
 		}
 		if req.Tier == TierLight {
 			if p.cli.LightModel != "" {
@@ -409,22 +420,35 @@ func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response
 
 		start := time.Now()
 		out, err := runner.Run(ctx, inv)
-		if err == nil && !dry && len(out) <= maxQuotaNoticeLen {
+		text, res := out, parsed{}
+		if !dry && p.cli.Parse != nil {
+			if pr, ok := p.cli.Parse(out); ok {
+				text, res = pr.Text, pr
+			}
+		}
+		if err == nil && !dry && len(text) <= maxQuotaNoticeLen {
 			// Some CLIs print the limit notice and still exit 0.
-			if ParseQuotaError(p.cli.Name, out, r.now()) != nil {
+			if ParseQuotaError(p.cli.Name, text, r.now()) != nil {
 				err = errors.New("limite de uso atingido")
 			}
 		}
+		resp := &Response{
+			Output:      text,
+			Provider:    p.cli.ID,
+			Name:        p.cli.Name,
+			Model:       inv.Model,
+			Effort:      inv.Effort,
+			Simulated:   dry,
+			Duration:    time.Since(start),
+			Usage:       res.Usage,
+			TurnLimited: res.TurnLimit,
+		}
+		if res.TurnLimit && ctx.Err() == nil {
+			// Not retried nor failed over: another attempt would hit the same limit.
+			return resp, ErrTurnLimit
+		}
 		if err == nil {
-			return &Response{
-				Output:    out,
-				Provider:  p.cli.ID,
-				Name:      p.cli.Name,
-				Model:     inv.Model,
-				Effort:    inv.Effort,
-				Simulated: dry,
-				Duration:  time.Since(start),
-			}, nil
+			return resp, nil
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
