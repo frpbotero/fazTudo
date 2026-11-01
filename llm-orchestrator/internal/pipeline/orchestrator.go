@@ -219,12 +219,18 @@ type Orchestrator struct {
 	usageMu   sync.Mutex
 	usagePath string
 
-	mu     sync.RWMutex
-	limits agentLimits
-	run    Run
-	last   StartOptions
-	cancel context.CancelFunc
-	done   chan struct{}
+	// baseStages are the stages as given; stages and texts add the customized
+	// prompts, resolved when a run starts so a run never changes midway.
+	baseStages []Stage
+	texts      promptTexts
+
+	mu      sync.RWMutex
+	prompts map[string]string
+	limits  agentLimits
+	run     Run
+	last    StartOptions
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
 
 // defaultSweepStacks and defaultLockStackSlot reach Docker and the machine-wide
@@ -238,7 +244,8 @@ var (
 // reused from the session cache), followed by stages. onChange is called
 // (without locks held) after every state mutation and must not block.
 func New(exec Executor, ws *workspace.Manager, stages []Stage, onChange func(), logger *slog.Logger) *Orchestrator {
-	o := &Orchestrator{exec: exec, ws: ws, stages: stages, onChange: onChange, logger: logger, runCheck: quality.Run,
+	o := &Orchestrator{exec: exec, ws: ws, baseStages: stages, stages: resolveStages(stages, nil), texts: resolveTexts(nil),
+		onChange: onChange, logger: logger, runCheck: quality.Run,
 		sweepStacks: defaultSweepStacks, lockStackSlot: defaultLockStackSlot,
 		attempts: agentAttempts, retryDelay: agentRetryDelay}
 	o.run.Discovery = newStep(DiscoveryStage)
@@ -320,6 +327,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		o.mu.Unlock()
 		return err
 	}
+	customized := o.usePrompts()
 	if opts.Rediscover {
 		o.ws.Invalidate()
 	}
@@ -357,6 +365,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 	}
 	o.logf(LevelInfo, "Execução iniciada em %s: %d US (origem: %s, modo: %s).", repo, len(opts.Stories), opts.Source, mode)
 	o.logger.Info("pipeline started", "repository", repo, "stories", len(opts.Stories), "source", opts.Source, "dry_run", opts.DryRun)
+	o.logCustomPrompts(customized)
 
 	go func() {
 		defer close(done)
@@ -450,8 +459,10 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	o.done = make(chan struct{})
 	done := o.done
 	opts := o.last
+	customized := o.usePrompts()
 	o.mu.Unlock()
 	o.notify()
+	o.logCustomPrompts(customized)
 	o.logf(LevelInfo, "Refazendo %q a partir de %s.", previous.Title, o.stages[stageAt].Title)
 
 	go func() {
@@ -908,7 +919,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 				resp, ok := o.runStage(ctx, ref, provider.Request{
 					Role:     stage.Role,
 					System:   stage.System,
-					Prompt:   buildVerifyPrompt(stage, st.sc, ss.report, issues, fixes, round),
+					Prompt:   buildVerifyPrompt(o.texts.verifyTask, stage, st.sc, ss.report, issues, fixes, round),
 					Tier:     stage.Tier,
 					WorkDir:  ss.repo,
 					ReadOnly: stage.ReadOnly,
@@ -1206,7 +1217,7 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 			fixResp, ok := o.runStage(ctx, ref, provider.Request{
 				Role:    f.stage.Role,
 				System:  f.stage.System,
-				Prompt:  buildFixPrompt(f.stage, gate, st.sc, ss.report, st.planText, ev.report, repairBrief(f.step.Issues, o.causes(st.si)), f.step.Issues, round),
+				Prompt:  buildFixPrompt(o.texts.fixTask, gate, st.sc, ss.report, st.planText, ev.report, repairBrief(f.step.Issues, o.causes(st.si)), f.step.Issues, round),
 				Tier:    fixTier(f.stage, tier),
 				WorkDir: ss.repo,
 			})
@@ -1321,8 +1332,8 @@ func (o *Orchestrator) discover(ctx context.Context, repo, graph string) (*works
 
 	resp, ok := o.runStage(ctx, discoveryRef, provider.Request{
 		Role:     DiscoveryStage.Role,
-		System:   DiscoveryStage.System,
-		Prompt:   buildDiscoveryPrompt(repo, stacks, graph),
+		System:   o.texts.discovery.System,
+		Prompt:   buildDiscoveryPrompt(o.texts.discovery.Task, repo, stacks, graph),
 		Tier:     DiscoveryStage.Tier,
 		WorkDir:  repo,
 		ReadOnly: true,

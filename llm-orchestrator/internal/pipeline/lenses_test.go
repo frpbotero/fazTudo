@@ -46,7 +46,8 @@ func TestReviewLensesRunInParallelAndMerge(t *testing.T) {
 	if _, err := o.ws.SetPolicy(pol); err != nil {
 		t.Fatal(err)
 	}
-	o.stages = lensStages
+	o.baseStages = lensStages
+	o.stages = o.baseStages
 	writeFile(t, repo, "AGENTS.md", "Sempre escreva testes primeiro.")
 
 	_ = o.Start(realStory("API de carrinho"))
@@ -86,7 +87,8 @@ func TestReviewRunsAsUnifiedByDefault(t *testing.T) {
 		"rev":  {"ok\n```json\n{\"status\":\"approved\",\"issues\":[]}\n```"},
 	}}
 	o, _ := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	o.stages = lensStages
+	o.baseStages = lensStages
+	o.stages = o.baseStages
 
 	_ = o.Start(realStory("API de carrinho"))
 	run := waitDone(t, o)
@@ -126,7 +128,8 @@ func TestKilledLensIsRetriedAlone(t *testing.T) {
 	if _, err := o.ws.SetPolicy(polKilled); err != nil {
 		t.Fatal(err)
 	}
-	o.stages = lensStages
+	o.baseStages = lensStages
+	o.stages = o.baseStages
 	o.attempts, o.retryDelay = 2, time.Millisecond
 
 	_ = o.Start(realStory("API de carrinho"))

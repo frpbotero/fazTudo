@@ -61,7 +61,11 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'), qualityError: $('qualityError'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
+    promptsError: $('promptsError'), promptList: $('promptList'), promptForm: $('promptForm'), promptTitle: $('promptTitle'),
+    promptDescription: $('promptDescription'), promptParts: $('promptParts'), promptWarning: $('promptWarning'), promptValue: $('promptValue'),
+    promptDefault: $('promptDefault'), promptContractBox: $('promptContractBox'), promptContract: $('promptContract'), promptDiscard: $('promptDiscard'),
+    promptDiscardBtn: $('promptDiscardBtn'), promptKeepBtn: $('promptKeepBtn'), promptStatus: $('promptStatus'), promptResetBtn: $('promptResetBtn'), qualityError: $('qualityError'),
     branches: $('branches'), branchesRefreshBtn: $('branchesRefreshBtn'),
     diffDialog: $('diffDialog'), diffTitle: $('diffTitle'), diffMeta: $('diffMeta'), diffBody: $('diffBody'),
     toasts: $('toasts'),
@@ -1785,8 +1789,116 @@ Critérios de aceitação:
     };
   }
 
+  // ---------- prompts ----------
+  let promptItems = [];
+  let promptKey = null;
+  let nextPromptKey = null;
+
+  const currentPrompt = () => promptItems.find((p) => p.key === promptKey);
+  const promptDirty = () => {
+    const item = currentPrompt();
+    return Boolean(item) && el.promptValue.value.trimEnd() !== item.value.trimEnd();
+  };
+
+  function renderPromptList() {
+    const groups = [...new Set(promptItems.map((p) => p.group))];
+    el.promptList.innerHTML = groups.map((group) => `
+      <div class="prompt-group">
+        <h2>${esc(group)}</h2>
+        ${promptItems.filter((p) => p.group === group).map((p) => `
+          <button type="button" data-prompt="${esc(p.key)}"${p.key === promptKey ? ' aria-current="true"' : ''}>
+            <span>${esc(p.title)}</span>${p.customized ? '<span class="tag">Customizado</span>' : ''}
+          </button>`).join('')}
+      </div>`).join('');
+  }
+
+  function renderPromptEditor() {
+    const item = currentPrompt();
+    el.promptForm.hidden = !item;
+    if (!item) return;
+    el.promptTitle.textContent = item.title;
+    el.promptDescription.textContent = item.description;
+    el.promptParts.innerHTML = item.parts.map((part) => `<li${part.includes('este texto') ? ' data-current="true"' : ''}>${esc(part)}</li>`).join('');
+    el.promptWarning.hidden = !item.warning;
+    el.promptWarning.textContent = item.warning || '';
+    el.promptValue.value = item.value;
+    el.promptDefault.textContent = item.default;
+    el.promptContractBox.hidden = !item.contract;
+    el.promptContract.textContent = item.contract || '';
+    el.promptResetBtn.disabled = !item.customized;
+    el.promptDiscard.hidden = true;
+    el.promptStatus.textContent = '';
+  }
+
+  function selectPrompt(key) {
+    promptKey = key;
+    nextPromptKey = null;
+    renderPromptList();
+    renderPromptEditor();
+  }
+
+  function applyPrompts(items) {
+    promptItems = items;
+    if (!promptKey) promptKey = items[0]?.key ?? null;
+    renderPromptList();
+  }
+
+  function showPromptError(message) {
+    el.promptsError.hidden = !message;
+    el.promptsError.textContent = message;
+  }
+
+  async function loadPrompts() {
+    try {
+      const keepDraft = promptDirty();
+      applyPrompts(await api('GET', '/api/prompts'));
+      showPromptError('');
+      if (!keepDraft) renderPromptEditor();
+    } catch (err) {
+      showPromptError(err.message);
+    }
+  }
+
+  async function savePrompt(call, message) {
+    try {
+      applyPrompts(await call());
+      showPromptError('');
+      renderPromptEditor();
+      el.promptStatus.textContent = message;
+    } catch (err) {
+      showPromptError(err.message);
+    }
+  }
+
+  el.promptList.addEventListener('click', (e) => {
+    const key = e.target.closest('[data-prompt]')?.dataset.prompt;
+    if (!key || key === promptKey) return;
+    if (promptDirty()) {
+      nextPromptKey = key;
+      el.promptDiscard.hidden = false;
+      el.promptDiscardBtn.focus();
+      return;
+    }
+    selectPrompt(key);
+  });
+  el.promptForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const path = `/api/prompts/${encodeURIComponent(promptKey)}`;
+    savePrompt(() => api('PUT', path, { value: el.promptValue.value }), 'Salvo. Vale a partir da próxima execução.');
+  });
+  el.promptResetBtn.addEventListener('click', () => {
+    const path = `/api/prompts/${encodeURIComponent(promptKey)}`;
+    savePrompt(() => api('DELETE', path), 'Padrão restaurado.');
+  });
+  el.promptDiscardBtn.addEventListener('click', () => selectPrompt(nextPromptKey));
+  el.promptKeepBtn.addEventListener('click', () => {
+    nextPromptKey = null;
+    el.promptDiscard.hidden = true;
+    el.promptValue.focus();
+  });
+
   // ---------- views ----------
-  const VIEWS = { execucao: 'Execução', nova: 'Nova execução', repositorio: 'Repositório', provedores: 'Provedores', logs: 'Logs' };
+  const VIEWS = { execucao: 'Execução', nova: 'Nova execução', repositorio: 'Repositório', provedores: 'Provedores', prompts: 'Prompts', logs: 'Logs' };
   const viewFromHash = () => (VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : null);
 
   function showView(name) {
@@ -1798,6 +1910,7 @@ Critérios de aceitação:
     el.sidebar.parentElement.dataset.currentView = name;
     document.title = `${VIEWS[name]} · FazTudo`;
     setMenu(false);
+    if (name === 'prompts') loadPrompts();
     if (name === 'logs' && el.autoScroll.checked) el.log.scrollTop = el.log.scrollHeight;
     if (name === 'repositorio') loadRepos();
   }

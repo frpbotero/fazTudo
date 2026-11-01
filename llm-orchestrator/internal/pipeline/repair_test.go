@@ -294,7 +294,8 @@ func TestBlockedCauseStopsWithoutAnotherAttempt(t *testing.T) {
 
 func TestHandOverMovesTheCauseWithoutSpendingAnAttempt(t *testing.T) {
 	o, _ := newVerifierTest(t, &fakeExecutor{}, alwaysPasses)
-	o.stages = []Stage{{ID: "frontend", Implementer: true}, {ID: "backend", Implementer: true}}
+	o.baseStages = []Stage{{ID: "frontend", Implementer: true}, {ID: "backend", Implementer: true}}
+	o.stages = o.baseStages
 	o.run.Stories = []StoryRun{{Causes: []Cause{{Fingerprint: "x", Owner: "frontend", Status: causeOpen, Attempts: 1}}}}
 	st := &storyState{}
 	handOver := "```json\n" + `{"results":[{"cluster":"x","status":"reassign","owner":"backend","reason":"é da API"}]}` + "\n```"

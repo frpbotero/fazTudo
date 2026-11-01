@@ -59,6 +59,7 @@
         <a href="#nova" data-view-link="nova"><svg class="icon"><use href="#i-file"/></svg><span>Nova execução</span></a>
         <a href="#repositorio" data-view-link="repositorio"><svg class="icon"><use href="#i-folder"/></svg><span>Repositório</span></a>
         <a href="#provedores" data-view-link="provedores"><svg class="icon"><use href="#i-sliders"/></svg><span>Provedores</span></a>
+        <a href="#prompts" data-view-link="prompts"><svg class="icon"><use href="#i-file"/></svg><span>Prompts</span></a>
         <a href="#logs" data-view-link="logs"><svg class="icon"><use href="#i-clock"/></svg><span>Logs</span><span class="nav-count" id="navIssues" hidden></span></a>
       </nav>
 
@@ -248,6 +249,54 @@
           </div>
         </div>
         <div id="providers" class="providers"></div>
+      </section>
+
+      <!-- Prompts -->
+      <section class="view" data-view="prompts" aria-labelledby="promptsTitle" hidden>
+        <div class="title-row">
+          <div>
+            <h1 id="promptsTitle">Prompts</h1>
+            <p class="subline">Veja e adapte o texto de cada parte do fluxo. Alterações valem a partir da próxima execução e para todos os repositórios.</p>
+          </div>
+        </div>
+        <p class="form-error" id="promptsError" hidden></p>
+        <div class="prompts">
+          <nav class="prompt-list" id="promptList" aria-label="Lista de prompts"></nav>
+          <form class="panel prompt-editor" id="promptForm" novalidate hidden>
+            <div>
+              <h2 id="promptTitle"></h2>
+              <p class="note" id="promptDescription"></p>
+            </div>
+            <div>
+              <p class="field-label" id="promptPartsLabel">Como a chamada é montada</p>
+              <ol class="prompt-parts" id="promptParts" aria-labelledby="promptPartsLabel"></ol>
+            </div>
+            <p class="note prompt-warning" id="promptWarning" hidden></p>
+            <div class="field">
+              <label for="promptValue">Texto</label>
+              <textarea id="promptValue" rows="16" spellcheck="false"></textarea>
+            </div>
+            <details>
+              <summary>Ver texto padrão</summary>
+              <pre class="prompt-text" id="promptDefault"></pre>
+            </details>
+            <details id="promptContractBox">
+              <summary>Contrato de saída</summary>
+              <p class="note">Fixo: o orquestrador lê este formato.</p>
+              <pre class="prompt-text" id="promptContract"></pre>
+            </details>
+            <div class="prompt-discard" id="promptDiscard" role="alert" hidden>
+              <span>Este texto tem alterações não salvas.</span>
+              <button class="btn btn-sm" id="promptDiscardBtn" type="button">Descartar</button>
+              <button class="btn btn-sm btn-ghost" id="promptKeepBtn" type="button">Continuar editando</button>
+            </div>
+            <div class="prompt-actions">
+              <span class="note" id="promptStatus" role="status" aria-live="polite"></span>
+              <button class="btn btn-ghost" id="promptResetBtn" type="button">Restaurar padrão</button>
+              <button class="btn" id="promptSaveBtn" type="submit">Salvar</button>
+            </div>
+          </form>
+        </div>
       </section>
 
       <!-- Logs -->

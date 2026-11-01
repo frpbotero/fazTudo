@@ -24,7 +24,8 @@ func newCandidateTest(t *testing.T, exec *fakeExecutor) (*Orchestrator, string) 
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	o, repo := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	o.stages = candidateStages
+	o.baseStages = candidateStages
+	o.stages = o.baseStages
 	policy := o.ws.Policy()
 	policy.Git, policy.Candidates = true, 3
 	if _, err := o.ws.SetPolicy(policy); err != nil {

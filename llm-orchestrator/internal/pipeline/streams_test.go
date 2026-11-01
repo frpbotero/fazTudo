@@ -113,7 +113,8 @@ func newStreamTest(t *testing.T, exec *fakeExecutor, git bool) (*Orchestrator, s
 	}
 	exec.outputs = map[string][]string{"arch": {twoStreams}}
 	o, repo := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	o.stages = streamStages
+	o.baseStages = streamStages
+	o.stages = o.baseStages
 	policy := o.ws.Policy()
 	policy.Git = git
 	if _, err := o.ws.SetPolicy(policy); err != nil {

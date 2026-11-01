@@ -40,7 +40,7 @@ func TestPromptsShareTheirOpening(t *testing.T) {
 	report := &workspace.Report{Path: "/repo", Summary: "mapa"}
 	spec := buildPrompt(DefaultStages[1], sc, report, nil)
 	arch := buildPrompt(DefaultStages[2], sc, report, []Step{{ID: "spec", Output: "edd"}})
-	fix := buildFixPrompt(DefaultStages[4], DefaultStages[5], sc, report, "", "", "", nil, 1)
+	fix := buildFixPrompt(fixTask, DefaultStages[5], sc, report, "", "", "", nil, 1)
 	head := spec[:strings.Index(spec, "## User Story")]
 	for name, p := range map[string]string{"arch": arch, "fix": fix} {
 		if !strings.HasPrefix(p, head) {

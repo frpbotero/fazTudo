@@ -361,8 +361,8 @@ func (o *Orchestrator) investigate(ctx context.Context, ss *session, st *storySt
 	o.insertSteps(st.si, afterID, step)
 	resp, ok := o.runStage(ctx, stepRef{st.si, step.ID}, provider.Request{
 		Role:     InvestigatorStage.Role,
-		System:   InvestigatorStage.System,
-		Prompt:   buildInvestigationPrompt(st.sc, ss.report, st.planText, issues, o.causes(st.si), o.changedFiles(ss, st.started)),
+		System:   o.texts.investigator.System,
+		Prompt:   buildInvestigationPrompt(o.texts.investigator.Task, st.sc, ss.report, st.planText, issues, o.causes(st.si), o.changedFiles(ss, st.started)),
 		Tier:     step.Tier,
 		WorkDir:  ss.repo,
 		ReadOnly: true,
@@ -493,7 +493,7 @@ func (o *Orchestrator) recordFix(st *storyState, issues []Issue, output string) 
 	}
 }
 
-func buildInvestigationPrompt(sc storyContext, discovery *workspace.Report, plan string, issues []Issue, causes map[string]Cause, changed []string) string {
+func buildInvestigationPrompt(task string, sc storyContext, discovery *workspace.Report, plan string, issues []Issue, causes map[string]Cause, changed []string) string {
 	var b strings.Builder
 	writeContext(&b, sc, discovery)
 	if plan != "" {
@@ -506,7 +506,7 @@ func buildInvestigationPrompt(sc storyContext, discovery *workspace.Report, plan
 	}
 	writeSkills(&b, fixSkills)
 	b.WriteString("## Sua tarefa\n\n")
-	b.WriteString(InvestigatorStage.Task)
+	b.WriteString(task)
 	b.WriteString(investigationInstructions)
 	return b.String()
 }

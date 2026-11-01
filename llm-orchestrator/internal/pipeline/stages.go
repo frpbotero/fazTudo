@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,6 +21,8 @@ type Stage struct {
 	Tier   provider.Tier
 	System string
 	Task   string
+	// Rules appends the shared engineering rules to System.
+	Rules bool
 
 	// Assessor marks the stage that checks what the repository already
 	// implements (Passo 0); its decision may close or block the story.
@@ -138,7 +141,7 @@ const verdictInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n"
 
 // engineeringRules are the implementers' working rules, adapted from the
 // Codebuff/Freebuff orchestrator guidelines.
-const engineeringRules = "\n\nRegras:\n" +
+const engineeringRules = "Regras:\n" +
 	"- Leia código vizinho, testes e config antes de editar. Siga convenções existentes.\n" +
 	designRules +
 	"- Não assuma biblioteca: confirme no manifesto (package.json, go.mod…) antes de usar.\n" +
@@ -268,7 +271,8 @@ var DefaultStages = []Stage{
 		Selectable:  true,
 		Implementer: true,
 		System: "Agente de frontend. Interface acessível (WCAG 2.2 AA), responsiva e caprichada: hierarquia, contraste, " +
-			"estados de hover/foco/erro/vazio, transições discretas." + engineeringRules,
+			"estados de hover/foco/erro/vazio, transições discretas.",
+		Rules:  true,
 		Task:   "Implemente interface e componentes conforme EDD e plano do arquiteto.",
 		Skills: []string{"incremental-implementation", "test-driven-development", "frontend-ui-engineering"},
 		Inputs: implementerInputs,
@@ -280,7 +284,8 @@ var DefaultStages = []Stage{
 		Tier:        provider.TierStandard,
 		Selectable:  true,
 		Implementer: true,
-		System:      "Agente de backend e dados. APIs resilientes, regras determinísticas, entrada validada." + engineeringRules,
+		System:      "Agente de backend e dados. APIs resilientes, regras determinísticas, entrada validada.",
+		Rules:       true,
 		Task:        "Implemente endpoints, serviços e algoritmos até todos os testes do plano TDD passarem.",
 		Skills:      []string{"incremental-implementation", "test-driven-development", "api-and-interface-design"},
 		Inputs:      implementerInputs,
@@ -367,7 +372,7 @@ const maxPreambleBytes = 2_000
 
 // buildDiscoveryPrompt gives the discovery agent the deterministic scan as a
 // starting point.
-func buildDiscoveryPrompt(repo string, stacks []workspace.Stack, graph string) string {
+func buildDiscoveryPrompt(task, repo string, stacks []workspace.Stack, graph string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Repositório\n\n`%s`\n\n## Manifestos detectados automaticamente\n\n%s\n\n",
 		repo, workspace.FormatStacks(stacks))
@@ -375,7 +380,7 @@ func buildDiscoveryPrompt(repo string, stacks []workspace.Stack, graph string) s
 	if report := strings.TrimSpace(workspace.GraphReport(graph)); report != "" {
 		fmt.Fprintf(&b, "Relatório do grafo (hubs e comunidades):\n\n%s\n\n", clip(report, maxArtifactBytes))
 	}
-	fmt.Fprintf(&b, "## Sua tarefa\n\n%s", DiscoveryStage.Task)
+	fmt.Fprintf(&b, "## Sua tarefa\n\n%s", task)
 	return b.String()
 }
 
@@ -404,6 +409,8 @@ type storyContext struct {
 	// Audit marks a story already developed: the stages review the existing
 	// code instead of a change.
 	Audit bool
+	// AuditNotice is the customized text of the audit notice, if any.
+	AuditNotice string
 	// PortBase starts the port range of a story run beside others; 0 alone.
 	PortBase int
 }
@@ -521,7 +528,7 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 	b.WriteString(strings.TrimSpace(sc.Story.Content))
 	b.WriteString("\n\n")
 	if sc.Audit {
-		b.WriteString(auditNotice)
+		b.WriteString(cmp.Or(sc.AuditNotice, auditNotice))
 	}
 }
 
@@ -597,7 +604,7 @@ const fixTask = "Trabalhe uma causa por vez, na ordem listada:\n" +
 	"Ninguém responde perguntas: sem saída, responda blocked."
 
 // buildFixPrompt asks an implementer to fix what a gate reported.
-func buildFixPrompt(stage, gate Stage, sc storyContext, discovery *workspace.Report, plan, report, brief string, issues []Issue, round int) string {
+func buildFixPrompt(task string, gate Stage, sc storyContext, discovery *workspace.Report, plan, report, brief string, issues []Issue, round int) string {
 	var b strings.Builder
 	writeContext(&b, sc, discovery)
 	if plan != "" {
@@ -612,13 +619,16 @@ func buildFixPrompt(stage, gate Stage, sc storyContext, discovery *workspace.Rep
 	}
 	b.WriteString("## Correções obrigatórias atribuídas a você\n\n")
 	writeIssues(&b, issues)
-	fmt.Fprintf(&b, "\nCausas: %s.\n\n## Sua tarefa\n\n%s", causeIDs(issues), fixTask)
+	fmt.Fprintf(&b, "\nCausas: %s.\n\n## Sua tarefa\n\n%s", causeIDs(issues), task)
 	b.WriteString(fixInstructions)
 	return b.String()
 }
 
+// verifyTask opens the re-evaluation of a gate after a fix.
+const verifyTask = "cada problema acima resolvido? Correção quebrou algo?"
+
 // buildVerifyPrompt re-runs a gate after fixes, pointing at what changed.
-func buildVerifyPrompt(gate Stage, sc storyContext, discovery *workspace.Report, issues []Issue, fixes []Step, round int) string {
+func buildVerifyPrompt(task string, gate Stage, sc storyContext, discovery *workspace.Report, issues []Issue, fixes []Step, round int) string {
 	var b strings.Builder
 	writeContext(&b, sc, discovery)
 	fmt.Fprintf(&b, "## Problemas apontados na rodada %d\n\n", round-1)
@@ -628,7 +638,7 @@ func buildVerifyPrompt(gate Stage, sc storyContext, discovery *workspace.Report,
 		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), maxArtifactBytes))
 	}
 	writeSkills(&b, gate.Skills)
-	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação, rodada %d: cada problema acima resolvido? Correção quebrou algo? %s", round, gate.Task)
+	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação, rodada %d: %s %s", round, task, gate.Task)
 	b.WriteString(verdictInstructions)
 	return b.String()
 }

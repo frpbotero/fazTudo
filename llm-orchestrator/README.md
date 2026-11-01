@@ -136,6 +136,10 @@ pendente). Veja o [README da raiz](../README.md).
   FazTudo remove os projetos do Docker Compose cujo nome casa com **Stacks de teste descartáveis** (padrão
   `*-e2e-*`) e cujo arquivo compose está no repositório. Comando que estoura o tempo limite vira pendência, sem
   rodada de correção: não indica erro no código.
+- **Prompts** — a tela *Prompts* mostra o texto de cada etapa, foco de revisão e regra compartilhada, e como a
+  chamada é montada. O que difere do padrão fica em `config.json` (`prompts`), vale para todos os repositórios a
+  partir da próxima execução, e o início da execução registra o que está customizado. Contratos de saída em JSON
+  aparecem só para leitura, e permissões não passam por essa tela. Para regras de um projeto, use `AGENTS.md`.
 - **Resiliência** — cada chamada de agente tem tempo limite (60 min); o processo e os filhos (ex.: um
   `ng serve` esquecido) são encerrados juntos. Chamada que falha ou expira é refeita até 3 vezes, com
   espera crescente e aviso para o agente retomar de onde parou.

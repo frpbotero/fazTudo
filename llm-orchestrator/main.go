@@ -77,7 +77,8 @@ func run() error {
 
 	store := settings.NewStore(*configPath)
 	ws.SetCacheDir(settings.DiscoveryDir(store.Path()))
-	if file, err := store.Load(); err != nil {
+	file, err := store.Load()
+	if err != nil {
 		logger.Warn("configuração salva ignorada", "err", err)
 	} else {
 		overrides := settings.Overrides{
@@ -97,6 +98,9 @@ func run() error {
 	}
 	hub := server.NewHub()
 	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
+	for _, e := range orch.LoadPrompts(file.Prompts) {
+		logger.Warn("parte da configuração salva ignorada", "err", e)
+	}
 	orch.SetJournalDir(settings.RunsDir(store.Path()))
 	orch.SetUsageLog(settings.UsageLog(store.Path()))
 	srv := server.New(ctx, server.Deps{

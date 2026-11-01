@@ -274,7 +274,7 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 		"```json\n{\"choice\": \"A\", \"reason\": \"motivo em uma frase\"}\n```")
 
 	req := o.limited(provider.Request{
-		Role: SelectorStage.Role, System: SelectorStage.System, Prompt: b.String(),
+		Role: SelectorStage.Role, System: o.texts.selector.System, Prompt: b.String(),
 		Tier: SelectorStage.Tier, WorkDir: ss.repo, ReadOnly: true,
 	})
 	resp, err := o.exec.Execute(ctx, req, o.providerLog)

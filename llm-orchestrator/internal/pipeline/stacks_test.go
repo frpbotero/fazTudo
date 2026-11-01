@@ -226,7 +226,8 @@ func TestModelCannotMarkIssuesAsInfrastructure(t *testing.T) {
 // each agent left the item for the other.
 func TestFailuresGoToWhoOwnsThem(t *testing.T) {
 	o, _ := newVerifierTest(t, &fakeExecutor{}, alwaysPasses)
-	o.stages = []Stage{{ID: "frontend", Implementer: true}, {ID: "backend", Implementer: true}}
+	o.baseStages = []Stage{{ID: "frontend", Implementer: true}, {ID: "backend", Implementer: true}}
+	o.stages = o.baseStages
 	ss := &session{report: &workspace.Report{Stacks: []workspace.Stack{
 		{Dir: "front", Name: "Node.js"}, {Dir: "front", Name: "Angular"},
 		{Dir: "core-api", Name: "Node.js"}, {Dir: "e2e", Name: "Playwright"},

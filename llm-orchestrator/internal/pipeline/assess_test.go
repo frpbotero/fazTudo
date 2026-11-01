@@ -40,7 +40,8 @@ func TestParseAssessmentDefaultsToImplement(t *testing.T) {
 func TestPassoZeroReuseClosesStoryWithoutImplementing(t *testing.T) {
 	exec := &fakeExecutor{outputs: map[string][]string{"scout": {decision(DecisionReuse)}}}
 	o, _ := newVerifierTest(t, exec, passing)
-	o.stages = assessStages
+	o.baseStages = assessStages
+	o.stages = o.baseStages
 	if err := o.Start(realStory("Carrinho")); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +62,8 @@ func TestPassoZeroReuseClosesStoryWithoutImplementing(t *testing.T) {
 func TestPassoZeroBlockSkipsStoryAndContinues(t *testing.T) {
 	exec := &fakeExecutor{outputs: map[string][]string{"scout": {decision(DecisionBlock), decision(DecisionImplement)}}}
 	o, _ := newVerifierTest(t, exec, passing)
-	o.stages = assessStages
+	o.baseStages = assessStages
+	o.stages = o.baseStages
 	opts := realStory("x")
 	opts.Stories = append(opts.Stories, stories.Story{ID: "US-8", Title: "US-8 Próxima", Content: "y"})
 	if err := o.Start(opts); err != nil {
@@ -92,7 +94,8 @@ func TestReviewFixThatBreaksChecksSkipsReviewer(t *testing.T) {
 		}
 		return quality.Result{Passed: true}
 	})
-	o.stages = assessStages
+	o.baseStages = assessStages
+	o.stages = o.baseStages
 	edits := 0
 	exec.onCall = func(req provider.Request) {
 		if req.Role == "fe" {

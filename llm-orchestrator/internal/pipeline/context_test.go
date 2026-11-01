@@ -58,7 +58,8 @@ func TestEveryAgentGetsTheCodeGraph(t *testing.T) {
 	}
 	exec := &fakeExecutor{outputs: map[string][]string{"arch": {"```json\n{\"agents\":[\"backend\"]}\n```"}}}
 	o, _ := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	o.stages = lensStages
+	o.baseStages = lensStages
+	o.stages = o.baseStages
 
 	_ = o.Start(realStory("API de carrinho"))
 	if run := waitDone(t, o); run.Result != ResultSucceeded {

@@ -111,7 +111,8 @@ func newParallelStoryTest(t *testing.T, exec *fakeExecutor) (*Orchestrator, stri
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	o, repo := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	o.stages = testStages
+	o.baseStages = testStages
+	o.stages = o.baseStages
 	o.attempts = 1
 	policy := o.ws.Policy()
 	policy.Git = true
