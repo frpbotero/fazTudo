@@ -871,7 +871,16 @@ Critérios de aceitação:
     failed: { label: 'Falhou', tone: 'danger' },
     canceled: { label: 'Cancelada', tone: 'neutral' },
   };
-  const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', stream: 'Frente', merge: 'Integração' };
+  const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', investigate: 'Investigação', stream: 'Frente', merge: 'Integração' };
+  const CAUSE_STATUS = {
+    open: { label: 'Em correção', sev: 'média' },
+    fixed: { label: 'Corrigida', sev: 'baixa' },
+    pending: { label: 'Pendente', sev: 'alta' },
+    blocked: { label: 'Bloqueada', sev: 'alta' },
+    inherited: { label: 'Herdada', sev: 'média' },
+    infra: { label: 'Infraestrutura', sev: 'média' },
+    unverified: { label: 'Não reverificada', sev: 'média' },
+  };
   const PLAN_SOURCE = {
     architect: '',
     heuristic: 'Simulação: escolha por palavras-chave da US.',
@@ -1039,6 +1048,39 @@ Critérios de aceitação:
     const code = text.slice(at).replace(/^```[^\n]*\n?/, '').replace(/\n?```\s*$/, '');
     return `<span class="issue-desc">${esc(text.slice(0, at).trim())}</span>
       <details class="check-out"><summary>Ver saída</summary><pre>${esc(code)}</pre></details>`;
+  }
+
+  function causeDetail(label, value) {
+    return value ? `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>` : '';
+  }
+
+  function renderCause(c, index, total) {
+    const status = CAUSE_STATUS[c.status] || CAUSE_STATUS.open;
+    const attempts = c.attempts ? ` · tentativa ${esc(c.attempts)}` : '';
+    const details = [
+      causeDetail('Causa raiz', c.root_cause),
+      causeDetail('Evidência', c.evidence),
+      causeDetail('Estratégia', (c.strategy || []).join('; ')),
+      causeDetail('Teste de regressão', c.regression_test),
+      causeDetail('Prova', c.proof),
+      causeDetail('Motivo', c.reason),
+    ].join('');
+    return `
+      <li>
+        <span class="sev" data-sev="${esc(status.sev)}">${esc(status.label)}</span>
+        <span class="issue-desc">${esc(c.title || c.fingerprint)}</span>
+        <span class="issue-meta"><span>Causa ${index + 1} de ${total}${attempts}</span>${c.owner ? `<span>${esc(c.owner)}</span>` : ''}</span>
+        ${details ? `<dl class="cause-details">${details}</dl>` : ''}
+      </li>`;
+  }
+
+  function renderCauses(causes) {
+    if (!causes?.length) return '';
+    return `
+      <div class="issues">
+        <h3>Causas <span class="muted">${causes.length}</span></h3>
+        <ul>${causes.map((c, i) => renderCause(c, i, causes.length)).join('')}</ul>
+      </div>`;
   }
 
   function renderIssues(issues, title) {
@@ -1383,7 +1425,8 @@ Critérios de aceitação:
     const head = `
       <h2 id="storyTitle">${esc(st.title || 'User Story')}</h2>
       <div class="story-meta">${meta}</div>
-      ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}`;
+      ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
+      ${renderCauses(st.causes)}`;
     if (el.storyHead.dataset.html !== head) {
       el.storyHead.innerHTML = head;
       el.storyHead.dataset.html = head;

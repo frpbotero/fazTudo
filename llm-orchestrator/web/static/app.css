@@ -435,6 +435,9 @@ details > .step-row:hover { background: var(--raised); }
 .sev[data-sev="alta"] { background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
 .sev[data-sev="média"], .sev[data-sev="media"] { background: var(--pill-warning-bg); color: var(--pill-warning-ink); }
 .issue-desc { white-space: pre-wrap; word-break: break-word; }
+.cause-details { grid-column: 2; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; margin: 4px 0 0; font-size: var(--fs-small); }
+.cause-details dt { color: var(--muted); }
+.cause-details dd { margin: 0; word-break: break-word; }
 
 .checks { list-style: none; margin: 0; padding: 0; }
 .checks li { display: grid; grid-template-columns: 16px auto minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 6px 0; border-top: 1px solid var(--rule); font-size: 13px; }
