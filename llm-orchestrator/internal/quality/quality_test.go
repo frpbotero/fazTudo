@@ -42,7 +42,8 @@ func TestRunReportsExitCodeAndOutputTail(t *testing.T) {
 
 func TestRunTimeoutKillsProcessGroup(t *testing.T) {
 	start := time.Now()
-	r := Run(context.Background(), t.TempDir(), Command{Run: "sleep 30 & sleep 30"}, 300*time.Millisecond)
+	// A background job ignores SIGINT, so only the group's kill ends it.
+	r := run(context.Background(), t.TempDir(), Command{Run: "sleep 30 & sleep 30"}, 300*time.Millisecond, 200*time.Millisecond)
 	if r.Passed || !r.TimedOut {
 		t.Fatalf("expected timeout, got %+v", r)
 	}
