@@ -3,12 +3,14 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/workspace"
 )
 
 // maxVerifierRounds is how many fix rounds an executable gate may trigger;
@@ -157,7 +159,7 @@ func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, 
 		}
 		o.logf(LevelWarn, "%s falhou (%s).", c.Name, exitLabel(r))
 		a.issues = append(a.issues, Issue{
-			Agent:       o.assignCommand(c, st.plan),
+			Agent:       o.assignFailure(ss, c, r.Failures, st.plan),
 			Severity:    "alta",
 			Description: commandIssue(c, r),
 			Location:    c.Name,
@@ -264,8 +266,57 @@ func (o *Orchestrator) assignFile(file string, plan Plan) string {
 	return o.prefer("backend", plan)
 }
 
+// assignFailure finds who owns a failing command from the evidence, in order:
+// the front of the plan that covers the failing file, the stack of the
+// directory the command runs in, and last its wording.
+func (o *Orchestrator) assignFailure(ss *session, c quality.Command, failures []quality.Failure, plan Plan) string {
+	dir := quality.CommandDir(c)
+	for _, f := range failures {
+		if f.File == "" {
+			continue
+		}
+		if agent := planOwner(plan, path.Join(dir, f.File)); agent != "" {
+			return o.prefer(agent, plan)
+		}
+	}
+	if agent := stackOwner(ss.report, dir); agent != "" {
+		return o.prefer(agent, plan)
+	}
+	return o.assignCommand(c, plan)
+}
+
+// planOwner is the agent of the plan's front whose files cover file.
+func planOwner(plan Plan, file string) string {
+	for _, s := range plan.Streams {
+		for _, covered := range s.Files {
+			if strings.HasPrefix(file, strings.TrimPrefix(covered, "./")) {
+				return s.Agent
+			}
+		}
+	}
+	return ""
+}
+
+// stackOwner tells interface code from services by the stack found in dir.
+func stackOwner(report *workspace.Report, dir string) string {
+	if report == nil || dir == "" {
+		return ""
+	}
+	owner := ""
+	for _, s := range report.Stacks {
+		if path.Clean(s.Dir) != path.Clean(dir) {
+			continue
+		}
+		if s.Name == "Angular" || s.Name == "Playwright" {
+			return "frontend"
+		}
+		owner = "backend"
+	}
+	return owner
+}
+
 func (o *Orchestrator) assignCommand(c quality.Command, plan Plan) string {
-	if containsAny(strings.ToLower(c.Name+" "+c.Run), "e2e", "playwright", "cypress", "frontend", "web") {
+	if containsAny(strings.ToLower(c.Name+" "+c.Run), "e2e", "playwright", "cypress", "frontend", "front", "web") {
 		return o.prefer("frontend", plan)
 	}
 	return defaultImplementer(o.stages, plan)
@@ -321,7 +372,15 @@ func commandIssue(c quality.Command, r quality.Result) string {
 			c.Run, c.Name, (time.Duration(r.DurationMS) * time.Millisecond).Round(time.Second), tail(r.Output, maxTimeoutOutput))
 	}
 	return fmt.Sprintf("`%s` (%s) %s. Corrija o código até passar. Mude teste só se contrariar a especificação, com motivo. "+
-		"Falhas:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(quality.FailureSummary(r.Output, maxIssueLines), maxIssueOutput))
+		"Falhas:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(quality.FailureSummary(failureText(r), maxIssueLines), maxIssueOutput))
+}
+
+// failureText prefers the evidence kept from the whole output over its tail.
+func failureText(r quality.Result) string {
+	if r.Evidence != "" {
+		return r.Evidence
+	}
+	return r.Output
 }
 
 func exitLabel(r quality.Result) string {

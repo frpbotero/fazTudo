@@ -33,16 +33,14 @@ type agentLimits struct {
 }
 
 // useLimits derives the agent limits of a run from its policy: the project
-// checks and the policy's extra commands are the only shell writers may run.
+// checks, the tools to reproduce a failure and the policy's extra commands are
+// the only shell writers may run.
 func (o *Orchestrator) useLimits(policy workspace.Policy, checks []quality.Command) {
 	l := agentLimits{writeTurns: defaultWriteTurns, readTurns: defaultReadTurns, stop: policy.StopOnTurnLimit}
 	if policy.MaxTurns > 0 {
 		l.writeTurns, l.readTurns = policy.MaxTurns, max(policy.MaxTurns/2, minReadTurns)
 	}
-	for _, c := range checks {
-		l.commands = append(l.commands, c.Run)
-	}
-	l.commands = append(l.commands, policy.AgentCommands...)
+	l.commands = append(quality.RepairCommands(checks), policy.AgentCommands...)
 	o.mu.Lock()
 	o.limits = l
 	o.mu.Unlock()

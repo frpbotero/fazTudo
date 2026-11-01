@@ -6,6 +6,7 @@ package quality
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -28,6 +29,10 @@ type Result struct {
 	TimedOut   bool   `json:"timed_out,omitempty"`
 	Output     string `json:"output,omitempty"`
 	DurationMS int64  `json:"duration_ms"`
+	// Evidence holds the failure lines of the whole output, which Output, a
+	// tail, may have lost. Failures is what they identify.
+	Evidence string    `json:"-"`
+	Failures []Failure `json:"failures,omitempty"`
 }
 
 // maxOutputBytes is how much of a command's output is kept: the tail, where
@@ -61,8 +66,10 @@ func run(ctx context.Context, dir string, c Command, timeout, grace time.Duratio
 	finish := isolate(cmd, grace)
 	defer finish()
 	out := &tailBuffer{max: maxOutputBytes}
-	cmd.Stdout = out
-	cmd.Stderr = out
+	evidence := &evidenceLog{}
+	output := io.MultiWriter(out, evidence)
+	cmd.Stdout = output
+	cmd.Stderr = output
 
 	started := time.Now()
 	err := cmd.Run()
@@ -83,6 +90,10 @@ func run(ctx context.Context, dir string, c Command, timeout, grace time.Duratio
 	default:
 		res.ExitCode = -1
 		res.Output = strings.TrimSpace(res.Output + "\n" + err.Error())
+	}
+	if !res.Passed && !res.TimedOut {
+		res.Evidence = evidence.String()
+		res.Failures = ParseFailures(c, res.Evidence)
 	}
 	return res
 }

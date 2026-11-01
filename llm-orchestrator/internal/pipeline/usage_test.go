@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +57,8 @@ func TestLimitedRequests(t *testing.T) {
 	policy := workspace.DefaultPolicy()
 	o.useLimits(policy, []quality.Command{{Name: "test", Run: "npm test"}})
 	write := o.limited(provider.Request{})
-	if write.MaxTurns != defaultWriteTurns || write.Commands[0] != "npm test" || len(write.Commands) != 1+len(workspace.DefaultAgentCommands) {
+	if write.MaxTurns != defaultWriteTurns || !slices.Contains(write.Commands, "npm test") ||
+		!slices.Contains(write.Commands, "npx jest") || !slices.Contains(write.Commands, workspace.DefaultAgentCommands[0]) {
 		t.Errorf("write request = %+v", write)
 	}
 	if read := o.limited(provider.Request{ReadOnly: true}); read.MaxTurns != defaultReadTurns || read.Commands != nil {

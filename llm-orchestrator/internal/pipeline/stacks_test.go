@@ -220,3 +220,52 @@ func TestModelCannotMarkIssuesAsInfrastructure(t *testing.T) {
 		t.Fatalf("verdict = %+v", v)
 	}
 }
+
+// TestFailuresGoToWhoOwnsThem covers the swaps of US-PRC-02: keywords sent the
+// API's Jest suite to the frontend and the store's tests to the backend, and
+// each agent left the item for the other.
+func TestFailuresGoToWhoOwnsThem(t *testing.T) {
+	o, _ := newVerifierTest(t, &fakeExecutor{}, alwaysPasses)
+	o.stages = []Stage{{ID: "frontend", Implementer: true}, {ID: "backend", Implementer: true}}
+	ss := &session{report: &workspace.Report{Stacks: []workspace.Stack{
+		{Dir: "front", Name: "Node.js"}, {Dir: "front", Name: "Angular"},
+		{Dir: "core-api", Name: "Node.js"}, {Dir: "e2e", Name: "Playwright"},
+	}}}
+	plan := Plan{Agents: []string{"frontend", "backend"}, Streams: []Stream{{Agent: "backend", Files: []string{"front/server/"}}}}
+
+	cases := []struct {
+		command  quality.Command
+		failures []quality.Failure
+		want     string
+	}{
+		{quality.Command{Name: "core-api: test:e2e", Run: "cd core-api && npm run test:e2e"}, nil, "backend"},
+		{quality.Command{Name: "front: test", Run: "cd front && npm run test"}, nil, "frontend"},
+		{quality.Command{Name: "front: build", Run: "cd front && npm run build"}, nil, "frontend"},
+		{quality.Command{Name: "e2e: test", Run: "cd e2e && npm run test"}, nil, "frontend"},
+		{quality.Command{Name: "front: test", Run: "cd front && npm run test"}, []quality.Failure{{File: "server/ssr.ts"}}, "backend"},
+	}
+	for _, tc := range cases {
+		if got := o.assignFailure(ss, tc.command, tc.failures, plan); got != tc.want {
+			t.Errorf("%s = %s, want %s", tc.command.Name, got, tc.want)
+		}
+	}
+}
+
+func TestFixRequestQuotesEvidenceLostFromTheTail(t *testing.T) {
+	exec := &fakeExecutor{}
+	o, _ := newVerifierTest(t, exec, func(n int) quality.Result {
+		if n == 1 {
+			return quality.Result{ExitCode: 1, Output: "TOTAL: 1 FAILED", Evidence: "Chrome Foo deve salvar FAILED"}
+		}
+		return quality.Result{Passed: true}
+	})
+
+	if err := o.Start(realStory("Carrinho")); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, o)
+
+	if fix := exec.prompts[3]; !strings.Contains(fix, "Foo deve salvar FAILED") {
+		t.Fatalf("fix prompt lost the test name:\n%s", fix)
+	}
+}
