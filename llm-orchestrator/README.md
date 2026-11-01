@@ -120,7 +120,16 @@ pendente). Veja o [README da raiz](../README.md).
   orquestrador roda os comandos do projeto (detectados em `package.json`, `go.mod`, `pyproject.toml`…
   ou definidos manualmente, com `CI=1` e tempo limite), checa a sintaxe dos JS alterados e dos
   `<script>` inline de HTML (`node --check`), `gofmt` e linhas longas/código minificado. Cada falha
-  volta ao implementador responsável com a saída do comando; até 3 rodadas; depois disso a US segue *Com pendências*.
+  volta ao implementador responsável; depois das rodadas de correção a US segue *Com pendências*.
+- **Correção por causa raiz** — os comandos rodam em camadas (build, unitários, integração, E2E) e param na
+  primeira que falha. Cada falha ganha uma identidade estável: o mesmo erro em dois comandos é uma causa só, e o
+  dono sai do arquivo que falhou, das frentes do plano e da stack do diretório. Falha de teste, ou mais de uma
+  causa, passa antes por um investigador que reproduz, testa hipóteses e entrega um dossiê (causa raiz, evidência,
+  estratégia, teste de regressão), sem poder editar arquivos. O implementador corrige uma causa por vez, com teste
+  que prove. Depois de uma correção rodam só os comandos que falharam e, quando passam, os demais; sem arquivo
+  alterado, nada roda de novo. Cada causa tem até 2 tentativas, a segunda com o modelo pesado. Vira pendência, com
+  o dossiê, se persistir, se o agente responder `blocked` ou se já vinha de uma US anterior sem que esta tenha
+  alterado o arquivo da falha. Testes E2E da especificação só são cobrados com a etapa E2E ligada.
 - **Stacks de teste** — comando que sobe stack (`e2e`, `playwright`, `cypress`, `compose`, `docker`) roda um
   por vez na máquina, mesmo entre janelas do FazTudo. No tempo limite ou ao parar, o grupo de processos recebe
   `SIGINT` e tem 60 s para rodar o teardown antes do `SIGKILL`. Depois, no início e no fim de cada execução, o

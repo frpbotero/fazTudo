@@ -2,11 +2,14 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/stories"
 	"llm-orchestrator/internal/workspace"
 )
@@ -25,9 +28,17 @@ const approved = `{"status": "approved", "issues": []}`
 
 func runFlow(t *testing.T, exec *fakeExecutor) Run {
 	t.Helper()
-	ws, err := workspace.NewManager(t.TempDir())
+	repo := t.TempDir()
+	ws, err := workspace.NewManager(repo)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if exec.onCall == nil {
+		// A fix that changes nothing ends the loop: these agents do their work.
+		var edits atomic.Int32
+		exec.onCall = func(provider.Request) {
+			writeFile(t, repo, fmt.Sprintf("src/edit-%d.txt", edits.Add(1)), "x")
+		}
 	}
 	o := New(exec, ws, flowStages, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := o.Start(StartOptions{Stories: []stories.Story{{ID: "US-1", Title: "US-1", Content: "nova tela de perfil"}}}); err != nil {
@@ -140,7 +151,7 @@ func TestGateTriggersFixesAndVerification(t *testing.T) {
 		}
 	}
 	assigned := fixBackend[strings.Index(fixBackend, "## Correções obrigatórias"):]
-	if strings.Contains(assigned, "botão sem label") || strings.Contains(fixBackend, `"status"`) {
+	if strings.Contains(assigned, "botão sem label") || strings.Contains(fixBackend, "changes_requested") {
 		t.Error("backend must only be assigned its own issues, without the raw verdict JSON")
 	}
 	verify := exec.prompts[len(exec.prompts)-1]

@@ -41,6 +41,9 @@ type Stage struct {
 	// planners and reviewers are kept from editing by the toolset, not only
 	// by the prompt.
 	ReadOnly bool
+	// Diagnose stages stay unable to edit files but may run the listed shell
+	// commands, to reproduce a failure.
+	Diagnose bool
 	// Lenses split the stage into parallel reviews, each with its own focus;
 	// their verdicts are merged.
 	Lenses []Lens
@@ -584,8 +587,17 @@ func writeIssues(b *strings.Builder, issues []Issue) {
 	}
 }
 
+// fixTask is how a fix is done, whatever the failure.
+const fixTask = "Trabalhe uma causa por vez, na ordem listada:\n" +
+	"1. Reproduza a falha com o menor comando possível.\n" +
+	"2. Bug sem teste que o prove: escreva o teste que falha.\n" +
+	"3. Corrija a causa raiz com a menor mudança. Não mexa em comportamento não relacionado.\n" +
+	"4. Prove: rode o teste e veja passar.\n" +
+	"Proibido silenciar teste, suprimir erro ou repetir abordagem já refutada. Mude teste só se contrariar a especificação, com motivo. " +
+	"Ninguém responde perguntas: sem saída, responda blocked."
+
 // buildFixPrompt asks an implementer to fix what a gate reported.
-func buildFixPrompt(stage, gate Stage, sc storyContext, discovery *workspace.Report, plan string, report string, issues []Issue, round int) string {
+func buildFixPrompt(stage, gate Stage, sc storyContext, discovery *workspace.Report, plan, report, brief string, issues []Issue, round int) string {
 	var b strings.Builder
 	writeContext(&b, sc, discovery)
 	if plan != "" {
@@ -595,10 +607,13 @@ func buildFixPrompt(stage, gate Stage, sc storyContext, discovery *workspace.Rep
 		fmt.Fprintf(&b, "## Relatório de %s (rodada %d)\n\n%s\n\n", gate.Title, round, clip(report, maxArtifactBytes))
 	}
 	writeSkills(&b, fixSkills)
+	if brief != "" {
+		b.WriteString(brief)
+	}
 	b.WriteString("## Correções obrigatórias atribuídas a você\n\n")
 	writeIssues(&b, issues)
-	b.WriteString("\n## Sua tarefa\n\nCorrija só os itens acima. Não mexa em comportamento não relacionado. " +
-		"Itens de outros agentes no relatório: ignore. Rode os testes afetados. Termine com uma linha por item: o que mudou.")
+	fmt.Fprintf(&b, "\nCausas: %s.\n\n## Sua tarefa\n\n%s", causeIDs(issues), fixTask)
+	b.WriteString(fixInstructions)
 	return b.String()
 }
 

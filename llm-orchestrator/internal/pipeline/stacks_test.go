@@ -208,7 +208,7 @@ func TestTimedOutCheckStaysOutOfTheFixRequest(t *testing.T) {
 	}
 	waitDone(t, o)
 
-	fix := exec.prompts[3] // discovery, spec, frontend, fix
+	fix := lastPromptOf(exec, "fe")
 	if !strings.Contains(fix, "FAIL cart.test.mjs") || strings.Contains(fix, "build em andamento") {
 		t.Fatalf("fix prompt must carry only the code failure:\n%s", fix)
 	}
@@ -265,7 +265,7 @@ func TestFixRequestQuotesEvidenceLostFromTheTail(t *testing.T) {
 	}
 	waitDone(t, o)
 
-	if fix := exec.prompts[3]; !strings.Contains(fix, "Foo deve salvar FAILED") {
+	if fix := lastPromptOf(exec, "fe"); !strings.Contains(fix, "Foo deve salvar FAILED") {
 		t.Fatalf("fix prompt lost the test name:\n%s", fix)
 	}
 }

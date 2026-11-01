@@ -54,6 +54,7 @@ func renderPendencies(run Run) string {
 		for _, s := range st.Steps {
 			addStep("", s)
 		}
+		count += writePendingCauses(&b, st.Causes)
 		if reason := notDelivered(st); reason != "" {
 			if b.Len() == header {
 				count++
@@ -80,6 +81,41 @@ func renderPendencies(run Run) string {
 	}
 	fmt.Fprintf(&head, " · %d item(ns) não resolvido(s)\n", count)
 	return head.String() + b.String()
+}
+
+// causeLabels name what kept a cause open, for whoever picks it up.
+var causeLabels = map[string]string{
+	causePending:    "persistiu após as tentativas",
+	causeBlocked:    "bloqueada",
+	causeInherited:  "herdada de US anterior",
+	causeInfra:      "infraestrutura",
+	causeUnverified: "não reverificada",
+}
+
+// writePendingCauses hands over what the investigation learned, so nobody
+// starts the diagnosis again. It returns how many causes it listed.
+func writePendingCauses(b *bytes.Buffer, causes []Cause) int {
+	count := 0
+	for _, c := range causes {
+		label, pending := causeLabels[c.Status]
+		if !pending {
+			continue
+		}
+		if count == 0 {
+			b.WriteString("\n### Causas\n")
+		}
+		count++
+		fmt.Fprintf(b, "\n- **%s** (%s, `%s`)\n", c.Title, label, c.Fingerprint)
+		for _, field := range []struct{ name, value string }{
+			{"Causa raiz", c.RootCause}, {"Evidência", c.Evidence}, {"Estratégia", strings.Join(c.Strategy, "; ")},
+			{"Teste de regressão", c.Regression}, {"Motivo", c.Reason},
+		} {
+			if field.value != "" {
+				fmt.Fprintf(b, "  - %s: %s\n", field.name, field.value)
+			}
+		}
+	}
+	return count
 }
 
 // notDelivered explains why a story was left undelivered: blocked in Passo 0,

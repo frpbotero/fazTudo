@@ -171,6 +171,16 @@ func fingerprint(f Failure) string {
 	return hex.EncodeToString(sum[:4])
 }
 
+// TextFingerprint identifies a problem known only by its text, such as a
+// reviewer's issue.
+func TextFingerprint(parts ...string) string {
+	for i, part := range parts {
+		parts[i] = normalizeMessage(part)
+	}
+	sum := sha1.Sum([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:4])
+}
+
 func normalizeMessage(s string) string {
 	s = reDigits.ReplaceAllString(strings.ToLower(s), "#")
 	return strings.TrimSpace(reSpaces.ReplaceAllString(s, " "))

@@ -144,8 +144,11 @@ func TestRepairCommandsLetAgentsReproduceAFailure(t *testing.T) {
 			t.Errorf("missing %q in %v", want, got)
 		}
 	}
-	if !strings.Contains(strings.Join(got, "\n"), "cd e2e") {
-		t.Error("the e2e directory stays reachable for narrow runs")
+	if slices.Contains(got, "cd e2e && npm run test") || slices.Contains(got, "cd e2e && CI=1 npm run test") {
+		t.Errorf("the full E2E run is the orchestrator's: %v", got)
+	}
+	if !slices.Contains(got, "cd e2e && npx jest") {
+		t.Errorf("narrow runs stay reachable: %v", got)
 	}
 }
 

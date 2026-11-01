@@ -67,7 +67,7 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 	}
 	started := time.Now()
 	o.updateStep(ref, func(s *Step) { s.Status = StepRunning; s.StartedAt = &started })
-	a, ok := o.assess(ctx, ss, st, ss.repo, o.changedFiles(ss, st.started))
+	a, ok := o.reassess(ctx, ss, st)
 	if !ok {
 		o.cancelStep(ref, time.Since(started))
 		return nil, false
@@ -76,7 +76,7 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 		st.verifiedAt = time.Now()
 		return nil, true
 	}
-	report := verifierReport(a.results, a.findings, a.traces)
+	report := verifierReport(a)
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
 		s.Checks = a.results
@@ -105,7 +105,7 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 		return evaluation{simulated: true}, true
 	}
 
-	a, ok := o.assess(ctx, ss, st, ss.repo, o.changedFiles(ss, st.started))
+	a, ok := o.reassess(ctx, ss, st)
 	if !ok {
 		o.cancelStep(ref, time.Since(started))
 		return evaluation{}, false
@@ -119,7 +119,7 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 	if len(issues) > 0 {
 		verdict = Verdict{Status: VerdictChangesRequested, Issues: issues}
 	}
-	report := verifierReport(results, findings, traces)
+	report := verifierReport(a)
 	elapsed := time.Since(started)
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
@@ -137,16 +137,83 @@ type assessment struct {
 	findings []quality.Finding
 	traces   []quality.Trace
 	issues   []Issue
+	skipped  []string // commands left out because a cheaper layer failed
 }
 
 func (a assessment) passed() bool { return len(a.issues) == 0 }
 
-// assess runs the project commands in dir, the static checks on the changed
-// files and the test traceability. It returns false when ctx was canceled.
+// failedCommands lists what failed for a reason a retry can change: a command
+// out of time would only spend its whole limit again.
+func (a assessment) failedCommands() []string {
+	var names []string
+	for _, r := range a.results {
+		if !r.Passed && !r.TimedOut {
+			names = append(names, r.Name)
+		}
+	}
+	return names
+}
+
+// assess runs all the project commands in dir, the static checks on the
+// changed files and the test traceability. It returns false when ctx was
+// canceled.
 func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, dir string, changed []string) (assessment, bool) {
+	return o.assessChecks(ctx, ss, st, dir, changed, ss.checks)
+}
+
+// reassess proves a fix cheaply: first the commands that failed; only when
+// they pass, the others. A fix usually touches one failure, and the costliest
+// commands need to run just once, at the end.
+func (o *Orchestrator) reassess(ctx context.Context, ss *session, st *storyState) (assessment, bool) {
+	changed := o.changedFiles(ss, st.started)
+	failed := func(c quality.Command) bool { return slices.Contains(st.red, c.Name) }
+	red := slices.DeleteFunc(slices.Clone(ss.checks), func(c quality.Command) bool { return !failed(c) })
+	if len(red) == 0 {
+		a, ok := o.assess(ctx, ss, st, ss.repo, changed)
+		st.note(a)
+		return a, ok
+	}
+	first, ok := o.assessChecks(ctx, ss, st, ss.repo, changed, red)
+	if !ok || len(first.failedCommands()) > 0 {
+		st.note(first)
+		first.skipped = append(first.skipped, otherNames(ss.checks, red)...)
+		st.skipped = true
+		return first, ok
+	}
+	rest := slices.DeleteFunc(slices.Clone(ss.checks), failed)
+	a, ok := o.assessChecks(ctx, ss, st, ss.repo, changed, rest)
+	a.results = append(first.results, a.results...)
+	st.note(a)
+	return a, ok
+}
+
+func otherNames(checks, excluded []quality.Command) []string {
+	var names []string
+	for _, c := range checks {
+		if !slices.Contains(excluded, c) {
+			names = append(names, c.Name)
+		}
+	}
+	return names
+}
+
+// note remembers what the next round needs to run again.
+func (st *storyState) note(a assessment) {
+	st.red = a.failedCommands()
+	st.skipped = len(a.skipped) > 0
+}
+
+// assessChecks runs checks from the cheapest layer and stops at the first
+// layer that fails: tests of code that does not compile only repeat the error.
+func (o *Orchestrator) assessChecks(ctx context.Context, ss *session, st *storyState, dir string, changed []string, checks []quality.Command) (assessment, bool) {
 	var a assessment
 	timeout := time.Duration(ss.policy.CheckTimeoutS) * time.Second
-	for _, c := range ss.checks {
+	failedLayer := -1
+	for _, c := range quality.InLayers(checks) {
+		if failedLayer >= 0 && quality.Layer(c) > failedLayer {
+			a.skipped = append(a.skipped, c.Name)
+			continue
+		}
 		o.logf(LevelInfo, "Executando %s: %s", c.Name, c.Run)
 		r := o.runGated(ctx, ss, dir, c, timeout)
 		if ctx.Err() != nil {
@@ -157,14 +224,9 @@ func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, 
 			o.logf(LevelSuccess, "%s passou em %s.", c.Name, time.Duration(r.DurationMS)*time.Millisecond)
 			continue
 		}
+		failedLayer = quality.Layer(c)
 		o.logf(LevelWarn, "%s falhou (%s).", c.Name, exitLabel(r))
-		a.issues = append(a.issues, Issue{
-			Agent:       o.assignFailure(ss, c, r.Failures, st.plan),
-			Severity:    "alta",
-			Description: commandIssue(c, r),
-			Location:    c.Name,
-			Infra:       r.TimedOut,
-		})
+		a.addFailure(o.commandFailure(ss, st, c, r))
 	}
 
 	a.findings = append(a.findings, quality.Syntax(ctx, dir, changed)...)
@@ -184,8 +246,60 @@ func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, 
 	}
 
 	a.traces = quality.TraceTests(dir, st.reqs)
-	a.issues = append(a.issues, o.traceIssues(a.traces, st.plan)...)
+	a.issues = append(a.issues, o.traceIssues(ss, a.traces, st.plan)...)
 	return a, true
+}
+
+// addFailure keeps one issue per cause: a command that only repeats failures
+// another already reported adds nothing but a second owner for them.
+func (a *assessment) addFailure(is Issue) {
+	reported := func(f string) bool {
+		return slices.ContainsFunc(a.issues, func(other Issue) bool { return slices.Contains(other.Fingerprints, f) })
+	}
+	if len(is.Fingerprints) > 0 && !slices.ContainsFunc(is.Fingerprints, func(f string) bool { return !reported(f) }) {
+		return
+	}
+	a.issues = append(a.issues, is)
+}
+
+// commandFailure turns a failed command into an issue, with what identifies
+// the failures behind it.
+func (o *Orchestrator) commandFailure(ss *session, st *storyState, c quality.Command, r quality.Result) Issue {
+	is := Issue{Severity: "alta", Description: commandIssue(c, r), Location: c.Name, Infra: r.TimedOut}
+	if r.TimedOut {
+		is.Agent = o.assignCommand(c, st.plan)
+		is.Fingerprints = []string{quality.TextFingerprint("timeout", c.Name)}
+		return is
+	}
+	failures := r.Failures
+	if len(failures) == 0 {
+		failures = quality.ParseFailures(c, failureText(r))
+	}
+	is.Agent = o.assignFailure(ss, c, failures, st.plan)
+	is.Fingerprints = quality.Fingerprints(failures)
+	is.Class = classBuild
+	for _, f := range failures {
+		if !f.Compile {
+			is.Class = classTest
+		}
+		is.Titles = append(is.Titles, failureTitle(f))
+		if f.File != "" {
+			is.Files = append(is.Files, path.Join(f.Dir, f.File))
+		}
+	}
+	return is
+}
+
+func failureTitle(f quality.Failure) string {
+	switch {
+	case f.Test != "" && f.Message != "":
+		return f.Test + ": " + f.Message
+	case f.Test != "":
+		return f.Test
+	case f.File != "":
+		return fmt.Sprintf("%s:%d %s", f.File, f.Line, f.Message)
+	}
+	return f.Message
 }
 
 // runGated runs c, giving a command that starts a stack the machine's single
@@ -324,9 +438,9 @@ func (o *Orchestrator) assignCommand(c quality.Command, plan Plan) string {
 
 func (o *Orchestrator) assignKind(kind string, plan Plan) string {
 	switch kind {
-	case "e2e", "integration":
+	case "e2e":
 		return o.prefer("frontend", plan)
-	case "unit":
+	case "unit", "integration":
 		return o.prefer("backend", plan)
 	}
 	return defaultImplementer(o.stages, plan)
@@ -334,11 +448,12 @@ func (o *Orchestrator) assignKind(kind string, plan Plan) string {
 
 // traceIssues turns required tests missing from the repository into one
 // issue per responsible implementer.
-func (o *Orchestrator) traceIssues(traces []quality.Trace, plan Plan) []Issue {
+func (o *Orchestrator) traceIssues(ss *session, traces []quality.Trace, plan Plan) []Issue {
 	missing := map[string][]string{}
 	var order []string
 	for _, t := range traces {
-		if t.Found() {
+		// With the E2E stage off, nobody in this flow writes those tests.
+		if t.Found() || (t.Kind == "e2e" && ss.policy.StageDisabled("e2e")) {
 			continue
 		}
 		agent := o.assignKind(t.Kind, plan)
@@ -360,6 +475,10 @@ func (o *Orchestrator) traceIssues(traces []quality.Trace, plan Plan) []Issue {
 			Description: fmt.Sprintf("%d caso(s) de teste da especificação sem teste no repositório. "+
 				"Escreva-os com o ID no nome: %s", len(ids), strings.Join(ids, "; ")),
 			Location: "rastreabilidade",
+			Class:    classMissingTest,
+			// The list shrinks as tests appear: it is still the same task.
+			Fingerprints: []string{quality.TextFingerprint("rastreabilidade", agent)},
+			Titles:       []string{"Testes da especificação sem implementação"},
 		})
 	}
 	return issues
@@ -409,7 +528,8 @@ func findingLocation(f quality.Finding) string {
 
 // verifierReport is the Markdown summary shown in the step and sent to the
 // implementers in fix rounds.
-func verifierReport(results []quality.Result, findings []quality.Finding, traces []quality.Trace) string {
+func verifierReport(a assessment) string {
+	results, findings, traces := a.results, a.findings, a.traces
 	var b strings.Builder
 	b.WriteString("## Comandos do projeto\n\n")
 	if len(results) == 0 {
@@ -424,6 +544,10 @@ func verifierReport(results []quality.Result, findings []quality.Finding, traces
 		if !r.Passed && r.Output != "" {
 			fmt.Fprintf(&b, "\n```\n%s\n```\n\n", tail(r.Output, maxIssueOutput))
 		}
+	}
+
+	if len(a.skipped) > 0 {
+		fmt.Fprintf(&b, "\nNão executados nesta rodada, até o que falhou passar: %s.\n", strings.Join(a.skipped, ", "))
 	}
 
 	b.WriteString("\n## Checagens estáticas dos arquivos alterados\n\n")

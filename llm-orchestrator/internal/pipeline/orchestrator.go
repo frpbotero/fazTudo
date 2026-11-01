@@ -90,7 +90,7 @@ type Step struct {
 	Effort   string        `json:"effort,omitempty"`
 	Output   string        `json:"output,omitempty"`
 	Note     string        `json:"note,omitempty"`
-	Kind     string        `json:"kind,omitempty"`  // "" (stage), "fix", "verify" or "stream"
+	Kind     string        `json:"kind,omitempty"`  // "" (stage), "fix", "verify", "investigate" or "stream"
 	Agent    string        `json:"agent,omitempty"` // implementer running a stream
 	Round    int           `json:"round,omitempty"` // fix/verification round
 	Gate     string        `json:"gate,omitempty"`  // gate that requested a fix
@@ -129,7 +129,9 @@ type StoryRun struct {
 	DependsOn []string `json:"depends_on,omitempty"`
 	// Trace links the tests the specification requires to the test files.
 	Trace []quality.Trace `json:"trace,omitempty"`
-	Steps []Step          `json:"steps"`
+	// Causes are the problems found, followed across fix rounds.
+	Causes []Cause `json:"causes,omitempty"`
+	Steps  []Step  `json:"steps"`
 }
 
 // Run describes the current or last pipeline execution: a shared discovery
@@ -562,6 +564,11 @@ type storyState struct {
 	verifiedAt time.Time // when a verifier last approved the repository
 	blocked    string    // Passo 0 reason when the story cannot be developed yet
 	pending    int       // issues a gate could not get fixed within its rounds
+	red        []string  // commands that failed last, retried first
+	skipped    bool      // the last assessment left costlier commands out
+	// lastFailures and stalls track whether a fix loop is getting anywhere.
+	lastFailures int
+	stalls       int
 }
 
 func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptions) {
@@ -1135,6 +1142,7 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 	if gate.Verifier {
 		rounds = maxVerifierRounds
 	}
+	st.lastFailures, st.stalls = 0, 0
 	for round := 1; ; round++ {
 		if !ev.parsed {
 			if !ev.simulated {
@@ -1152,22 +1160,38 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 			}
 		})
 		if !verdict.NeedsChanges() {
+			o.closeCauses(st, nil)
 			if round > 1 {
 				o.logf(LevelSuccess, "%s aprovou as correções.", gate.Title)
 			}
 			return true
 		}
 
-		if round > rounds {
-			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d problema(s) persistem após %d rodadas de correção", len(verdict.Issues), rounds))
+		fixable := o.triage(ss, st, verdict.Issues)
+		settle := func(msg string) bool {
+			o.closeCauses(st, verdict.Issues)
+			return o.settleGate(st, stepID, gate, verdict.Issues, msg)
 		}
-		fixable := slices.DeleteFunc(slices.Clone(verdict.Issues), func(is Issue) bool { return is.Infra })
+		switch {
+		case round > rounds:
+			return settle(fmt.Sprintf("%d problema(s) persistem após %d rodadas de correção", len(verdict.Issues), rounds))
+		case len(fixable) == 0:
+			return settle(o.settleNote(st, verdict.Issues))
+		case st.stalled(countCauses(verdict.Issues)):
+			return settle(fmt.Sprintf("%d problema(s) sem redução há %d rodadas", len(verdict.Issues), maxStalledRounds))
+		}
+		fixable, afterID, alive := o.investigate(ctx, ss, st, gate, stepID, fixable, round)
+		if !alive {
+			return false
+		}
 		if len(fixable) == 0 {
-			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d comando(s) excederam o tempo limite", len(verdict.Issues)))
+			return settle(o.settleNote(st, verdict.Issues))
 		}
-		fixes := o.scheduleFixes(st.si, gate, stepID, fixable, round)
+		tier := o.repairTier(st, fixable)
+		o.countAttempts(st, fixable)
+		fixes := o.scheduleFixes(st.si, gate, afterID, fixable, round)
 		if len(fixes) == 0 {
-			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d problema(s) sem implementador para corrigi-los", len(verdict.Issues)))
+			return settle(fmt.Sprintf("%d problema(s) sem implementador para corrigi-los", len(verdict.Issues)))
 		}
 		verifyID := fmt.Sprintf("%s-verify-%d", gate.ID, round+1)
 		o.insertSteps(st.si, fixes[len(fixes)-1].step.ID, Step{
@@ -1175,25 +1199,31 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 			Status: StepPending, Kind: "verify", Round: round + 1,
 		})
 
+		fixesStarted := time.Now()
 		var done []Step
 		for _, f := range fixes {
 			ref := stepRef{st.si, f.step.ID}
 			fixResp, ok := o.runStage(ctx, ref, provider.Request{
 				Role:    f.stage.Role,
 				System:  f.stage.System,
-				Prompt:  buildFixPrompt(f.stage, gate, st.sc, ss.report, st.planText, ev.report, f.step.Issues, round),
-				Tier:    f.stage.Tier,
+				Prompt:  buildFixPrompt(f.stage, gate, st.sc, ss.report, st.planText, ev.report, repairBrief(f.step.Issues, o.causes(st.si)), f.step.Issues, round),
+				Tier:    fixTier(f.stage, tier),
 				WorkDir: ss.repo,
 			})
 			if !ok || !o.afterAgent(ctx, ss, st, ref) {
 				return false
 			}
+			o.recordFix(st, f.step.Issues, fixResp.Output)
 			f.step.Output = fixResp.Output
 			done = append(done, f.step)
 			o.logf(LevelSuccess, "%s concluída via %s.", f.step.Title, fixResp.Name)
 		}
 
-		var alive bool
+		if !ss.dry && len(o.changedFiles(ss, fixesStarted)) == 0 {
+			o.updateStep(stepRef{st.si, verifyID}, func(s *Step) { s.Note = "Sem alterações desde a última verificação" })
+			stepID = verifyID
+			return settle("as correções não alteraram nenhum arquivo")
+		}
 		if ev, alive = recheck(ctx, stepRef{st.si, verifyID}, verdict.Issues, done, round+1); !alive {
 			return false
 		}
@@ -1212,6 +1242,14 @@ func (o *Orchestrator) settleGate(st *storyState, stepID string, gate Stage, iss
 	st.pending += len(issues)
 	o.logf(LevelWarn, "%s: %s. Seguindo com as pendências registradas.", gate.Title, msg)
 	return true
+}
+
+// fixTier raises a fix to the heavy model for a cause's second attempt.
+func fixTier(stage Stage, tier provider.Tier) provider.Tier {
+	if tier == provider.TierHeavy {
+		return tier
+	}
+	return stage.Tier
 }
 
 type scheduledFix struct {

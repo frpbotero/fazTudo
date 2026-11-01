@@ -41,6 +41,10 @@ func RepairCommands(checks []Command) []string {
 			add("cd " + dir)
 		}
 		for _, tool := range runnerTools(c) {
+			// The same words would hand the full stack run back to the agent.
+			if Heavy(c) && strings.HasSuffix(c.Run, tool) {
+				continue
+			}
 			add(tool, "CI=1 "+tool)
 			if dir != "" {
 				add("cd "+dir+" && "+tool, "cd "+dir+" && CI=1 "+tool)
@@ -60,4 +64,28 @@ func runnerTools(c Command) []string {
 		return pythonTools
 	}
 	return nil
+}
+
+// Layer ranks a command by how much it costs to run: compilers and linters,
+// unit tests, integration tests, then anything that starts a stack. A failure
+// makes the costlier layers pointless, since they would only repeat it.
+func Layer(c Command) int {
+	text := strings.ToLower(c.Name + " " + c.Run)
+	switch {
+	case Heavy(c):
+		return 3
+	case strings.Contains(text, "integration"):
+		return 2
+	case strings.Contains(text, "test") || strings.Contains(text, "spec"):
+		return 1
+	}
+	return 0
+}
+
+// InLayers orders commands from the cheapest layer, keeping the given order
+// within each one.
+func InLayers(checks []Command) []Command {
+	ordered := slices.Clone(checks)
+	slices.SortStableFunc(ordered, func(a, b Command) int { return Layer(a) - Layer(b) })
+	return ordered
 }

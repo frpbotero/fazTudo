@@ -115,7 +115,7 @@ func TestBestOfNTieIsBrokenBySelector(t *testing.T) {
 }
 
 func TestBestOfNWithoutChangesIsNotAFailure(t *testing.T) {
-	exec := &fakeExecutor{}
+	exec := &fakeExecutor{onCall: func(provider.Request) {}}
 	o, _ := newCandidateTest(t, exec)
 	_ = o.Start(realStory("já implementado"))
 	run := waitDone(t, o)

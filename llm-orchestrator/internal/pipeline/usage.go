@@ -53,6 +53,9 @@ func (o *Orchestrator) limited(req provider.Request) provider.Request {
 	o.mu.RUnlock()
 	if req.ReadOnly {
 		req.MaxTurns = l.readTurns
+		if req.Diagnose {
+			req.Commands = l.commands
+		}
 		return req
 	}
 	req.MaxTurns, req.Commands = l.writeTurns, l.commands
