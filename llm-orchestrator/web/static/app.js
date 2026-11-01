@@ -61,7 +61,7 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qualityError: $('qualityError'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'), qualityError: $('qualityError'),
     branches: $('branches'), branchesRefreshBtn: $('branchesRefreshBtn'),
     diffDialog: $('diffDialog'), diffTitle: $('diffTitle'), diffMeta: $('diffMeta'), diffBody: $('diffBody'),
     toasts: $('toasts'),
@@ -563,6 +563,7 @@ Critérios de aceitação:
         <dt>Candidatos</dt><dd>${p.candidates > 1 ? `best-of-${esc(p.candidates)}` : '1 por implementação'}</dd>
         <dt>Turnos</dt><dd>${p.max_turns ? `até ${esc(p.max_turns)} por chamada` : 'padrão (60 / 30)'}${p.stop_on_turn_limit ? '; para ao esgotar' : ''}</dd>
         <dt>Shell liberado</dt><dd class="wrap">${(p.agent_commands || []).map((x) => `<code>${esc(x)}</code>`).join(' ') || '<span class="note">só verificação e git de leitura</span>'}</dd>
+        <dt>Stacks de teste</dt><dd class="wrap">${(p.ephemeral_stacks || []).map((x) => `<code>${esc(x)}</code>`).join(' ') || '<span class="note">limpeza desligada</span>'}</dd>
       </dl>`;
   }
 
@@ -592,6 +593,7 @@ Critérios de aceitação:
     el.qMaxTurns.value = p.max_turns || '';
     el.qStopOnTurnLimit.checked = !!p.stop_on_turn_limit;
     el.qAgentCommands.value = (p.agent_commands || []).join('\n');
+    el.qEphemeralStacks.value = (p.ephemeral_stacks || []).join('\n');
     el.qFlow.value = p.flow || 'full';
     const off = p.disabled_stages || [];
     stageBoxes().forEach((b) => { b.checked = !off.includes(b.dataset.stage); });
@@ -624,6 +626,7 @@ Critérios de aceitação:
       max_turns: Number(el.qMaxTurns.value) || 0,
       stop_on_turn_limit: el.qStopOnTurnLimit.checked,
       agent_commands: el.qAgentCommands.value.split('\n').map((l) => l.trim()).filter(Boolean),
+      ephemeral_stacks: el.qEphemeralStacks.value.split('\n').map((l) => l.trim()).filter(Boolean),
       base_branches: snapshot?.workspace?.policy?.base_branches,
     };
     try {

@@ -22,6 +22,13 @@ const (
 	maxIssueLines  = 50
 )
 
+// maxTimeoutOutput is how much of a command cut by its time limit the report
+// quotes: enough to show which phase it was in.
+const maxTimeoutOutput = 600
+
+// sweepTimeout bounds one cleanup of disposable stacks.
+const sweepTimeout = 90 * time.Second
+
 // runVerifier executes a deterministic gate and its fix rounds. A verifier
 // whose repository did not change since the last approval is skipped.
 func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storyState, stage Stage) bool {
@@ -139,7 +146,7 @@ func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, 
 	timeout := time.Duration(ss.policy.CheckTimeoutS) * time.Second
 	for _, c := range ss.checks {
 		o.logf(LevelInfo, "Executando %s: %s", c.Name, c.Run)
-		r := o.runCheck(ctx, dir, c, timeout)
+		r := o.runGated(ctx, ss, dir, c, timeout)
 		if ctx.Err() != nil {
 			return a, false
 		}
@@ -154,6 +161,7 @@ func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, 
 			Severity:    "alta",
 			Description: commandIssue(c, r),
 			Location:    c.Name,
+			Infra:       r.TimedOut,
 		})
 	}
 
@@ -176,6 +184,54 @@ func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, 
 	a.traces = quality.TraceTests(dir, st.reqs)
 	a.issues = append(a.issues, o.traceIssues(a.traces, st.plan)...)
 	return a, true
+}
+
+// runGated runs c, giving a command that starts a stack the machine's single
+// slot. Holding it, every disposable stack of the repository is garbage, so
+// one more sweep costs nothing and caps what agents and killed runs left.
+// Stories running side by side may each have an agent using a stack, so there
+// only the run's ends sweep.
+func (o *Orchestrator) runGated(ctx context.Context, ss *session, dir string, c quality.Command, timeout time.Duration) quality.Result {
+	if !quality.Heavy(c) {
+		return o.runCheck(ctx, dir, c, timeout)
+	}
+	release, err := o.lockStackSlot(ctx, func() { o.logf(LevelInfo, "Aguardando vaga para E2E: %s.", c.Name) })
+	switch {
+	case err == nil:
+		defer release()
+	case ctx.Err() != nil:
+		return quality.Result{Name: c.Name, Command: c.Run, ExitCode: -1, Output: err.Error()}
+	default:
+		o.logf(LevelWarn, "Vaga de E2E indisponível (%v); seguindo sem o limite.", err)
+	}
+	if ss.policy.Sequential {
+		roots := []string{ss.repo, dir}
+		o.sweepLeftovers(roots, ss.policy.EphemeralStacks)
+		defer o.sweepLeftovers(roots, ss.policy.EphemeralStacks)
+	}
+	return o.runCheck(ctx, dir, c, timeout)
+}
+
+// sweepRun removes the stacks an earlier run or an agent left behind in repo.
+// The repository lock guarantees no other run is using them.
+func (o *Orchestrator) sweepRun(repo string, dry bool) {
+	if !dry {
+		o.sweepLeftovers([]string{repo}, o.ws.Policy().EphemeralStacks)
+	}
+}
+
+// sweepLeftovers never fails a run: the context is its own, since the run's
+// may already be canceled, and a stack that survives is only reported.
+func (o *Orchestrator) sweepLeftovers(roots, patterns []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), sweepTimeout)
+	defer cancel()
+	removed, err := o.sweepStacks(ctx, roots, patterns)
+	if len(removed) > 0 {
+		o.logf(LevelInfo, "Stacks de teste removidas: %s.", strings.Join(removed, ", "))
+	}
+	if err != nil {
+		o.logf(LevelWarn, "Limpeza de stacks de teste: %v.", err)
+	}
 }
 
 // changedFiles lists files modified since t, excluding protected inputs.
@@ -259,6 +315,11 @@ func (o *Orchestrator) traceIssues(traces []quality.Trace, plan Plan) []Issue {
 }
 
 func commandIssue(c quality.Command, r quality.Result) string {
+	if r.TimedOut {
+		return fmt.Sprintf("`%s` (%s) excedeu o tempo limite depois de %s, sem concluir. Não indica erro no código: "+
+			"aumente o tempo limite em Portões de qualidade. Última saída:\n```\n%s\n```",
+			c.Run, c.Name, (time.Duration(r.DurationMS) * time.Millisecond).Round(time.Second), tail(r.Output, maxTimeoutOutput))
+	}
 	return fmt.Sprintf("`%s` (%s) %s. Corrija o código até passar. Mude teste só se contrariar a especificação, com motivo. "+
 		"Falhas:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(quality.FailureSummary(r.Output, maxIssueLines), maxIssueOutput))
 }

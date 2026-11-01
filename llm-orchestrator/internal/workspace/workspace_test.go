@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -162,6 +163,29 @@ func TestPolicyBaseBranches(t *testing.T) {
 	p.BaseBranches = map[string]string{"api": ""}
 	if p = p.Normalize(); p.BaseBranches != nil {
 		t.Errorf("empty choices must clear the map: %v", p.BaseBranches)
+	}
+}
+
+func TestPolicyEphemeralStacks(t *testing.T) {
+	if got := (Policy{}).Normalize().EphemeralStacks; !slices.Equal(got, DefaultEphemeralStacks) {
+		t.Errorf("saved policies get the default, got %v", got)
+	}
+	off := Policy{EphemeralStacks: []string{}}.Normalize().EphemeralStacks
+	if off == nil || len(off) != 0 {
+		t.Errorf("an empty list turns the cleanup off, got %#v", off)
+	}
+	trimmed := Policy{EphemeralStacks: []string{" a-e2e-* ", "a-e2e-*", ""}}.Normalize().EphemeralStacks
+	if !slices.Equal(trimmed, []string{"a-e2e-*"}) {
+		t.Errorf("trimmed = %v", trimmed)
+	}
+
+	m, _ := NewManager(t.TempDir())
+	for _, pattern := range []string{"[", "*", "**", "?"} {
+		p := m.Policy()
+		p.EphemeralStacks = []string{pattern}
+		if _, err := m.SetPolicy(p); err == nil {
+			t.Errorf("pattern %q must be refused", pattern)
+		}
 	}
 }
 

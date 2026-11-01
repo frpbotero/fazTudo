@@ -433,6 +433,11 @@
           <textarea id="qAgentCommands" rows="3" spellcheck="false" placeholder="npx playwright test&#10;npm install"></textarea>
           <p class="note">Prefixos, um por linha, além dos comandos de verificação, de <code>graphify</code> e do git de leitura. Qualquer outro comando de shell é negado.</p>
         </div>
+        <div class="field">
+          <label for="qEphemeralStacks">Stacks de teste descartáveis</label>
+          <textarea id="qEphemeralStacks" rows="2" spellcheck="false" placeholder="*-e2e-*"></textarea>
+          <p class="note">Padrões de nome, um por linha, dos projetos do Docker Compose criados pelos testes deste repositório. O FazTudo remove, com os volumes, os que casam com o padrão e têm o arquivo compose dentro do repositório. Deixe vazio para desligar a limpeza.</p>
+        </div>
       </fieldset>
 
       <label class="check"><input type="checkbox" id="qGit"> Versionar com git: uma branch por US e um commit por etapa (repositórios sem git são inicializados)</label>

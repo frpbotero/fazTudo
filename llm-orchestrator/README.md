@@ -121,6 +121,12 @@ pendente). Veja o [README da raiz](../README.md).
   ou definidos manualmente, com `CI=1` e tempo limite), checa a sintaxe dos JS alterados e dos
   `<script>` inline de HTML (`node --check`), `gofmt` e linhas longas/código minificado. Cada falha
   volta ao implementador responsável com a saída do comando; até 3 rodadas; depois disso a US segue *Com pendências*.
+- **Stacks de teste** — comando que sobe stack (`e2e`, `playwright`, `cypress`, `compose`, `docker`) roda um
+  por vez na máquina, mesmo entre janelas do FazTudo. No tempo limite ou ao parar, o grupo de processos recebe
+  `SIGINT` e tem 60 s para rodar o teardown antes do `SIGKILL`. Depois, no início e no fim de cada execução, o
+  FazTudo remove os projetos do Docker Compose cujo nome casa com **Stacks de teste descartáveis** (padrão
+  `*-e2e-*`) e cujo arquivo compose está no repositório. Comando que estoura o tempo limite vira pendência, sem
+  rodada de correção: não indica erro no código.
 - **Resiliência** — cada chamada de agente tem tempo limite (60 min); o processo e os filhos (ex.: um
   `ng serve` esquecido) são encerrados juntos. Chamada que falha ou expira é refeita até 3 vezes, com
   espera crescente e aviso para o agente retomar de onde parou.

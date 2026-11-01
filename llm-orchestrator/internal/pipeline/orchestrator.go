@@ -199,6 +199,9 @@ type Orchestrator struct {
 	onChange func()
 	logger   *slog.Logger
 	runCheck func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
+	// sweepStacks and lockStackSlot keep disposable test stacks in check.
+	sweepStacks   func(ctx context.Context, roots, patterns []string) ([]string, error)
+	lockStackSlot func(ctx context.Context, onWait func()) (func(), error)
 	// attempts and retryDelay control how failing agent calls are retried.
 	attempts   int
 	retryDelay time.Duration
@@ -222,11 +225,19 @@ type Orchestrator struct {
 	done   chan struct{}
 }
 
+// defaultSweepStacks and defaultLockStackSlot reach Docker and the machine-wide
+// lock; tests replace them.
+var (
+	defaultSweepStacks   = quality.SweepStacks
+	defaultLockStackSlot = workspace.LockStackSlot
+)
+
 // New creates an orchestrator. The discovery stage always runs first (or is
 // reused from the session cache), followed by stages. onChange is called
 // (without locks held) after every state mutation and must not block.
 func New(exec Executor, ws *workspace.Manager, stages []Stage, onChange func(), logger *slog.Logger) *Orchestrator {
 	o := &Orchestrator{exec: exec, ws: ws, stages: stages, onChange: onChange, logger: logger, runCheck: quality.Run,
+		sweepStacks: defaultSweepStacks, lockStackSlot: defaultLockStackSlot,
 		attempts: agentAttempts, retryDelay: agentRetryDelay}
 	o.run.Discovery = newStep(DiscoveryStage)
 	o.run.Stories = []StoryRun{{Status: StepPending, Steps: o.freshSteps()}}
@@ -349,6 +360,8 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		defer close(done)
 		defer unlock()
 		defer cancel()
+		defer o.sweepRun(repo, opts.DryRun)
+		o.sweepRun(repo, opts.DryRun)
 		o.execute(ctx, repo, opts)
 	}()
 	return nil
@@ -443,6 +456,8 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 		defer close(done)
 		defer unlock()
 		defer cancel()
+		defer o.sweepRun(o.ws.Path(), opts.DryRun)
+		o.sweepRun(o.ws.Path(), opts.DryRun)
 		o.retryExecute(ctx, opts, story, stageAt, started)
 	}()
 	return nil
@@ -1146,7 +1161,11 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 		if round > rounds {
 			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d problema(s) persistem após %d rodadas de correção", len(verdict.Issues), rounds))
 		}
-		fixes := o.scheduleFixes(st.si, gate, stepID, verdict.Issues, round)
+		fixable := slices.DeleteFunc(slices.Clone(verdict.Issues), func(is Issue) bool { return is.Infra })
+		if len(fixable) == 0 {
+			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d comando(s) excederam o tempo limite", len(verdict.Issues)))
+		}
+		fixes := o.scheduleFixes(st.si, gate, stepID, fixable, round)
 		if len(fixes) == 0 {
 			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d problema(s) sem implementador para corrigi-los", len(verdict.Issues)))
 		}

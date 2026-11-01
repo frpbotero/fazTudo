@@ -31,6 +31,9 @@ type Issue struct {
 	Severity    string `json:"severity,omitempty"`
 	Description string `json:"description"`
 	Location    string `json:"location,omitempty"`
+	// Infra marks a failure no code change can fix, such as a command that ran
+	// out of time: it goes to the report, never to an implementer.
+	Infra bool `json:"infra,omitempty"`
 }
 
 // Verdict is a quality gate's structured outcome.
@@ -106,6 +109,7 @@ func parseVerdict(output string, stages []Stage, plan Plan) (Verdict, bool) {
 		if strings.TrimSpace(is.Description) == "" {
 			continue
 		}
+		is.Infra = false // only the orchestrator's own checks can set it
 		is.Agent = strings.ToLower(strings.TrimSpace(is.Agent))
 		if !isImplementer(stages, is.Agent) {
 			is.Agent = defaultImplementer(stages, plan)
