@@ -92,8 +92,10 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
 6. **Documentação do fluxo** (`docs`, quando o arquiteto julga necessária) roda por último:
    guia de uso para o cliente final e/ou fluxo, contratos e pontos de extensão para quem fará
    manutenção, no lugar onde o projeto já documenta (README, `docs/`, ADR) ou em `docs/<us>.md`.
-7. Instruções do projeto (`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.cursorrules`)
-   são repassadas a todos os agentes, seja qual for o CLI.
+7. Instruções do projeto (`AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `.github/copilot-instructions.md`,
+   `.cursorrules`, com os arquivos que importam via `@caminho` dentro do repositório) vão no prompt de
+   todo agente, seja qual for o CLI: discovery, análise de sequência, etapas, correções, integração e
+   seletor. `AGENTS.md`/`CLAUDE.md` de subpastas são listados para o agente ler ao mexer nelas.
 
 ## Portões de qualidade
 

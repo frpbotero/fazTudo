@@ -75,7 +75,7 @@ func TestReviewLensesRunInParallelAndMerge(t *testing.T) {
 		if req.ReadOnly != wantRO {
 			t.Errorf("%s: ReadOnly = %v", req.Role, req.ReadOnly)
 		}
-		if req.Role != DiscoveryStage.Role && !strings.Contains(req.Prompt, "Sempre escreva testes primeiro.") {
+		if !strings.Contains(req.Prompt, "Sempre escreva testes primeiro.") {
 			t.Errorf("%s prompt lacks the project instructions", req.Role)
 		}
 	}

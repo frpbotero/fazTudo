@@ -89,6 +89,7 @@ func TestBestOfNTieIsBrokenBySelector(t *testing.T) {
 		SelectorStage.Role: {"C é mais simples\n```json\n{\"choice\": \"c\", \"reason\": \"mais simples\"}\n```"},
 	}}
 	o, repo := newCandidateTest(t, exec)
+	writeFile(t, repo, "AGENTS.md", "Prefira o código mais simples.")
 	exec.onCall = func(req provider.Request) {
 		if i := strings.Index(req.Role, "candidato "); i >= 0 {
 			writeFile(t, req.WorkDir, "app.js", "// "+req.Role[i+len("candidato "):]+"\n")
@@ -111,6 +112,9 @@ func TestBestOfNTieIsBrokenBySelector(t *testing.T) {
 	for _, r := range exec.reqs {
 		if r.Role == SelectorStage.Role && !strings.Contains(r.Prompt, "+// A") {
 			t.Error("the selector must see the candidates' diffs")
+		}
+		if r.Role == SelectorStage.Role && !strings.Contains(r.Prompt, "Prefira o código mais simples.") {
+			t.Error("the selector must judge by the project instructions")
 		}
 	}
 }

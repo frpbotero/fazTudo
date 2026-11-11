@@ -73,7 +73,7 @@ func storyKeys(list []stories.Story) []string {
 	return keys
 }
 
-func buildAnalysisPrompt(task string, opts StartOptions, keys []string, discovery *workspace.Report) string {
+func buildAnalysisPrompt(task string, opts StartOptions, keys []string, discovery *workspace.Report, instructions string) string {
 	var b strings.Builder
 	if discovery != nil {
 		fmt.Fprintf(&b, "## Repositório\n\n`%s`\n\n", discovery.Path)
@@ -81,6 +81,7 @@ func buildAnalysisPrompt(task string, opts StartOptions, keys []string, discover
 			fmt.Fprintf(&b, "### Discovery\n\n%s\n\n", clip(summary, maxArtifactBytes))
 		}
 	}
+	writeInstructions(&b, instructions)
 	if opts.Preamble != "" {
 		fmt.Fprintf(&b, "## Contexto do documento\n\n%s\n\n", clip(opts.Preamble, maxPreambleBytes))
 	}
@@ -217,7 +218,7 @@ func (o *Orchestrator) analyzeSequence(ctx context.Context, ss *session, opts St
 	resp, ok := o.runStage(ctx, analysisRef, provider.Request{
 		Role:     AnalysisStage.Role,
 		System:   o.texts.analysis.System,
-		Prompt:   buildAnalysisPrompt(o.texts.analysis.Task, opts, keys, ss.report),
+		Prompt:   buildAnalysisPrompt(o.texts.analysis.Task, opts, keys, ss.report, ss.instructions),
 		Tier:     AnalysisStage.Tier,
 		WorkDir:  ss.repo,
 		ReadOnly: true,

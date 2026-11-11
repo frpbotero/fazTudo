@@ -588,7 +588,7 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 		return
 	}
 	graph := o.updateGraph(ctx, ss)
-	report, ok := o.discover(ctx, repo, graph)
+	report, ok := o.discover(ctx, ss, graph)
 	if !ok || !o.guardInputs(ss, discoveryRef) {
 		return
 	}
@@ -649,7 +649,7 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 		return
 	}
 	graph := o.updateGraph(ctx, ss)
-	report, ok := o.discover(ctx, repo, graph) // the saved one, or a new one
+	report, ok := o.discover(ctx, ss, graph) // the saved one, or a new one
 	if !ok {
 		return
 	}
@@ -1311,7 +1311,8 @@ func (o *Orchestrator) scheduleFixes(si int, gate Stage, afterID string, issues 
 
 // discover returns the session's discovery for repo, running it only when
 // there is no cached report.
-func (o *Orchestrator) discover(ctx context.Context, repo, graph string) (*workspace.Report, bool) {
+func (o *Orchestrator) discover(ctx context.Context, ss *session, graph string) (*workspace.Report, bool) {
+	repo := ss.repo
 	if cached := o.ws.Discovery(); cached != nil && cached.Path == repo {
 		o.updateStep(discoveryRef, func(s *Step) {
 			s.Status = StepSkipped
@@ -1333,7 +1334,7 @@ func (o *Orchestrator) discover(ctx context.Context, repo, graph string) (*works
 	resp, ok := o.runStage(ctx, discoveryRef, provider.Request{
 		Role:     DiscoveryStage.Role,
 		System:   o.texts.discovery.System,
-		Prompt:   buildDiscoveryPrompt(o.texts.discovery.Task, repo, stacks, graph),
+		Prompt:   buildDiscoveryPrompt(o.texts.discovery.Task, repo, stacks, graph, ss.instructions),
 		Tier:     DiscoveryStage.Tier,
 		WorkDir:  repo,
 		ReadOnly: true,

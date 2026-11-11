@@ -144,6 +144,73 @@ func TestReadInstructions(t *testing.T) {
 	}
 }
 
+func TestReadInstructionsFollowsImports(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.md")
+	if err := os.WriteFile(outside, []byte("chave privada"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "AGENTS.md", "Regras gerais.")
+	write(t, root, "CLAUDE.md", "@AGENTS.md\n\nVeja @docs/estilo.md, mande e-mail a dev@empresa.com.\n"+
+		"Exemplo: `@docs/exemplo.md`\n```\n@docs/bloco.md\n```\n@../fora.md @"+outside+" @~/.ssh/config")
+	write(t, root, "docs/estilo.md", "Use tabs. @nested/mais.md")
+	write(t, root, "docs/nested/mais.md", "Nomes curtos.")
+	write(t, root, "docs/exemplo.md", "NÃO INCLUIR exemplo")
+	write(t, root, "docs/bloco.md", "NÃO INCLUIR bloco")
+	write(t, root, ".claude/CLAUDE.md", "Rode make test.")
+
+	got := ReadInstructions(root)
+	for _, want := range []string{"### docs/estilo.md\n\nUse tabs.", "### docs/nested/mais.md\n\nNomes curtos.", "### .claude/CLAUDE.md\n\nRode make test."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("instructions miss %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "Regras gerais.") != 1 {
+		t.Errorf("an imported file already read must not repeat:\n%s", got)
+	}
+	for _, bad := range []string{"NÃO INCLUIR", "chave privada"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("instructions must not include %q:\n%s", bad, got)
+		}
+	}
+}
+
+func TestReadInstructionsSkipsLinkedDuplicate(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "AGENTS.md", "Regra única.")
+	if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Skip("symlinks unsupported")
+	}
+	if got := ReadInstructions(root); strings.Count(got, "Regra única.") != 1 {
+		t.Errorf("CLAUDE.md linked to AGENTS.md must appear once:\n%s", got)
+	}
+}
+
+func TestReadInstructionsPointsAtFolderFiles(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "web/AGENTS.md", "CONTEÚDO DA PASTA")
+	write(t, root, "api/CLAUDE.md", "x")
+	write(t, root, "web/node_modules/lib/AGENTS.md", "x")
+	write(t, root, ".git/AGENTS.md", "x")
+	got := ReadInstructions(root)
+	if !strings.Contains(got, "### Instruções por pasta") || !strings.Contains(got, "- `api/CLAUDE.md`\n- `web/AGENTS.md`") {
+		t.Errorf("folder instruction files must be listed:\n%s", got)
+	}
+	if strings.Contains(got, "CONTEÚDO DA PASTA") || strings.Contains(got, "node_modules") || strings.Contains(got, ".git/") {
+		t.Errorf("only paths outside skipped folders belong in the prompt:\n%s", got)
+	}
+}
+
+func TestReadInstructionsListsWhatDoesNotFit(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "AGENTS.md", strings.Repeat("a", maxInstructionFile))
+	write(t, root, "CLAUDE.md", strings.Repeat("b", maxInstructionFile))
+	got := ReadInstructions(root)
+	if !strings.Contains(got, "### AGENTS.md") || !strings.Contains(got, "Leia antes de agir: `CLAUDE.md`.") {
+		t.Errorf("a file over the total limit must be named for the agent to read:\n%.200s…", got)
+	}
+}
+
 func TestPolicyBaseBranches(t *testing.T) {
 	p := DefaultPolicy()
 	p.BaseBranches = map[string]string{".": " develop ", "api": "", " front ": "release/2.0"}

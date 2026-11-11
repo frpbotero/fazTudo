@@ -372,7 +372,7 @@ const maxPreambleBytes = 2_000
 
 // buildDiscoveryPrompt gives the discovery agent the deterministic scan as a
 // starting point.
-func buildDiscoveryPrompt(task, repo string, stacks []workspace.Stack, graph string) string {
+func buildDiscoveryPrompt(task, repo string, stacks []workspace.Stack, graph, instructions string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Repositório\n\n`%s`\n\n## Manifestos detectados automaticamente\n\n%s\n\n",
 		repo, workspace.FormatStacks(stacks))
@@ -380,6 +380,7 @@ func buildDiscoveryPrompt(task, repo string, stacks []workspace.Stack, graph str
 	if report := strings.TrimSpace(workspace.GraphReport(graph)); report != "" {
 		fmt.Fprintf(&b, "Relatório do grafo (hubs e comunidades):\n\n%s\n\n", clip(report, maxArtifactBytes))
 	}
+	writeInstructions(&b, instructions)
 	fmt.Fprintf(&b, "## Sua tarefa\n\n%s", task)
 	return b.String()
 }

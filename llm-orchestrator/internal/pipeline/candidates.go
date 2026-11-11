@@ -262,6 +262,7 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 	}
 
 	var b strings.Builder
+	writeInstructions(&b, ss.instructions) // the better candidate is the one that follows them
 	b.WriteString("## Candidatos\n\nEmpate nas verificações automáticas. Compare os diffs.\n\n")
 	for _, c := range tied {
 		diff, err := ss.git.Diff(ctx, base, c.hash, maxCandidateDiff)
