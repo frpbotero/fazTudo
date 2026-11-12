@@ -277,6 +277,34 @@ make dev          # go run com logs em nível debug
 > `127.0.0.1` por padrão e rejeita requisições de escrita vindas de outras origens.
 > Não exponha a porta em redes não confiáveis.
 
+## Console
+
+`faztudo run --repo DIR --file US.md` executa as US em simulação e mostra os eventos no terminal.
+Use `--story US-1` ou `--stories US-1,US-3` para selecionar histórias, `--real` para execução real,
+`--rediscover` para refazer o mapeamento e `--file -` para ler da entrada padrão. Documentos sem
+títulos de US podem usar `--detect-model --real` para pedir a identificação ao provedor.
+
+`faztudo tui --repo DIR` abre uma interface de terminal com seções de execução, repositório,
+provedores, prompts e logs. A linha de comando aceita as mesmas operações da CLI; Tab troca a seção,
+as setas rolam a saída e Ctrl+L limpa a saída local.
+
+| Comando | Operação |
+|---------|----------|
+| `status [--json]`, `logs [--level info,warn]` | Consulta a execução e seus eventos. |
+| `stop`, `resume`, `retry --story N --step ID` | Para, continua ou refaz uma etapa. |
+| `stories parse --file US.md` | Mostra as US e o contexto comum identificados. |
+| `repo show/set/branches/base/discovery-reset` | Gerencia o repositório, as branches base e o discovery. |
+| `policy show/apply --file arquivo.json` | Consulta ou aplica todos os campos da política de qualidade. |
+| `config show/apply --file arquivo.json` | Consulta ou aplica a configuração de provedores e modelos. |
+| `providers list/exhaust/restore` | Mostra provedores e simula ou restaura uma cota durante uma execução de console. |
+| `prompts list/show/set/reset` | Consulta, altera ou restaura os prompts. `set` lê o texto de `--file`. |
+| `commit show --id HASH` | Mostra o patch de um commit da execução. |
+
+As alterações de configuração passam pela mesma validação da API local e são salvas no mesmo
+`config.json` do painel. O processo de console ativo recebe comandos de outros terminais por arquivos
+privados ao lado da configuração, sem servidor HTTP. Sem persistência (`--config ''`), outras instâncias
+não conseguem consultar nem controlar a execução ativa; a parada usa Ctrl+C no próprio terminal.
+
 ## Desenvolvimento
 
 ```bash

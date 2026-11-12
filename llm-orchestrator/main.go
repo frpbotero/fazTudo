@@ -29,7 +29,7 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && isConsoleCommand(os.Args[1]) {
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
 		os.Exit(runConsole(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	if err := run(); err != nil {
