@@ -22,8 +22,8 @@ Esperado: até 3 áreas com motivos, em menos de 30 s, sem nenhuma chamada de CL
 ./bin/faztudo health run --repo /caminho/repo --area internal/pagamentos --comments
 ```
 
-Esperado: branch `faztudo/saude-internal-pagamentos-…` criada, etapas linha de base → limpeza → verificação,
-veredito aprovado (simulação), repositório de volta à branch de base.
+Esperado: etapas linha de base → limpeza → verificação, veredito aprovado. Como nas US, a simulação não cria
+branch nem roda comandos.
 
 ## Limpeza real
 
@@ -31,7 +31,7 @@ veredito aprovado (simulação), repositório de volta à branch de base.
 ./bin/faztudo health run --repo /caminho/repo --area internal/pagamentos --real
 ```
 
-Verificar: `git log <branch>` com um commit `faztudo(saude)`; `git diff <base>...<branch> --stat` só dentro da
+Esperado: branch `faztudo/saude-internal-pagamentos-…`, repositório de volta à branch de base. Verificar: `git log <branch>` com um commit `faztudo(saude)`; `git diff <base>...<branch> --stat` só dentro da
 área; registro de decisões no resultado; nenhuma falha nova em relação à linha de base.
 
 ## Reprovação

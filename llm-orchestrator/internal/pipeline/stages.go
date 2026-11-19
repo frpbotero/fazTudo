@@ -527,14 +527,7 @@ func stageInstructions(stage Stage) string {
 // the most to the least stable: repository, discovery, project instructions
 // and delivery rules, document, sequence and the story itself.
 func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Report) {
-	if discovery != nil {
-		fmt.Fprintf(b, "## Repositório\n\n`%s`\n\nStacks:\n%s\n\n",
-			discovery.Path, workspace.FormatStacks(discovery.Stacks))
-		if summary := strings.TrimSpace(discovery.Summary); summary != "" {
-			fmt.Fprintf(b, "### Discovery (não refaça)\n\n%s\n\n", clip(summary, maxArtifactBytes))
-		}
-		writeGraph(b, discovery.Graph)
-	}
+	writeRepository(b, discovery)
 	writeInstructions(b, sc.Instructions)
 	writeRules(b, sc.Rules)
 	if sc.Preamble != "" {
@@ -547,6 +540,19 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 	if sc.Audit {
 		b.WriteString(cmp.Or(sc.AuditNotice, auditNotice))
 	}
+}
+
+// writeRepository writes the repository, its discovery and its code graph.
+func writeRepository(b *strings.Builder, discovery *workspace.Report) {
+	if discovery == nil {
+		return
+	}
+	fmt.Fprintf(b, "## Repositório\n\n`%s`\n\nStacks:\n%s\n\n",
+		discovery.Path, workspace.FormatStacks(discovery.Stacks))
+	if summary := strings.TrimSpace(discovery.Summary); summary != "" {
+		fmt.Fprintf(b, "### Discovery (não refaça)\n\n%s\n\n", clip(summary, maxArtifactBytes))
+	}
+	writeGraph(b, discovery.Graph)
 }
 
 // writeSequence places the story among the others of the document.

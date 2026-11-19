@@ -13,7 +13,9 @@ Corpo: `CleanupOptions`.
 |---|---|
 | `202` | aceita; acompanhar por `GET /api/status` e `GET /api/events` |
 | `400` | área inválida (inexistente, fora do repositório, `..`), `rounds` fora de 1–5 |
-| `409` | execução em andamento, repositório bloqueado, política sem git, árvore suja |
+| `409` | execução em andamento, repositório bloqueado, política sem git em execução real |
+
+Árvore suja não é recusada aqui: como nas US, a execução começa e falha na preparação com a mensagem do git.
 
 ## Mudanças em respostas existentes
 
