@@ -2,7 +2,7 @@ BINARY  := bin/faztudo
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build run dev test cover vet fmt lint clean docker desktop-dev desktop-mac install-mac desktop-windows desktop-linux dmg
+.PHONY: all build run dev test cover vet fmt lint clean docker update-skills desktop-dev desktop-mac install-mac desktop-windows desktop-linux dmg
 
 all: fmt vet test build
 
@@ -30,6 +30,9 @@ fmt:
 
 lint: vet ## Verifica formatação e análise estática
 	@test -z "$$(gofmt -l .)" || (echo "Arquivos sem gofmt:"; gofmt -l .; exit 1)
+
+update-skills: ## Atualiza as skills de addyosmani/agent-skills embutidas
+	./scripts/update-skills.sh
 
 clean:
 	rm -rf bin coverage.out build/bin build/wailsjs dist

@@ -3,12 +3,14 @@ package pipeline
 import (
 	"cmp"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/skills"
 	"llm-orchestrator/internal/stories"
 	"llm-orchestrator/internal/workspace"
 )
@@ -50,8 +52,7 @@ type Stage struct {
 	// Lenses split the stage into parallel reviews, each with its own focus;
 	// their verdicts are merged.
 	Lenses []Lens
-	// Skills are the agent skills (addyosmani/agent-skills) the stage follows
-	// when installed.
+	// Skills are the bundled playbooks (internal/skills) the stage reads.
 	Skills []string
 	// Inputs are the earlier stages whose output the prompt carries; an
 	// implementer's ID also covers its streams. Nil forwards every step.
@@ -65,6 +66,9 @@ type Lens struct {
 	Focus string
 	// Requires names an agent the plan must include for the lens to run.
 	Requires string
+	// Skills are the playbooks this reviewer reads instead of the stage's:
+	// each lens reads only its own, since every lens is a separate agent.
+	Skills []string
 }
 
 // reviewLenses are the perspectives of the code review, run in parallel.
@@ -74,6 +78,7 @@ var reviewLenses = []Lens{
 		Title: "Aderência à especificação",
 		Focus: "Todo requisito, critério, contrato, estado e código de erro da US/EDD implementado exatamente? " +
 			"Defenda o usuário: aponte requisito ausente, parcial ou alterado.",
+		Skills: []string{"code-review-and-quality"},
 	},
 	{
 		ID:    "simplicity",
@@ -83,17 +88,27 @@ var reviewLenses = []Lens{
 			"Padrão de projeto do plano ignorado; componente acoplado. Nome que não revela intenção ou abreviado; " +
 			"boolean sem forma de pergunta (is/has), lista no singular, função sem verbo. " +
 			"Função com mais de uma responsabilidade, > 20 linhas, > 3 argumentos, if/else aninhado sem guard clause.",
+		Skills: []string{"code-simplification"},
 	},
 	{
-		ID:    "tests",
-		Title: "Testes",
-		Focus: "Cada critério e caso de teste da especificação coberto, com ID no nome? Expectativa contrária à especificação, teste frágil ou vazio.",
+		ID:    "structure",
+		Title: "Estrutura",
+		Focus: "Modo revisão da skill `structural-health`: ligação escondida, ligação desnecessária, sobra e caso especial " +
+			"nos arquivos desta US e em quem depende deles. Estilo e nomes são de outro revisor.",
+		Skills: []string{"structural-health"},
+	},
+	{
+		ID:     "tests",
+		Title:  "Testes",
+		Focus:  "Cada critério e caso de teste da especificação coberto, com ID no nome? Expectativa contrária à especificação, teste frágil ou vazio.",
+		Skills: []string{"test-driven-development"},
 	},
 	{
 		ID:       "ux",
 		Title:    "Interface e acessibilidade",
 		Focus:    "WCAG 2.2 AA (rótulos, foco, ARIA válido, contraste), celular, elemento cobrindo controle, estados de carregamento/erro/vazio, consistência visual.",
 		Requires: "frontend",
+		Skills:   []string{"frontend-ui-engineering"},
 	},
 }
 
@@ -324,8 +339,9 @@ var DefaultStages = []Stage{
 			"2. EDD: contratos, estados, erros e pastas como especificado.\n" +
 			"3. Testes: cada critério coberto, ID no nome, expectativas corretas.\n" +
 			"4. Robustez: entrada validada, erro tratado, sem duplicação.\n" +
-			"5. Interface: acessível, responsiva, nada cobrindo controle.",
-		Skills: []string{"code-review-and-quality", "code-simplification"},
+			"5. Interface: acessível, responsiva, nada cobrindo controle.\n" +
+			"6. Estrutura: modo revisão da skill `structural-health` (arquivos desta US e quem depende deles).",
+		Skills: []string{"code-review-and-quality", "code-simplification", "structural-health"},
 		Inputs: reviewInputs,
 	},
 	{
@@ -559,20 +575,34 @@ func writeSequence(b *strings.Builder, sc storyContext) {
 // fixSkills guide fix rounds: find the root cause, prove it with a test.
 var fixSkills = []string{"debugging-and-error-recovery", "test-driven-development"}
 
-// installedSkills filters skill names to the installed ones; tests replace it.
-var installedSkills = workspace.InstalledSkills
+// skillsDir is where agents read the bundled skills; "" when they could not
+// be written there. Tests replace it.
+var skillsDir = func() string {
+	dir, err := skills.Dir()
+	if err != nil {
+		slog.Warn("skills indisponíveis; prompts seguem sem elas", "err", err)
+		return ""
+	}
+	return dir
+}
 
-// writeSkills names the installed skills that fit the task. They are a
-// reference, not a requirement: loading a playbook costs tokens, and Claude
-// runs without user skills (--safe-mode).
-func writeSkills(b *strings.Builder, skills []string) {
-	names := installedSkills(skills)
-	if len(names) == 0 {
+// writeSkills points the agent at the playbooks of its task. They are files,
+// not CLI skills, so every CLI reads them the same way and Claude keeps
+// --safe-mode; the router grants read access to skillsDir.
+func writeSkills(b *strings.Builder, names []string) {
+	dir := skillsDir()
+	var lines []string
+	for _, n := range names {
+		if dir != "" && skills.Has(n) {
+			lines = append(lines, fmt.Sprintf("- `%s`: `%s`\n", n, skills.File(dir, n)))
+		}
+	}
+	if len(lines) == 0 {
 		return
 	}
-	b.WriteString("## Skills de referência\n\nSe sua CLI as tiver e a tarefa pedir, use: ")
-	b.WriteString(strings.Join(quoteAll(names), ", "))
-	b.WriteString(". Saída final continua no formato pedido abaixo.\n\n")
+	b.WriteString("## Skills\n\nLeia antes de começar e siga o que se aplica à tarefa (só leitura):\n")
+	b.WriteString(strings.Join(lines, ""))
+	b.WriteString("Caminhos citados dentro delas são relativos ao próprio SKILL.md. Saída final continua no formato pedido abaixo.\n\n")
 }
 
 func writeInstructions(b *strings.Builder, text string) {

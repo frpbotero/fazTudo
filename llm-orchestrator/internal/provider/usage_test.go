@@ -110,3 +110,24 @@ func TestExecuteReadsUsageAndStopsAtTurnLimit(t *testing.T) {
 		t.Errorf("a turn limit is neither retried nor failed over: %d calls", len(real.calls))
 	}
 }
+
+func TestReadDirsAreReadableNotWritable(t *testing.T) {
+	inv := Invocation{Prompt: "p", ReadDirs: []string{"/cache/skills"}}
+	claude := ClaudeCLI.Args(inv)
+	if !slices.Contains(claude, "--safe-mode") || !containsSeq(claude, "--add-dir", "/cache/skills") {
+		t.Errorf("claude must keep --safe-mode and read the skills dir: %v", claude)
+	}
+	i := slices.Index(claude, "--disallowedTools")
+	if i < 0 || !slices.Contains(claude[i:], "Edit(//cache/skills/**)") || !slices.Contains(claude[i:], "Write(//cache/skills/**)") {
+		t.Errorf("claude must deny edits in the skills dir: %v", claude)
+	}
+	if ro := ClaudeCLI.Args(Invocation{ReadOnly: true, ReadDirs: inv.ReadDirs}); !containsSeq(ro, "--add-dir", "/cache/skills") {
+		t.Errorf("read-only claude must read the skills dir: %v", ro)
+	}
+	if plain := ClaudeCLI.Args(Invocation{Prompt: "p"}); slices.Contains(plain, "--add-dir") || slices.Contains(plain, "--disallowedTools") {
+		t.Errorf("no read dirs, no extra flags: %v", plain)
+	}
+	if gemini := GeminiCLI.Args(inv); !containsSeq(gemini, "--include-directories", "/cache/skills") {
+		t.Errorf("gemini must read the skills dir: %v", gemini)
+	}
+}

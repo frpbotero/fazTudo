@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -134,6 +135,23 @@ func claudeDiagnoseAllowed(commands []string) []string {
 	return append([]string{"Read", "Grep", "Glob"}, bashRules(commands)...)
 }
 
+// claudeReadDirs grants read access to dirs and denies edits inside them;
+// deny rules win over the allowlist. "//" marks an absolute path in a rule.
+func claudeReadDirs(dirs []string) []string {
+	var args []string
+	for _, d := range dirs {
+		args = append(args, "--add-dir", d)
+	}
+	if len(dirs) > 0 {
+		args = append(args, "--disallowedTools")
+		for _, d := range dirs {
+			pattern := "/" + filepath.ToSlash(d) + "/**"
+			args = append(args, fmt.Sprintf("Edit(%s)", pattern), fmt.Sprintf("Write(%s)", pattern))
+		}
+	}
+	return args
+}
+
 func bashRules(commands []string) []string {
 	var rules []string
 	for _, c := range append(slices.Clone(safeCommands), commands...) {
@@ -174,6 +192,7 @@ var ClaudeCLI = CLI{
 			args = append(args, "--permission-mode", "dontAsk", "--tools", claudeWriteTools, "--allowedTools")
 			args = append(args, claudeAllowed(inv.Commands)...)
 		}
+		args = append(args, claudeReadDirs(inv.ReadDirs)...)
 		args = append(args, "--autocompact", "auto")
 		if inv.MaxTurns > 0 {
 			args = append(args, "--max-turns", strconv.Itoa(inv.MaxTurns))
@@ -257,6 +276,9 @@ var GeminiCLI = CLI{
 				}
 			}
 		}
+		for _, d := range inv.ReadDirs {
+			args = append(args, "--include-directories", d)
+		}
 		if inv.Model != "" {
 			args = append(args, "--model", inv.Model)
 		}
@@ -282,6 +304,9 @@ type Invocation struct {
 	// repository's checks and policy); they come from configuration, never
 	// from an agent's output.
 	Commands []string
+	// ReadDirs are directories outside WorkDir the agent may read but not
+	// change (the bundled skills).
+	ReadDirs []string
 }
 
 // Runner executes an invocation and returns the combined output. On failure

@@ -23,7 +23,7 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 	})
 	o.logf(LevelInfo, "%s: %d revisores em paralelo (%s).", stage.Title, len(lenses), lensTitles(lenses))
 
-	base := buildPrompt(stage, st.sc, ss.report, o.stepsBefore(ref))
+	previous := o.stepsBefore(ref)
 	type result struct {
 		resp *provider.Response
 		err  error
@@ -37,7 +37,7 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 			resp, err := o.executeRetrying(ctx, ref, provider.Request{
 				Role:     stage.Role + " · " + l.Title,
 				System:   stage.System,
-				Prompt:   base + lensFocus(l),
+				Prompt:   buildPrompt(lensStage(stage, l), st.sc, ss.report, previous) + lensFocus(l),
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
@@ -70,6 +70,14 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 		s.DurationMS = elapsed.Milliseconds()
 	})
 	return merged, true
+}
+
+// lensStage is the stage as one lens sees it: with the lens's playbooks.
+func lensStage(stage Stage, l Lens) Stage {
+	if l.Skills != nil {
+		stage.Skills = l.Skills
+	}
+	return stage
 }
 
 func lensFocus(l Lens) string {

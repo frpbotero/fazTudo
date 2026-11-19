@@ -46,11 +46,15 @@ func (o *Orchestrator) useLimits(policy workspace.Policy, checks []quality.Comma
 	o.mu.Unlock()
 }
 
-// limited applies the run's limits to a request.
+// limited applies the run's limits to a request and lets the agent read the
+// bundled skills its prompt points at.
 func (o *Orchestrator) limited(req provider.Request) provider.Request {
 	o.mu.RLock()
 	l := o.limits
 	o.mu.RUnlock()
+	if dir := skillsDir(); dir != "" {
+		req.ReadDirs = []string{dir}
+	}
 	if req.ReadOnly {
 		req.MaxTurns = l.readTurns
 		if req.Diagnose {

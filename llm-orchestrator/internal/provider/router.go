@@ -54,6 +54,8 @@ type Request struct {
 	MaxTurns int
 	// Commands are the shell commands an agent may run.
 	Commands []string
+	// ReadDirs are directories outside WorkDir the agent may read.
+	ReadDirs []string
 }
 
 // Response is the result of a successful task.
@@ -404,6 +406,7 @@ func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response
 			Diagnose: req.Diagnose,
 			MaxTurns: req.MaxTurns,
 			Commands: req.Commands,
+			ReadDirs: req.ReadDirs,
 		}
 		if req.Tier == TierLight {
 			if p.cli.LightModel != "" {
