@@ -50,8 +50,11 @@
   - **Casos especiais**: regex por linguagem em arquivos de código da área: `sleep` (`time.Sleep`,
     `setTimeout(`, `sleep(`, `Thread.sleep`), `retry`, teste pulado (`t.Skip`, `.skip(`, `xit(`, `xdescribe(`,
     `@Disabled`, `@pytest.mark.skip`), exceção engolida (`catch (…) {}`, `except…: pass`, `_ = err`).
-  - **Área candidata**: diretório de profundidade 1 ou 2 com arquivos de código; ignora o que o walker de
-    `quality` já ignora (`.git`, `node_modules`, `graphify-out`, `vendor`, build).
+  - **Área candidata**: a partir da pasta comum a todo o código (ignorando arquivos soltos na raiz e pastas
+    que começam com `.`), as duas pastas seguintes (`base/a/b`) ou só a primeira (`base/a`). Arquivo solto
+    direto na pasta comum não tem área: limpar a pasta comum seria limpar tudo. Ignora o que o walker de
+    `quality` já ignora (`.git`, `node_modules`, `vendor`, build) mais `graphify-out` e `faztudo-out`.
+    Medido no próprio FazTudo: `llm-orchestrator/internal/pipeline` em primeiro, em 0,25 s.
   - **Pontuação**: cada indicador normalizado pelo máximo entre as áreas (0–1), pesos iguais; top 3 com os
     indicadores que somaram mais.
 - **Por quê**: princípio V (determinístico fora do LLM); tudo vem de git e do grafo que o FazTudo já gera.

@@ -55,17 +55,17 @@ esperada, sem nenhuma chamada de CLI de IA.
 
 ### Testes
 
-- [ ] T020 [P] [US2] Testar churn (últimos 500 commits) e co-change (commits com até 20 arquivos; par com "≥ 3 commits juntos e ≥ 60% de coocorrência"; par entre áreas conta em dobro) com repositório git temporário em `llm-orchestrator/internal/health/churn_test.go`
-- [ ] T021 [P] [US2] Testar ciclos com `graph.json` mínimo (node-link, `nodes[].source_file`, `links[].relation` `calls`/`references`) com ciclo entre dois diretórios e sem ciclo em `llm-orchestrator/internal/health/cycles_test.go`
-- [ ] T022 [P] [US2] Testar casos especiais por linguagem (`time.Sleep`, `setTimeout(`, `Thread.sleep`, `retry`, `t.Skip`, `.skip(`, `xit(`, `@Disabled`, `@pytest.mark.skip`, `catch (…) {}`, `except…: pass`, `_ = err`) em `llm-orchestrator/internal/health/special_test.go`
-- [ ] T023 [P] [US2] Testar `Suggest`: top 3 com motivos, áreas de profundidade 1–2 com código, diretórios ignorados, sem grafo → aviso e sem `cycles`, histórico curto → aviso, em `llm-orchestrator/internal/health/areas_test.go`
+- [X] T020 [P] [US2] Testar churn (últimos 500 commits) e co-change (commits com até 20 arquivos; par com "≥ 3 commits juntos e ≥ 60% de coocorrência"; par entre áreas conta em dobro) com repositório git temporário em `llm-orchestrator/internal/health/churn_test.go`
+- [X] T021 [P] [US2] Testar ciclos com `graph.json` mínimo (node-link, `nodes[].source_file`, `links[].relation` `calls`/`references`) com ciclo entre dois diretórios e sem ciclo em `llm-orchestrator/internal/health/cycles_test.go`
+- [X] T022 [P] [US2] Testar casos especiais por linguagem (`time.Sleep`, `setTimeout(`, `Thread.sleep`, `retry`, `t.Skip`, `.skip(`, `xit(`, `@Disabled`, `@pytest.mark.skip`, `catch (…) {}`, `except…: pass`, `_ = err`) em `llm-orchestrator/internal/health/special_test.go`
+- [X] T023 [P] [US2] Testar `Suggest`: top 3 com motivos, áreas de profundidade 1–2 com código, diretórios ignorados, sem grafo → aviso e sem `cycles`, histórico curto → aviso, em `llm-orchestrator/internal/health/areas_test.go`
 
 ### Implementação
 
-- [ ] T024 [P] [US2] Implementar churn e co-change com `git log -n 500 --format=%x00 --name-only` em `llm-orchestrator/internal/health/churn.go`
-- [ ] T025 [P] [US2] Implementar leitura do `graph.json`, grafo de diretórios e SCC (Tarjan) em `llm-orchestrator/internal/health/cycles.go`
-- [ ] T026 [P] [US2] Implementar a tabela de regex por extensão e a contagem por área em `llm-orchestrator/internal/health/special.go`
-- [ ] T027 [US2] Implementar `Suggest(ctx, repo, graph string) (AreaSuggestion, error)`: áreas candidatas (walker de `quality`), normalização pelo máximo (0–1), pesos iguais, top 3, `reasons` em pt-BR, avisos, em `llm-orchestrator/internal/health/areas.go`
+- [X] T024 [P] [US2] Implementar churn e co-change com `git log -n 500 --format=%x00 --name-only` em `llm-orchestrator/internal/health/churn.go`
+- [X] T025 [P] [US2] Implementar leitura do `graph.json`, grafo de diretórios e SCC (Tarjan) em `llm-orchestrator/internal/health/cycles.go`
+- [X] T026 [P] [US2] Implementar a tabela de regex por extensão e a contagem por área em `llm-orchestrator/internal/health/special.go`
+- [X] T027 [US2] Implementar `Suggest(ctx, repo, graph string) (AreaSuggestion, error)`: áreas candidatas (walker de `quality`), normalização pelo máximo (0–1), pesos iguais, top 3, `reasons` em pt-BR, avisos, em `llm-orchestrator/internal/health/areas.go`
 
 **Checkpoint**: T020–T023 verdes.
 
