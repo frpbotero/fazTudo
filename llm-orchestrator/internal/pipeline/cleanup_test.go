@@ -161,6 +161,15 @@ func TestApprovedCleanupLeavesABranchAndTheBase(t *testing.T) {
 	if !strings.Contains(c.DecisionLog, "juntar validação") || len(c.Changed) != 1 {
 		t.Errorf("decision log = %q changed = %v", c.DecisionLog, c.Changed)
 	}
+	var logged []string
+	for _, l := range run.Logs {
+		logged = append(logged, l.Message)
+	}
+	for _, want := range []string{"Linha de base: 1 comando(s), 0 com falha", "Verificação da limpeza: 1 comando(s), 0 com falha"} {
+		if !strings.Contains(strings.Join(logged, "\n"), want) {
+			t.Errorf("logs missing %q:\n%s", want, strings.Join(logged, "\n"))
+		}
+	}
 	if req := ct.exec.reqs[len(ct.exec.reqs)-1]; req.Tier != provider.TierHeavy || req.ReadOnly {
 		t.Errorf("cleanup request = %+v, want heavy tier and write access", req)
 	}
