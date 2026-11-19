@@ -29,7 +29,7 @@ func defaultPromptDump(stages []Stage, specials ...Stage) string {
 func TestDefaultPromptsUnchanged(t *testing.T) {
 	golden := filepath.Join("testdata", "prompts_default.golden")
 	texts := resolveTexts(nil)
-	got := defaultPromptDump(resolveStages(DefaultStages, nil), texts.discovery, texts.analysis, texts.integration, texts.selector, texts.investigator)
+	got := defaultPromptDump(resolveStages(DefaultStages, nil), texts.discovery, texts.analysis, texts.integration, texts.selector, texts.investigator, texts.cleanup)
 	if os.Getenv("UPDATE_GOLDEN") != "" {
 		if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
 			t.Fatal(err)

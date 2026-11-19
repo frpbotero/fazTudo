@@ -8,16 +8,16 @@ Caminhos relativos à raiz do repositório; código em `llm-orchestrator/`.
 
 ## Fase 1: Preparação
 
-- [ ] T001 Exportar `ExcludeFromGit(repo, pattern string)` (hoje `excludeFromGit`, usado para `graphify-out`) para também excluir `faztudo-out/`, ajustando o chamador em `llm-orchestrator/internal/workspace/graph.go`
-- [ ] T002 [P] Criar o pacote `llm-orchestrator/internal/health` com comentário de pacote em `llm-orchestrator/internal/health/areas.go` (tipos `AreaScore` e `AreaSuggestion` conforme [data-model.md](data-model.md), sem lógica ainda)
+- [X] T001 Exportar `ExcludeFromGit(repo, pattern string)` (hoje `excludeFromGit`, usado para `graphify-out`) para também excluir `faztudo-out/`, ajustando o chamador em `llm-orchestrator/internal/workspace/graph.go`
+- [X] T002 [P] Criar o pacote `llm-orchestrator/internal/health` com comentário de pacote em `llm-orchestrator/internal/health/areas.go` (tipos `AreaScore` e `AreaSuggestion` conforme [data-model.md](data-model.md), sem lógica ainda)
 
 ## Fase 2: Base (bloqueia todas as US)
 
-- [ ] T003 Adicionar `Run.Kind` (`"stories"` | `"cleanup"`; vazio = `stories`, compatível com journals antigos) e `Run.Cleanup *CleanupInfo`, e copiar `Cleanup` em `Snapshot`, em `llm-orchestrator/internal/pipeline/orchestrator.go`
-- [ ] T004 Definir `CleanupOptions`, `CleanupInfo` e `CheckSnapshot` conforme [data-model.md](data-model.md) e `validateCleanupOptions`: "caminho relativo de diretório existente no repositório; `.` só explícito; sem `..` nem absoluto"; `rounds` "1–5, padrão 3", em `llm-orchestrator/internal/pipeline/cleanup.go`
-- [ ] T005 Definir `CleanupStage` (ID `cleanup`, Tier pesado, escrita, `Skills: structural-health, incremental-implementation`, System e Task em pt-BR) e `CleanupVerifyStage`/`CleanupBaselineStage` só para rótulo das etapas, em `llm-orchestrator/internal/pipeline/stages.go`
-- [ ] T006 Incluir `CleanupStage` no catálogo de prompts no grupo "Saúde do código" em `llm-orchestrator/internal/pipeline/prompts.go` e atualizar `llm-orchestrator/internal/pipeline/testdata/prompts_default.golden` (só a etapa nova)
-- [ ] T007 Fazer `Resume` e `RetryFailed` recusarem `Kind = cleanup` com o erro "Limpeza não é retomável; inicie uma nova." em `llm-orchestrator/internal/pipeline/journal.go` e `llm-orchestrator/internal/pipeline/orchestrator.go`, com teste em `llm-orchestrator/internal/pipeline/cleanup_test.go`
+- [X] T003 Adicionar `Run.Kind` (`"stories"` | `"cleanup"`; vazio = `stories`, compatível com journals antigos) e `Run.Cleanup *CleanupInfo`, e copiar `Cleanup` em `Snapshot`, em `llm-orchestrator/internal/pipeline/orchestrator.go`
+- [X] T004 Definir `CleanupOptions`, `CleanupInfo` e `CheckSnapshot` conforme [data-model.md](data-model.md) e `validateCleanupOptions`: "caminho relativo de diretório existente no repositório; `.` só explícito; sem `..` nem absoluto"; `rounds` "1–5, padrão 3", em `llm-orchestrator/internal/pipeline/cleanup.go`
+- [X] T005 Definir `CleanupStage` (ID `cleanup`, Tier pesado, escrita, `Skills: structural-health, incremental-implementation`, System e Task em pt-BR) e `CleanupVerifyStage`/`CleanupBaselineStage` só para rótulo das etapas, em `llm-orchestrator/internal/pipeline/cleanup.go` (como `IntegrationStage` em `sequence.go`)
+- [X] T006 Incluir `CleanupStage` no catálogo de prompts no grupo "Saúde do código" em `llm-orchestrator/internal/pipeline/prompts.go` e atualizar `llm-orchestrator/internal/pipeline/testdata/prompts_default.golden` (só a etapa nova)
+- [X] T007 Fazer `Resume` e `RetryFailed` recusarem `Kind = cleanup` com o erro "Limpeza não é retomável; inicie uma nova." em `llm-orchestrator/internal/pipeline/journal.go` e `llm-orchestrator/internal/pipeline/orchestrator.go`, com teste em `llm-orchestrator/internal/pipeline/cleanup_test.go`
 
 **Checkpoint**: `make lint && make test` verdes; nada visível muda para execuções de US.
 
@@ -29,7 +29,7 @@ Caminhos relativos à raiz do repositório; código em `llm-orchestrator/`.
 
 ### Testes (escrever antes, devem falhar)
 
-- [ ] T008 [P] [US1] Testar `validateCleanupOptions` (área inexistente, absoluta, com `..`, vazia; `.` aceito só explícito; `rounds` 0 e 6 recusados, 0 vira 3 quando omitido) em `llm-orchestrator/internal/pipeline/cleanup_test.go`
+- [X] T008 [P] [US1] Testar `validateCleanupOptions` (área inexistente, absoluta, com `..`, vazia; `.` aceito só explícito; `rounds` negativo e 6 recusados, 0 (omitido) vira 3) em `llm-orchestrator/internal/pipeline/cleanup_test.go`
 - [ ] T009 [P] [US1] Testar a comparação de linha de base: fingerprint novo reprova; comando que passava e passa a falhar ou estourar tempo reprova; falha igual à da linha de base aprova; arquivo fora da área reprova; ID de teste ausente reprova, em `llm-orchestrator/internal/pipeline/cleanup_verdict_test.go`
 - [ ] T010 [P] [US1] Testar `TestIDs(root)`: coleta IDs de critério (ex.: `UT-CART-01`) só de arquivos de teste, em `llm-orchestrator/internal/quality/trace_test.go`
 - [ ] T011 [P] [US1] Testar `ChangedFiles(ctx, base)` (arquivos alterados entre a base e o HEAD, incluindo não commitados) em `llm-orchestrator/internal/vcs/git_test.go`

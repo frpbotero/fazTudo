@@ -98,7 +98,8 @@ func promptCatalog(stages []Stage) []PromptItem {
 		},
 	)
 	items = append(items, stageItems("Casos especiais", IntegrationStage)...)
-	return append(items, stageItems("Casos especiais", SelectorStage)...)
+	items = append(items, stageItems("Casos especiais", SelectorStage)...)
+	return append(items, stageItems("Saúde do código", CleanupStage)...)
 }
 
 // stageItems lists what a stage has to edit; a stage that calls no model has
@@ -129,8 +130,8 @@ func stageItems(group string, s Stage) []PromptItem {
 
 // promptTexts are the resolved texts used outside the stage list.
 type promptTexts struct {
-	discovery, analysis, integration, selector, investigator Stage
-	fixTask, verifyTask, auditNotice                         string
+	discovery, analysis, integration, selector, investigator, cleanup Stage
+	fixTask, verifyTask, auditNotice                                  string
 }
 
 func resolveTexts(overrides map[string]string) promptTexts {
@@ -142,7 +143,7 @@ func resolveTexts(overrides map[string]string) promptTexts {
 	}
 	return promptTexts{
 		discovery: stage(DiscoveryStage), analysis: stage(AnalysisStage), integration: stage(IntegrationStage),
-		selector: stage(SelectorStage), investigator: stage(InvestigatorStage),
+		selector: stage(SelectorStage), investigator: stage(InvestigatorStage), cleanup: stage(CleanupStage),
 		fixTask: override(overrides, promptFix, fixTask), verifyTask: override(overrides, promptVerify, verifyTask), auditNotice: audit,
 	}
 }

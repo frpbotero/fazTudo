@@ -16,8 +16,8 @@ func TestExcludeFromGitAddsPatternOnce(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(info, "exclude"), []byte("# local"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	excludeFromGit(repo, "graphify-out/")
-	excludeFromGit(repo, "graphify-out/")
+	ExcludeFromGit(repo, "graphify-out/")
+	ExcludeFromGit(repo, "graphify-out/")
 	data, _ := os.ReadFile(filepath.Join(info, "exclude"))
 	if got := string(data); got != "# local\ngraphify-out/\n" {
 		t.Errorf("exclude = %q", got)
@@ -26,7 +26,7 @@ func TestExcludeFromGitAddsPatternOnce(t *testing.T) {
 
 func TestExcludeFromGitWithoutGitIsNoop(t *testing.T) {
 	repo := t.TempDir()
-	excludeFromGit(repo, "graphify-out/")
+	ExcludeFromGit(repo, "graphify-out/")
 	if _, err := os.Stat(filepath.Join(repo, ".git")); !os.IsNotExist(err) {
 		t.Error("must not create .git")
 	}
