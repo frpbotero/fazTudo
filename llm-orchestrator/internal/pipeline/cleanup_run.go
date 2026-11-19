@@ -218,16 +218,21 @@ func (o *Orchestrator) cleanupChecks(ctx context.Context, ss *session, ref stepR
 		o.cancelStep(ref, elapsed)
 		return nil, false
 	}
-	failed := 0
+	var failed []string
 	for _, s := range snaps {
 		if !s.Passed {
-			failed++
+			failed = append(failed, s.Name)
 		}
+	}
+	summary := fmt.Sprintf("%d comando(s), %d com falha", len(snaps), len(failed))
+	if len(failed) > 0 {
+		summary += ": " + strings.Join(failed, ", ")
 	}
 	o.updateStep(ref, func(s *Step) {
 		s.Status, s.Checks, s.DurationMS = StepDone, results, elapsed.Milliseconds()
-		s.Output = fmt.Sprintf("%d comando(s), %d com falha.", len(snaps), failed)
+		s.Output = summary + "."
 	})
+	o.logf(LevelInfo, "%s: %s (%s).", o.stepTitle(ref), summary, fmtSeconds(elapsed))
 	return snaps, true
 }
 
@@ -311,6 +316,10 @@ func (o *Orchestrator) closeCleanup(final []CheckSnapshot, changed, reasons []st
 		msg += " Revise a branch " + branch + " e faça o merge se quiser."
 	}
 	o.finish(ResultSucceeded, LevelSuccess, msg)
+}
+
+func fmtSeconds(d time.Duration) string {
+	return fmt.Sprintf("%.0f s", d.Seconds())
 }
 
 func (o *Orchestrator) updateCleanup(fn func(*CleanupInfo)) {
