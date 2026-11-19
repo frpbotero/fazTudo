@@ -166,6 +166,28 @@ pendente). Veja o [README da raiz](../README.md).
   passam pelas verificações; vence a com menos problemas e, em empate, um seletor compara os diffs.
   Multiplica o consumo de tokens.
 
+## Saúde do código
+
+Execução separada do fluxo de US que limpa a estrutura de uma área do repositório sem mudar o
+comportamento, com o modo limpeza da skill `structural-health`. Painel → **Saúde do código**, ou
+`faztudo health areas` e `faztudo health run --area CAMINHO`.
+
+- **Onde vale limpar** — sem chamar modelo, o FazTudo pontua as pastas pelo que mais muda nos últimos
+  500 commits, pelos arquivos que mudam juntos (pares entre pastas contam em dobro), pelos ciclos de
+  dependência no grafo do graphify e pelos casos especiais (`sleep`, `retry`, teste pulado, exceção
+  engolida). Mostra as 3 mais críticas com os motivos. Sem grafo, os ciclos ficam de fora (aviso).
+- **Limpeza** — numa branch `faztudo/saude-<área>-<data>`, com o modelo pesado: linha de base de todos
+  os comandos da política, agente da limpeza (até 5 rodadas), verificação. Opções: remover comentários
+  que só repetem o código; remover ou reescrever testes que não pegam bug.
+- **Veredito do orquestrador, nunca do agente** — reprova falha nova em relação à linha de base (pela
+  identidade da falha, então falha antiga não conta), comando que passava e passou a falhar, arquivo
+  alterado fora da área, teste com ID de critério de aceite (`UT-CART-01`) removido e arquivo de entrada
+  ou protegido alterado.
+- **Nada é integrado** — aprovada ou reprovada, a branch fica para revisão e o repositório volta à
+  branch base. Exige `git` ativo na política (em simulação, não cria branch nem roda comandos).
+- **Registro de decisões** — o agente escreve em `faztudo-out/` (fora do git); o resultado guarda o
+  texto e uma cópia vai para `saude/` ao lado das execuções salvas. Limpeza não é retomável: inicie outra.
+
 ## Avaliação (benchmark)
 
 `faztudo -eval suite.json` roda cada configuração (braço) em cada tarefa a partir de uma cópia limpa
@@ -295,7 +317,7 @@ Use `--story US-1` ou `--stories US-1,US-3` para selecionar histórias, `--real`
 títulos de US podem usar `--detect-model --real` para pedir a identificação ao provedor.
 
 `faztudo tui --repo DIR` abre uma interface de terminal com seções de execução, repositório,
-provedores, prompts e logs. A linha de comando aceita as mesmas operações da CLI; Tab troca a seção,
+provedores, prompts, saúde do código e logs. A linha de comando aceita as mesmas operações da CLI; Tab troca a seção,
 as setas rolam a saída e Ctrl+L limpa a saída local.
 
 | Comando | Operação |
@@ -309,6 +331,8 @@ as setas rolam a saída e Ctrl+L limpa a saída local.
 | `providers list/exhaust/restore` | Mostra provedores e simula ou restaura uma cota durante uma execução de console. |
 | `prompts list/show/set/reset` | Consulta, altera ou restaura os prompts. `set` lê o texto de `--file`. |
 | `commit show --id HASH` | Mostra o patch de um commit da execução. |
+| `health areas [--json]` | Sugere as 3 áreas que mais valem uma limpeza, sem chamar modelo. |
+| `health run --area CAMINHO [--comments] [--tests] [--rounds N] [--real]` | Limpa a estrutura da área numa branch própria (código 0 aprovada, 1 reprovada, 2 uso inválido). |
 
 As alterações de configuração passam pela mesma validação da API local e são salvas no mesmo
 `config.json` do painel. O processo de console ativo recebe comandos de outros terminais por arquivos
@@ -356,6 +380,8 @@ web/static/              # dashboard (HTML/CSS/JS sem dependências externas, em
 | `POST` | `/api/pipeline/stop` | Cancela a execução em andamento |
 | `POST` | `/api/pipeline/retry` | Refaz a etapa com falha (`{"story": 0, "step": "review"}`; `story` -1 para discovery/análise) |
 | `POST` | `/api/pipeline/resume` | Continua a última execução parada (falha, cancelada ou app fechado) de onde parou |
+| `GET` | `/api/health/areas` | Áreas sugeridas para limpeza, com indicadores e motivos (sem modelo) |
+| `POST` | `/api/health/start` | `{"area": "internal/pagamentos", "comments": false, "tests": false, "rounds": 3, "dry_run": true}` inicia uma limpeza |
 | `GET` / `PUT` | `/api/config` | `{"default_provider": "codex", "failover": true, "providers": {"claude": {"heavy_model", "std_model", "effort"}}}` (atualização parcial) |
 | `POST` | `/api/providers/{id}/exhaust` | Simula limite de uso (`{"seconds": 45}`) |
 | `POST` | `/api/providers/{id}/restore` | Restaura a cota de um provedor |

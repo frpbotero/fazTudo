@@ -58,6 +58,10 @@ Critérios de aceitação:
     providers: $('providers'), restoreAllBtn: $('restoreAllBtn'),
     runMeta: $('runMeta'), runBadge: $('runBadge'), progress: $('progress'), progressBar: $('progressBar'), steps: $('steps'),
     log: $('log'), autoScroll: $('autoScroll'), clearLogsBtn: $('clearLogsBtn'),
+    cleanupCard: $('cleanupCard'), healthForm: $('healthForm'), healthArea: $('healthArea'),
+    healthComments: $('healthComments'), healthTests: $('healthTests'), healthRounds: $('healthRounds'),
+    healthStartBtn: $('healthStartBtn'), healthSuggestBtn: $('healthSuggestBtn'), healthAreas: $('healthAreas'),
+    healthWarnings: $('healthWarnings'),
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
@@ -1197,7 +1201,8 @@ Critérios de aceitação:
     if (s.status === 'warning') parts.push(pill({ label: 'Com pendências', tone: 'warn' }));
     if (s.stoppedHere && s.status === 'canceled') parts.push(pill({ label: 'Parou aqui', tone: 'warn' }));
     if (s.status === 'skipped') parts.push(`<span>${ctx.isRunStep ? 'Reutilizado' : 'Dispensada'}</span>`);
-    if (s.status === 'failed' && !ctx.run.running) {
+    // A cleanup is not resumable: a new one starts from a fresh baseline.
+    if (s.status === 'failed' && !ctx.run.running && ctx.run.kind !== 'cleanup') {
       parts.push(`<button class="btn btn-sm" type="button" data-retry-step="${esc(s.id)}" data-retry-story="${ctx.isRunStep ? -1 : ctx.si}">${icon('rotate')}Refazer</button>`);
     }
     return parts.join('');
@@ -1269,6 +1274,7 @@ Critérios de aceitação:
       if (run.analysis?.status === 'running') return `Mapeando as dependências entre ${list.length} US.`;
       return 'Preparando a próxima onda.';
     }
+    if (run.kind === 'cleanup') return cleanupFinding(run);
     const failedStory = list.find((s) => s.status === 'failed');
     if (run.result === 'failed') {
       const step = failedStory?.steps.find((s) => s.status === 'failed') || [run.discovery, run.analysis].find((s) => s?.status === 'failed');
@@ -1283,6 +1289,14 @@ Critérios de aceitação:
     const pending = list.filter((s) => s.status === 'warning' || s.status === 'skipped').length;
     const took = run.finished_at ? ` em ${fmtDuration(Date.parse(run.finished_at) - Date.parse(run.started_at))}` : '';
     return `Concluída${esc(took)}: ${delivered} de ${list.length} US entregue${list.length === 1 ? '' : 's'}${pending ? `, ${pending} com pendências` : ''}.`;
+  }
+
+  function cleanupFinding(run) {
+    const took = run.finished_at ? ` em ${fmtDuration(Date.parse(run.finished_at) - Date.parse(run.started_at))}` : '';
+    if (run.result === 'succeeded') return `Limpeza aprovada${esc(took)}. Revise a branch antes de integrar.`;
+    if (run.cleanup?.verdict === 'rejected') return 'Limpeza reprovada. Os motivos estão abaixo; a branch ficou para inspeção.';
+    if (run.result === 'canceled') return 'Limpeza cancelada. O que já foi feito ficou na branch.';
+    return `Limpeza parou. <a href="#saude">Inicie uma nova</a> depois de corrigir a causa.`;
   }
 
   function stat(label, value, tone = '') {
@@ -1360,6 +1374,7 @@ Critérios de aceitação:
   function renderRun(run) {
     markResumeStep(run);
     renderHeader(run);
+    renderCleanup(run);
     artifacts = new Map();
     const list = run.stories || [];
     if (!run.started_at || !list.length) {
@@ -1897,8 +1912,104 @@ Critérios de aceitação:
     el.promptValue.focus();
   });
 
+  // ---------- code health ----------
+  const VERDICTS = {
+    approved: { label: 'Aprovada', tone: 'success' },
+    rejected: { label: 'Reprovada', tone: 'danger' },
+  };
+
+  // The result of a cleanup: verdict, branch, reasons, files and the agent's decision log.
+  function renderCleanup(run) {
+    const c = run.kind === 'cleanup' ? run.cleanup : null;
+    el.cleanupCard.hidden = !c;
+    if (!c) return;
+    const v = VERDICTS[c.verdict] || { label: run.running ? 'Em andamento' : 'Sem veredito', tone: run.running ? 'accent' : 'neutral' };
+    const branch = run.stories?.[0]?.branch;
+    const list = (items) => `<ul>${items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>`;
+    const html = `
+      <div class="cleanup-head">
+        <h2 id="cleanupTitle">Saúde do código: ${esc(c.area === '.' ? 'repositório inteiro' : c.area)}</h2>
+        <span class="pill" data-tone="${v.tone}">${esc(v.label)}</span>
+      </div>
+      ${branch ? `<p class="note">Branch <code>${esc(branch)}</code>${c.base_branch ? ` a partir de <code>${esc(c.base_branch)}</code>` : ''}. Nada foi integrado.</p>` : ''}
+      ${c.reasons?.length ? `<h3>Motivos</h3>${list(c.reasons)}` : ''}
+      ${c.changed?.length ? `<h3>Arquivos alterados (${c.changed.length})</h3>${list(c.changed)}` : ''}
+      ${c.decision_log ? `<details class="cleanup-log"><summary>Registro de decisões</summary><pre>${esc(c.decision_log)}</pre></details>` : ''}`;
+    if (el.cleanupCard.dataset.html !== html) {
+      el.cleanupCard.innerHTML = html;
+      el.cleanupCard.dataset.html = html;
+    }
+  }
+
+  el.healthSuggestBtn.addEventListener('click', async () => {
+    el.healthSuggestBtn.disabled = true;
+    el.healthAreas.innerHTML = '';
+    el.healthWarnings.hidden = true;
+    try {
+      const s = await api('GET', '/api/health/areas');
+      if (!s.areas?.length) {
+        el.healthAreas.innerHTML = '<li class="note">Nenhuma área com indicadores. Informe a área à mão.</li>';
+      } else {
+        el.healthAreas.innerHTML = s.areas.map((a) => `
+          <li>
+            <button type="button" class="health-area" data-area="${esc(a.path)}">
+              <span class="health-area-path">${esc(a.path)}</span>
+              <span class="num muted">${a.score.toFixed(2)}</span>
+            </button>
+            <ul class="health-reasons">${a.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
+          </li>`).join('');
+      }
+      if (s.warnings?.length) {
+        el.healthWarnings.textContent = s.warnings.join(' ');
+        el.healthWarnings.hidden = false;
+      }
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      el.healthSuggestBtn.disabled = false;
+    }
+  });
+
+  el.healthAreas.addEventListener('click', (e) => {
+    const pick = e.target.closest('[data-area]');
+    if (!pick) return;
+    el.healthArea.value = pick.dataset.area;
+    el.healthArea.focus();
+  });
+
+  el.healthForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const area = el.healthArea.value.trim();
+    if (!area) {
+      toast('Informe a área. Use "." para o repositório inteiro.', 'error');
+      el.healthArea.focus();
+      return;
+    }
+    const real = el.healthForm.querySelector('input[name="healthMode"]:checked')?.value === 'real';
+    el.healthStartBtn.disabled = true;
+    try {
+      await api('POST', '/api/health/start', {
+        area, comments: el.healthComments.checked, tests: el.healthTests.checked,
+        rounds: Number(el.healthRounds.value), dry_run: !real,
+      });
+      openDetails.clear();
+      userClosed.clear();
+      viewStory = null;
+      viewWave = null;
+      toast(`Limpeza de ${area === '.' ? 'todo o repositório' : area} iniciada.`, 'success');
+      location.hash = '#execucao';
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      el.healthStartBtn.disabled = false;
+    }
+  });
+
   // ---------- views ----------
-  const VIEWS = { execucao: 'Execução', nova: 'Nova execução', repositorio: 'Repositório', provedores: 'Provedores', prompts: 'Prompts', logs: 'Logs' };
+  const VIEWS = {
+    execucao: 'Execução', nova: 'Nova execução', repositorio: 'Repositório', provedores: 'Provedores',
+    prompts: 'Prompts', saude: 'Saúde do código', logs: 'Logs',
+  };
   const viewFromHash = () => (VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : null);
 
   function showView(name) {

@@ -55,3 +55,12 @@ func TestTUIUpdatesTargetAfterRepositoryChange(t *testing.T) {
 		t.Fatalf("repositório = %q", got)
 	}
 }
+
+func TestTUIHasCodeHealthSection(t *testing.T) {
+	for _, tab := range tuiTabs {
+		if tab.name == "Saúde do código" && tab.defaultCommand == "health areas" {
+			return
+		}
+	}
+	t.Fatal("TUI must offer the code health commands")
+}

@@ -9,11 +9,14 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/workspace"
 )
 
 // AreaScore is one candidate area and the indicators behind its score.
@@ -33,6 +36,16 @@ type AreaSuggestion struct {
 	Commits  int         `json:"commits"`
 	Graph    bool        `json:"graph"`
 	Warnings []string    `json:"warnings,omitempty"`
+}
+
+// DefaultGraph is graphify's graph of repo when it exists; "" otherwise.
+// Suggestions read the graph the last run left and never rebuild it.
+func DefaultGraph(repo string) string {
+	p := filepath.Join(repo, workspace.GraphDir, "graph.json")
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
 }
 
 // topAreas is how many areas a suggestion lists.

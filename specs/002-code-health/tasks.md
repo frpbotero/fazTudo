@@ -77,23 +77,23 @@ com as opções refletidas no prompt.
 
 ### Testes
 
-- [ ] T028 [P] [US3] Testar no prompt: sem opções, comentários e testes fora do escopo; cada opção marcada aparece como `sim` e a outra como `não`, em `llm-orchestrator/internal/pipeline/cleanup_prompt_test.go`
-- [ ] T029 [P] [US3] Testar `GET /api/health/areas` (200, 409 sem repositório) e `POST /api/health/start` (202, 400 área/rodadas inválidas, 409 ocupado/sem git), e resume/retry `409` em limpeza, conforme [contracts/http.md](contracts/http.md), em `llm-orchestrator/internal/server/server_test.go`
-- [ ] T030 [P] [US3] Testar `health areas` (`--json`) e `health run` (simulação, códigos de saída 0/1/2, `--rounds` fora de 1–5) conforme [contracts/console.md](contracts/console.md) em `llm-orchestrator/console_test.go`
+- [X] T028 [P] [US3] Testar no prompt: sem opções, comentários e testes fora do escopo; cada opção marcada aparece como `sim` e a outra como `não`, em `llm-orchestrator/internal/pipeline/cleanup_prompt_test.go`
+- [X] T029 [P] [US3] Testar `GET /api/health/areas` (200, 409 sem repositório) e `POST /api/health/start` (202, 400 área/rodadas inválidas, 409 ocupado/sem git), e resume/retry `409` em limpeza, conforme [contracts/http.md](contracts/http.md), em `llm-orchestrator/internal/server/server_test.go`
+- [X] T030 [P] [US3] Testar `health areas` (`--json`) e `health run` (simulação, códigos de saída 0/1/2, `--rounds` fora de 1–5) conforme [contracts/console.md](contracts/console.md) em `llm-orchestrator/console_test.go`
 
 ### Implementação
 
-- [ ] T031 [US3] Adicionar rotas `GET /api/health/areas` e `POST /api/health/start` em `llm-orchestrator/internal/server/server.go`
-- [ ] T032 [US3] Adicionar `health areas` e `health run` (acompanhamento em primeiro plano como `run`, Ctrl+C, `status`/`stop` de outro terminal) e a ajuda em `llm-orchestrator/console.go` e `llm-orchestrator/console_actions.go`
-- [ ] T033 [US3] Aceitar `health areas` e `health run` na linha de comandos contextual da TUI em `llm-orchestrator/console_tui.go`, com teste em `llm-orchestrator/console_tui_test.go`
-- [ ] T034 [US3] Criar a seção "Saúde do código" no painel (botão "Sugerir áreas", lista com motivos, campo de área, opções Comentários/Testes, rodadas, "Iniciar limpeza") e o cartão de resultado (veredito, motivos, branch, arquivos, registro de decisões) em `llm-orchestrator/web/static/index.html`, `llm-orchestrator/web/static/app.js` e `llm-orchestrator/web/static/app.css`
+- [X] T031 [US3] Adicionar rotas `GET /api/health/areas` e `POST /api/health/start` em `llm-orchestrator/internal/server/server.go`
+- [X] T032 [US3] Adicionar `health areas` e `health run` (acompanhamento em primeiro plano como `run`, Ctrl+C, `status`/`stop` de outro terminal) e a ajuda em `llm-orchestrator/console_health.go`, `llm-orchestrator/console.go` e `llm-orchestrator/console_actions.go`
+- [X] T033 [US3] Aceitar `health areas` e `health run` na linha de comandos contextual da TUI em `llm-orchestrator/console_tui.go`, com teste em `llm-orchestrator/console_tui_test.go`
+- [X] T034 [US3] Criar a seção "Saúde do código" no painel (botão "Sugerir áreas", lista com motivos, campo de área, opções Comentários/Testes, rodadas, "Iniciar limpeza") e o cartão de resultado (veredito, motivos, branch, arquivos, registro de decisões) em `llm-orchestrator/web/static/index.html`, `llm-orchestrator/web/static/app.js` e `llm-orchestrator/web/static/app.css`
 
 **Checkpoint**: T028–T030 verdes; quickstart de interface validado em simulação.
 
 ## Fase 6: Entrega
 
-- [ ] T035 [P] Documentar a Saúde do código (sugestão, limpeza, proteções, comandos) em `llm-orchestrator/README.md`
-- [ ] T036 Rodar `cd llm-orchestrator && make lint && make test` e `go build -tags desktop ./...`, e o roteiro simulado de [quickstart.md](quickstart.md)
+- [X] T035 [P] Documentar a Saúde do código (sugestão, limpeza, proteções, comandos) em `llm-orchestrator/README.md`
+- [X] T036 Rodar `cd llm-orchestrator && make lint && make test` e `go build -tags desktop ./...`, e o roteiro simulado de [quickstart.md](quickstart.md)
 
 ## Dependências e ordem
 

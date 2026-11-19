@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -465,5 +466,77 @@ func TestPromptTextStaysOutOfTheLogs(t *testing.T) {
 
 	if strings.Contains(logs.String(), "texto-confidencial") {
 		t.Fatalf("logs = %s", logs.String())
+	}
+}
+
+func TestHealthEndpoints(t *testing.T) {
+	ts, orch := newTestServer(t)
+	var state workspace.State
+	if err := json.NewDecoder(do(t, ts, "GET", "/api/workspace", "").Body).Decode(&state); err != nil {
+		t.Fatal(err)
+	}
+	repo := state.Path
+	if err := os.MkdirAll(filepath.Join(repo, "src", "pay"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "src", "pay", "a.go"), []byte("time.Sleep(1)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "src", "cart"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "src", "cart", "b.go"), []byte("package cart\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := do(t, ts, "GET", "/api/health/areas", "")
+	var s struct {
+		Areas []struct {
+			Path string `json:"path"`
+		} `json:"areas"`
+		Warnings []string `json:"warnings"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&s) != nil || len(s.Areas) != 1 || s.Areas[0].Path != "src/pay" {
+		t.Fatalf("areas: status %d, %+v", resp.StatusCode, s)
+	}
+
+	for body, want := range map[string]int{
+		`{"area": "nope", "dry_run": true}`:           http.StatusBadRequest,
+		`{"area": "../x", "dry_run": true}`:           http.StatusBadRequest,
+		`{"area": ".", "rounds": 9, "dry_run": true}`: http.StatusBadRequest,
+	} {
+		if resp := do(t, ts, "POST", "/api/health/start", body); resp.StatusCode != want {
+			t.Errorf("start %s: status %d, want %d", body, resp.StatusCode, want)
+		}
+	}
+
+	if resp := do(t, ts, "POST", "/api/health/start", `{"area": "src/pay", "dry_run": true}`); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("simulated cleanup: status %d", resp.StatusCode)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := orch.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if run := orch.Snapshot(); run.Kind != pipeline.RunCleanup || run.Cleanup == nil || run.Cleanup.Verdict != pipeline.VerdictApproved {
+		t.Fatalf("run = %+v", run.Cleanup)
+	}
+	for _, path := range []string{"/api/pipeline/resume"} {
+		if resp := do(t, ts, "POST", path, ""); resp.StatusCode != http.StatusConflict {
+			t.Errorf("%s after a cleanup: status %d, want 409", path, resp.StatusCode)
+		}
+	}
+	if resp := do(t, ts, "POST", "/api/pipeline/retry", `{"story": 0, "step": "cleanup"}`); resp.StatusCode != http.StatusConflict {
+		t.Errorf("retry after a cleanup: status %d, want 409", resp.StatusCode)
+	}
+
+	policy := state.Policy
+	policy.Git = false
+	data, _ := json.Marshal(policy)
+	if resp := do(t, ts, "PUT", "/api/workspace/policy", string(data)); resp.StatusCode != http.StatusOK {
+		t.Fatalf("policy: status %d", resp.StatusCode)
+	}
+	if resp := do(t, ts, "POST", "/api/health/start", `{"area": "src/pay"}`); resp.StatusCode != http.StatusConflict {
+		t.Errorf("real cleanup without git: status %d, want 409", resp.StatusCode)
 	}
 }

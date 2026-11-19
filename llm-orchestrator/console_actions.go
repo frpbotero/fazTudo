@@ -345,4 +345,7 @@ func printRunStatus(out io.Writer, run pipeline.Run) {
 	if run.Resume != nil {
 		fmt.Fprintf(out, "Retomar: %s\n", run.Resume.Title)
 	}
+	if run.Kind == pipeline.RunCleanup {
+		printCleanup(out, run)
+	}
 }

@@ -3,7 +3,8 @@
 ## GET /api/health/areas
 
 `200` → `AreaSuggestion` ([data-model](../data-model.md)).
-`409` repositório não configurado. Sem efeitos colaterais; não chama modelo.
+`422` repositório não configurado (como os demais endpoints). Sem efeitos colaterais; não chama modelo e só
+lê o `graph.json` que já existir (não reconstrói o grafo).
 
 ## POST /api/health/start
 

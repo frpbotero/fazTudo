@@ -218,3 +218,49 @@ func TestConsoleFiltersSavedLogs(t *testing.T) {
 		t.Fatalf("filtro incorreto: %s", out.String())
 	}
 }
+
+func TestConsoleHealthSuggestsAndRunsACleanup(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	for rel, text := range map[string]string{"src/pay/a.go": "time.Sleep(1)\n", "src/cart/b.go": "package cart\n"} {
+		p := filepath.Join(repo, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call := func(args ...string) (string, string, int) {
+		t.Helper()
+		var out, errors bytes.Buffer
+		code := runConsole(append(args, "--repo", repo, "--config", ""), strings.NewReader(""), &out, &errors)
+		return out.String(), errors.String(), code
+	}
+
+	out, msg, code := call("health", "areas")
+	if code != 0 || !strings.Contains(out, "1. src/pay") || !strings.Contains(out, "sleep 1") || !strings.Contains(msg, "aviso:") {
+		t.Fatalf("health areas: %d %s %s", code, out, msg)
+	}
+	out, _, code = call("health", "areas", "--json")
+	var s struct {
+		Areas []struct{ Path string } `json:"areas"`
+	}
+	if code != 0 || json.Unmarshal([]byte(out), &s) != nil || len(s.Areas) != 1 {
+		t.Fatalf("health areas --json: %d %s", code, out)
+	}
+
+	out, msg, code = call("health", "run", "--area", "src/pay", "--comments", "--sim-delay", "1ms")
+	if code != 0 || !strings.Contains(out, "Limpeza aprovada na área src/pay") {
+		t.Fatalf("health run: %d %s %s", code, out, msg)
+	}
+
+	for _, args := range [][]string{{"health", "run"}, {"health", "run", "--area", "src", "--rounds", "6"}, {"health"}, {"health", "x"}} {
+		if _, _, code := call(args...); code != 2 {
+			t.Errorf("%v: code %d, want 2", args, code)
+		}
+	}
+	if _, msg, code := call("health", "run", "--area", "nope", "--sim-delay", "1ms"); code != 1 || !strings.Contains(msg, "área inválida") {
+		t.Errorf("missing area: %d %s", code, msg)
+	}
+}

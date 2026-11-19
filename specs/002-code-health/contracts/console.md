@@ -10,5 +10,6 @@ faztudo health run --area CAMINHO [--repo DIR] [--comments] [--tests] [--rounds 
 - `health run`: inicia a limpeza e acompanha em primeiro plano como `run` (eventos, Ctrl+C para, `status`/`stop`
   de outro terminal funcionam). Simulação por padrão; `--real` executa de verdade.
 - Saída final: veredito, branch, arquivos alterados, motivos da reprovação e caminho do registro de decisões.
-- Códigos de saída: `0` aprovada; `1` reprovada ou erro; `2` uso inválido (área ausente, `--rounds` fora de 1–5).
+- Códigos de saída: `0` aprovada; `1` reprovada ou erro (inclui área inexistente); `2` uso inválido
+  (`--area` ausente, `--rounds` fora de 1–5); `130` cancelada, como `run`.
 - `faztudo help` e a TUI listam os dois comandos; a TUI os executa pela linha de comandos contextual.
