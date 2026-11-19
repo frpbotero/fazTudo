@@ -27,6 +27,7 @@ var tuiTabs = []struct {
 	{"Repositório", "repo show | repo branches | repo base --path . --id main | policy show/apply --file politica.json", "repo show"},
 	{"Provedores", "providers list | config show/apply --file config.json | providers exhaust/restore --id claude", "providers list"},
 	{"Prompts", "prompts list/show --id CHAVE | prompts set --id CHAVE --file prompt.txt | prompts reset --id CHAVE", "prompts list"},
+	{"Saúde do código", "health areas | health run --area CAMINHO [--comments] [--tests] [--rounds N] [--real]", "health areas"},
 	{"Logs", "logs | status --json", "logs"},
 }
 

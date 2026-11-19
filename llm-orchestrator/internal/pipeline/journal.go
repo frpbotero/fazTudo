@@ -65,6 +65,10 @@ func (o *Orchestrator) Resume() error {
 	if !o.isJournalOwner {
 		o.loadJournalLocked(o.ws.Path())
 	}
+	if o.run.Kind == RunCleanup {
+		o.mu.Unlock()
+		return ErrCleanupNotResumable
+	}
 	point := o.resumePointLocked()
 	o.mu.Unlock()
 	if point == nil {

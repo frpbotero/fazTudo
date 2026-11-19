@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"llm-orchestrator/internal/health"
 	"llm-orchestrator/internal/pipeline"
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/settings"
@@ -111,6 +112,8 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/pipeline/stop", s.handleStop)
 	mux.HandleFunc("POST /api/pipeline/retry", s.handleRetry)
 	mux.HandleFunc("POST /api/pipeline/resume", s.handleResume)
+	mux.HandleFunc("GET /api/health/areas", s.handleHealthAreas)
+	mux.HandleFunc("POST /api/health/start", s.handleHealthStart)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
 	mux.HandleFunc("PUT /api/workspace", s.handlePutWorkspace)
 	mux.HandleFunc("DELETE /api/workspace/discovery", s.handleResetDiscovery)
@@ -364,13 +367,56 @@ func (s *Server) handleStop(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleResume(w http.ResponseWriter, _ *http.Request) {
 	if err := s.orch.Resume(); err != nil {
 		status := http.StatusUnprocessableEntity
-		if errors.Is(err, pipeline.ErrAlreadyRunning) || errors.Is(err, workspace.ErrRepositoryBusy) {
+		if isConflict(err) {
 			status = http.StatusConflict
 		}
 		writeError(w, status, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "resuming"})
+}
+
+// isConflict tells the errors that depend on what else is running.
+func isConflict(err error) bool {
+	return errors.Is(err, pipeline.ErrAlreadyRunning) || errors.Is(err, workspace.ErrRepositoryBusy) ||
+		errors.Is(err, pipeline.ErrCleanupNotResumable)
+}
+
+// handleHealthAreas suggests where a code health run is worth it. It calls
+// no model and changes nothing.
+func (s *Server) handleHealthAreas(w http.ResponseWriter, r *http.Request) {
+	repo := s.ws.Path()
+	if repo == "" {
+		writeError(w, http.StatusUnprocessableEntity, "configure o repositório antes de pedir sugestões")
+		return
+	}
+	suggestion, err := health.Suggest(r.Context(), repo, health.DefaultGraph(repo))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, suggestion)
+}
+
+// handleHealthStart launches a code health run on one area.
+func (s *Server) handleHealthStart(w http.ResponseWriter, r *http.Request) {
+	var opts pipeline.CleanupOptions
+	if !decodeJSON(w, r, &opts) {
+		return
+	}
+	err := s.orch.StartCleanup(opts)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "started", "area": opts.Area})
+	case errors.Is(err, pipeline.ErrInvalidArea), errors.Is(err, pipeline.ErrInvalidRounds):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case isConflict(err), errors.Is(err, pipeline.ErrCleanupNeedsGit):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, workspace.ErrNotConfigured):
+		writeError(w, http.StatusUnprocessableEntity, "configure o repositório antes de iniciar")
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
@@ -383,7 +429,7 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.orch.RetryFailed(body.Story, strings.TrimSpace(body.Step)); err != nil {
 		status := http.StatusUnprocessableEntity
-		if errors.Is(err, pipeline.ErrAlreadyRunning) || errors.Is(err, workspace.ErrRepositoryBusy) {
+		if isConflict(err) {
 			status = http.StatusConflict
 		}
 		writeError(w, status, err.Error())

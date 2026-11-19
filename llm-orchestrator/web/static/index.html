@@ -60,6 +60,7 @@
         <a href="#repositorio" data-view-link="repositorio"><svg class="icon"><use href="#i-folder"/></svg><span>Repositório</span></a>
         <a href="#provedores" data-view-link="provedores"><svg class="icon"><use href="#i-sliders"/></svg><span>Provedores</span></a>
         <a href="#prompts" data-view-link="prompts"><svg class="icon"><use href="#i-file"/></svg><span>Prompts</span></a>
+        <a href="#saude" data-view-link="saude"><svg class="icon"><use href="#i-wrench"/></svg><span>Saúde do código</span></a>
         <a href="#logs" data-view-link="logs"><svg class="icon"><use href="#i-clock"/></svg><span>Logs</span><span class="nav-count" id="navIssues" hidden></span></a>
       </nav>
 
@@ -119,6 +120,8 @@
           <div class="story-head" id="storyHead"></div>
           <ol class="steps" id="steps"></ol>
         </section>
+
+        <section class="panel cleanup-card" id="cleanupCard" aria-labelledby="cleanupTitle" hidden></section>
 
         <div class="empty" id="runEmpty">
           <p>Nenhuma execução nesta sessão.</p>
@@ -192,6 +195,60 @@
             </fieldset>
             <div class="model-summary" id="modelSummary"></div>
             <label class="check"><input type="checkbox" id="failoverToggle"> Failover para o outro provedor ao atingir o limite de uso</label>
+          </aside>
+        </div>
+      </section>
+
+      <!-- Saúde do código -->
+      <section class="view" data-view="saude" aria-labelledby="healthTitle" hidden>
+        <div class="title-row">
+          <div>
+            <h1 id="healthTitle">Saúde do código</h1>
+            <p class="subline">Limpa a estrutura de uma área sem mudar o comportamento. O resultado é uma branch para você revisar; nada é integrado.</p>
+          </div>
+        </div>
+        <div class="split">
+          <form id="healthForm" class="panel stack" novalidate>
+            <div class="field">
+              <label for="healthArea">Área</label>
+              <input type="text" id="healthArea" placeholder="internal/pagamentos" autocomplete="off" spellcheck="false">
+              <p class="note">Pasta relativa ao repositório. Use <code>.</code> para o repositório inteiro.</p>
+            </div>
+            <fieldset class="field">
+              <legend class="field-label">Também</legend>
+              <label class="check"><input type="checkbox" id="healthComments"> Remover comentários que só repetem o código</label>
+              <label class="check"><input type="checkbox" id="healthTests"> Remover ou reescrever testes que não pegam bug</label>
+            </fieldset>
+            <div class="form-grid">
+              <div class="field">
+                <label for="healthRounds">Rodadas</label>
+                <select id="healthRounds">
+                  <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option>
+                  <option value="4">4</option><option value="5">5</option>
+                </select>
+              </div>
+              <div class="field">
+                <span class="field-label" id="healthModeLabel">Modo</span>
+                <div class="segmented" role="radiogroup" aria-labelledby="healthModeLabel">
+                  <label><input type="radio" name="healthMode" value="dry" checked><span>Simulação</span></label>
+                  <label><input type="radio" name="healthMode" value="real"><span>Execução real</span></label>
+                </div>
+              </div>
+            </div>
+            <p class="note">Lint e testes rodam antes e depois. Falha nova, arquivo fora da área ou teste de critério removido reprovam a limpeza.</p>
+            <div class="actions">
+              <button class="btn btn-primary" id="healthStartBtn" type="submit">
+                <svg class="icon"><use href="#i-play"/></svg><span>Iniciar limpeza</span>
+              </button>
+            </div>
+          </form>
+
+          <aside class="panel aside" aria-labelledby="healthAreasTitle">
+            <h2 id="healthAreasTitle">Onde vale limpar</h2>
+            <p class="note">Indicadores do git e do grafo do código, sem chamar modelo.</p>
+            <div><button class="btn btn-sm" id="healthSuggestBtn" type="button">Sugerir áreas</button></div>
+            <ol class="health-areas" id="healthAreas"></ol>
+            <p class="note" data-tone="warn" id="healthWarnings" hidden></p>
           </aside>
         </div>
       </section>

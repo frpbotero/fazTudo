@@ -137,6 +137,8 @@ type StoryRun struct {
 // Run describes the current or last pipeline execution: a shared discovery
 // followed by one or more stories developed in sequence.
 type Run struct {
+	// Kind is RunCleanup for a code health run, empty for a story run.
+	Kind       string     `json:"kind,omitempty"`
 	Running    bool       `json:"running"`
 	Source     string     `json:"source,omitempty"`
 	Repository string     `json:"repository,omitempty"`
@@ -162,6 +164,8 @@ type Run struct {
 	Bases map[string]string `json:"bases,omitempty"`
 	// Resume is where a stopped run continues; nil while running or done.
 	Resume *ResumePoint `json:"resume,omitempty"`
+	// Cleanup holds a code health run's options, checks and verdict.
+	Cleanup *CleanupInfo `json:"cleanup,omitempty"`
 }
 
 // StartOptions configures a run.
@@ -265,6 +269,12 @@ func (o *Orchestrator) Snapshot() Run {
 		r.Stories[i].Steps = slices.Clone(r.Stories[i].Steps)
 	}
 	r.Logs = slices.Clone(o.run.Logs)
+	if o.run.Cleanup != nil {
+		c := *o.run.Cleanup
+		c.Baseline, c.Final = slices.Clone(c.Baseline), slices.Clone(c.Final)
+		c.Reasons, c.Changed = slices.Clone(c.Reasons), slices.Clone(c.Changed)
+		r.Cleanup = &c
+	}
 	if o.run.Analysis != nil {
 		analysis := *o.run.Analysis
 		r.Analysis = &analysis
@@ -386,6 +396,10 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	if o.busyLocked() {
 		o.mu.Unlock()
 		return ErrAlreadyRunning
+	}
+	if o.run.Kind == RunCleanup {
+		o.mu.Unlock()
+		return ErrCleanupNotResumable
 	}
 	if story == -1 && o.isResumableLocked() && len(o.last.Stories) > 0 && o.runStepStopped(stepID) {
 		opts := o.last

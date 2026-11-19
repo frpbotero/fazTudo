@@ -180,3 +180,32 @@ func shortID(id string) string {
 	}
 	return ""
 }
+
+// reCriterionID finds acceptance-criterion IDs inside test code: a qualified
+// ID such as UT-CART-01, with at least one segment between prefix and number,
+// so tokens like UTF-8 or SHA-256 do not count.
+var reCriterionID = regexp.MustCompile(`(?:^|[^A-Za-z0-9-])([A-Z][A-Z0-9]{0,9}(?:-[A-Z0-9]{1,10})+-\d{1,4})(?:[^A-Za-z0-9-]|$)`)
+
+// TestIDs lists, sorted, the acceptance-criterion IDs the repository's test
+// files mention. A cleanup may rewrite such a test but never drop its ID.
+func TestIDs(root string) []string {
+	seen := map[string]bool{}
+	walk(root, func(rel string, _ fs.FileInfo) {
+		if !IsTestFile(rel) {
+			return
+		}
+		text, ok := readFile(root, rel)
+		if !ok {
+			return
+		}
+		for _, m := range reCriterionID.FindAllStringSubmatch(text, -1) {
+			seen[m[1]] = true
+		}
+	})
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}

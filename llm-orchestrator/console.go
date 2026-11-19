@@ -52,10 +52,12 @@ func runConsole(args []string, input io.Reader, out, errOut io.Writer) int {
   faztudo providers list | exhaust --id ID [--seconds N] | restore [--id ID]
   faztudo prompts list | show --id CHAVE | set --id CHAVE --file ARQUIVO | reset --id CHAVE
   faztudo commit show --id HASH
+  faztudo health areas [--repo DIR] [--json]
+  faztudo health run --area CAMINHO [--repo DIR] [--comments] [--tests] [--rounds N] [--real]
   faztudo tui [--repo DIR]
 
 Use --config ARQUIVO para escolher a configuração. Use --file - para ler da entrada padrão.
-run usa simulação por padrão; --real permite execução real e consumo de tokens.
+run e health run usam simulação por padrão; --real permite execução real e consumo de tokens.
 `)
 		return 0
 	}
@@ -64,6 +66,8 @@ run usa simulação por padrão; --real permite execução real e consumo de tok
 		return consoleRun(args[1:], input, out, errOut)
 	case "tui":
 		return consoleTUI(args[1:], input, out, errOut)
+	case "health":
+		return consoleHealth(args[1:], input, out, errOut)
 	default:
 		return consoleAction(args, input, out, errOut)
 	}
@@ -302,13 +306,18 @@ func (c *consoleRuntime) waitRun(out, errOut io.Writer) int {
 			for _, story := range run.Stories {
 				fmt.Fprintf(out, "%s: %s (%s)\n", story.ID, story.Title, story.Status)
 			}
+			if run.Kind == pipeline.RunCleanup {
+				printCleanup(out, run)
+			}
 			if err != nil {
 				fmt.Fprintln(errOut, "erro:", err)
 				return 1
 			}
 			switch run.Result {
 			case pipeline.ResultSucceeded:
-				fmt.Fprintf(out, "Execução concluída: %d User Story(s).\n", len(run.Stories))
+				if run.Kind != pipeline.RunCleanup {
+					fmt.Fprintf(out, "Execução concluída: %d User Story(s).\n", len(run.Stories))
+				}
 				return 0
 			case pipeline.ResultCanceled:
 				fmt.Fprintln(out, "Execução cancelada.")

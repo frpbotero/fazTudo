@@ -260,3 +260,25 @@ func TestTraceFindsTestCodeOutsideTestNames(t *testing.T) {
 		t.Errorf("a plain source comment is not a test: %+v", traces[1])
 	}
 }
+
+func TestTestIDsListCriterionIDsOfTestFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, text string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/cart.test.ts", "it('UT-CART-01 soma itens', () => {}) // UTF-8, SHA-256\nit(\"IT-CART-PAY-2\", f)")
+	write("pkg/cart_test.go", "func TestUT_CART_03(t *testing.T) {} // E2E-CHECKOUT-07")
+	write("src/cart.ts", "// UT-CART-99 is not a test file")
+	got := TestIDs(root)
+	want := []string{"E2E-CHECKOUT-07", "IT-CART-PAY-2", "UT-CART-01"}
+	if !slices.Equal(got, want) {
+		t.Errorf("TestIDs = %v, want %v", got, want)
+	}
+}
