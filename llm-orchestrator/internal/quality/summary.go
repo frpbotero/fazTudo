@@ -15,11 +15,24 @@ var failureLine = regexp.MustCompile(`(?i)(\bfail|\berror\b|error:|panic|excepti
 // the first frames under a failing test name.
 const summaryContext = 2
 
+// readableLines drops terminal control codes, progress counters and immediate
+// repetitions.
+func readableLines(output string) []string {
+	var lines []string
+	for _, raw := range strings.FieldsFunc(strings.TrimSpace(output), func(r rune) bool { return r == '\n' || r == '\r' }) {
+		line := cleanLine(raw)
+		if line != "" && (len(lines) == 0 || lines[len(lines)-1] != line) {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
 // FailureSummary reduces a command's output to its failures: the matching
 // lines with a little context and the runner's closing summary, at most
 // maxLines. Without any recognisable failure it falls back to the tail.
 func FailureSummary(output string, maxLines int) string {
-	lines := strings.Split(strings.TrimSpace(output), "\n")
+	lines := readableLines(output)
 	if len(lines) <= maxLines {
 		return strings.Join(lines, "\n")
 	}

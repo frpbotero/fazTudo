@@ -92,8 +92,10 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
 6. **Documentação do fluxo** (`docs`, quando o arquiteto julga necessária) roda por último:
    guia de uso para o cliente final e/ou fluxo, contratos e pontos de extensão para quem fará
    manutenção, no lugar onde o projeto já documenta (README, `docs/`, ADR) ou em `docs/<us>.md`.
-7. Instruções do projeto (`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.cursorrules`)
-   são repassadas a todos os agentes, seja qual for o CLI.
+7. Instruções do projeto (`AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `.github/copilot-instructions.md`,
+   `.cursorrules`, com os arquivos que importam via `@caminho` dentro do repositório) vão no prompt de
+   todo agente, seja qual for o CLI: discovery, análise de sequência, etapas, correções, integração e
+   seletor. `AGENTS.md`/`CLAUDE.md` de subpastas são listados para o agente ler ao mexer nelas.
 
 ## Portões de qualidade
 
@@ -120,7 +122,26 @@ pendente). Veja o [README da raiz](../README.md).
   orquestrador roda os comandos do projeto (detectados em `package.json`, `go.mod`, `pyproject.toml`…
   ou definidos manualmente, com `CI=1` e tempo limite), checa a sintaxe dos JS alterados e dos
   `<script>` inline de HTML (`node --check`), `gofmt` e linhas longas/código minificado. Cada falha
-  volta ao implementador responsável com a saída do comando; até 3 rodadas; depois disso a US segue *Com pendências*.
+  volta ao implementador responsável; depois das rodadas de correção a US segue *Com pendências*.
+- **Correção por causa raiz** — os comandos rodam em camadas (build, unitários, integração, E2E) e param na
+  primeira que falha. Cada falha ganha uma identidade estável: o mesmo erro em dois comandos é uma causa só, e o
+  dono sai do arquivo que falhou, das frentes do plano e da stack do diretório. Falha de teste, ou mais de uma
+  causa, passa antes por um investigador que reproduz, testa hipóteses e entrega um dossiê (causa raiz, evidência,
+  estratégia, teste de regressão), sem poder editar arquivos. O implementador corrige uma causa por vez, com teste
+  que prove. Depois de uma correção rodam só os comandos que falharam e, quando passam, os demais; sem arquivo
+  alterado, nada roda de novo. Cada causa tem até 2 tentativas, a segunda com o modelo pesado. Vira pendência, com
+  o dossiê, se persistir, se o agente responder `blocked` ou se já vinha de uma US anterior sem que esta tenha
+  alterado o arquivo da falha. Testes E2E da especificação só são cobrados com a etapa E2E ligada.
+- **Stacks de teste** — comando que sobe stack (`e2e`, `playwright`, `cypress`, `compose`, `docker`) roda um
+  por vez na máquina, mesmo entre janelas do FazTudo. No tempo limite ou ao parar, o grupo de processos recebe
+  `SIGINT` e tem 60 s para rodar o teardown antes do `SIGKILL`. Depois, no início e no fim de cada execução, o
+  FazTudo remove os projetos do Docker Compose cujo nome casa com **Stacks de teste descartáveis** (padrão
+  `*-e2e-*`) e cujo arquivo compose está no repositório. Comando que estoura o tempo limite vira pendência, sem
+  rodada de correção: não indica erro no código.
+- **Prompts** — a tela *Prompts* mostra o texto de cada etapa, foco de revisão e regra compartilhada, e como a
+  chamada é montada. O que difere do padrão fica em `config.json` (`prompts`), vale para todos os repositórios a
+  partir da próxima execução, e o início da execução registra o que está customizado. Contratos de saída em JSON
+  aparecem só para leitura, e permissões não passam por essa tela. Para regras de um projeto, use `AGENTS.md`.
 - **Resiliência** — cada chamada de agente tem tempo limite (60 min); o processo e os filhos (ex.: um
   `ng serve` esquecido) são encerrados juntos. Chamada que falha ou expira é refeita até 3 vezes, com
   espera crescente e aviso para o agente retomar de onde parou.
@@ -255,6 +276,34 @@ make dev          # go run com logs em nível debug
 > configurados rodam no shell. Por isso o servidor escuta apenas em
 > `127.0.0.1` por padrão e rejeita requisições de escrita vindas de outras origens.
 > Não exponha a porta em redes não confiáveis.
+
+## Console
+
+`faztudo run --repo DIR --file US.md` executa as US em simulação e mostra os eventos no terminal.
+Use `--story US-1` ou `--stories US-1,US-3` para selecionar histórias, `--real` para execução real,
+`--rediscover` para refazer o mapeamento e `--file -` para ler da entrada padrão. Documentos sem
+títulos de US podem usar `--detect-model --real` para pedir a identificação ao provedor.
+
+`faztudo tui --repo DIR` abre uma interface de terminal com seções de execução, repositório,
+provedores, prompts e logs. A linha de comando aceita as mesmas operações da CLI; Tab troca a seção,
+as setas rolam a saída e Ctrl+L limpa a saída local.
+
+| Comando | Operação |
+|---------|----------|
+| `status [--json]`, `logs [--level info,warn]` | Consulta a execução e seus eventos. |
+| `stop`, `resume`, `retry --story N --step ID` | Para, continua ou refaz uma etapa. |
+| `stories parse --file US.md` | Mostra as US e o contexto comum identificados. |
+| `repo show/set/branches/base/discovery-reset` | Gerencia o repositório, as branches base e o discovery. |
+| `policy show/apply --file arquivo.json` | Consulta ou aplica todos os campos da política de qualidade. |
+| `config show/apply --file arquivo.json` | Consulta ou aplica a configuração de provedores e modelos. |
+| `providers list/exhaust/restore` | Mostra provedores e simula ou restaura uma cota durante uma execução de console. |
+| `prompts list/show/set/reset` | Consulta, altera ou restaura os prompts. `set` lê o texto de `--file`. |
+| `commit show --id HASH` | Mostra o patch de um commit da execução. |
+
+As alterações de configuração passam pela mesma validação da API local e são salvas no mesmo
+`config.json` do painel. O processo de console ativo recebe comandos de outros terminais por arquivos
+privados ao lado da configuração, sem servidor HTTP. Sem persistência (`--config ''`), outras instâncias
+não conseguem consultar nem controlar a execução ativa; a parada usa Ctrl+C no próprio terminal.
 
 ## Desenvolvimento
 

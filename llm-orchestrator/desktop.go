@@ -53,7 +53,8 @@ func runDesktop() error {
 	}
 	store := settings.NewStore(desktopEnvOr("FAZTUDO_CONFIG", settings.DefaultPath()))
 	ws.SetCacheDir(settings.DiscoveryDir(store.Path()))
-	if file, loadErr := store.Load(); loadErr != nil {
+	file, loadErr := store.Load()
+	if loadErr != nil {
 		logger.Warn("configuração salva ignorada", "err", loadErr)
 	} else {
 		overrides := settings.Overrides{
@@ -67,6 +68,9 @@ func runDesktop() error {
 
 	hub := server.NewHub()
 	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
+	for _, applyErr := range orch.LoadPrompts(file.Prompts) {
+		logger.Warn("parte da configuração salva ignorada", "err", applyErr)
+	}
 	orch.SetJournalDir(settings.RunsDir(store.Path()))
 	orch.SetUsageLog(settings.UsageLog(store.Path()))
 	srv := server.New(ctx, server.Deps{

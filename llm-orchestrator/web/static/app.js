@@ -61,7 +61,11 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qualityError: $('qualityError'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
+    promptsError: $('promptsError'), promptList: $('promptList'), promptForm: $('promptForm'), promptTitle: $('promptTitle'),
+    promptDescription: $('promptDescription'), promptParts: $('promptParts'), promptWarning: $('promptWarning'), promptValue: $('promptValue'),
+    promptDefault: $('promptDefault'), promptContractBox: $('promptContractBox'), promptContract: $('promptContract'), promptDiscard: $('promptDiscard'),
+    promptDiscardBtn: $('promptDiscardBtn'), promptKeepBtn: $('promptKeepBtn'), promptStatus: $('promptStatus'), promptResetBtn: $('promptResetBtn'), qualityError: $('qualityError'),
     branches: $('branches'), branchesRefreshBtn: $('branchesRefreshBtn'),
     diffDialog: $('diffDialog'), diffTitle: $('diffTitle'), diffMeta: $('diffMeta'), diffBody: $('diffBody'),
     toasts: $('toasts'),
@@ -563,6 +567,7 @@ Critérios de aceitação:
         <dt>Candidatos</dt><dd>${p.candidates > 1 ? `best-of-${esc(p.candidates)}` : '1 por implementação'}</dd>
         <dt>Turnos</dt><dd>${p.max_turns ? `até ${esc(p.max_turns)} por chamada` : 'padrão (60 / 30)'}${p.stop_on_turn_limit ? '; para ao esgotar' : ''}</dd>
         <dt>Shell liberado</dt><dd class="wrap">${(p.agent_commands || []).map((x) => `<code>${esc(x)}</code>`).join(' ') || '<span class="note">só verificação e git de leitura</span>'}</dd>
+        <dt>Stacks de teste</dt><dd class="wrap">${(p.ephemeral_stacks || []).map((x) => `<code>${esc(x)}</code>`).join(' ') || '<span class="note">limpeza desligada</span>'}</dd>
       </dl>`;
   }
 
@@ -592,6 +597,7 @@ Critérios de aceitação:
     el.qMaxTurns.value = p.max_turns || '';
     el.qStopOnTurnLimit.checked = !!p.stop_on_turn_limit;
     el.qAgentCommands.value = (p.agent_commands || []).join('\n');
+    el.qEphemeralStacks.value = (p.ephemeral_stacks || []).join('\n');
     el.qFlow.value = p.flow || 'full';
     const off = p.disabled_stages || [];
     stageBoxes().forEach((b) => { b.checked = !off.includes(b.dataset.stage); });
@@ -624,6 +630,7 @@ Critérios de aceitação:
       max_turns: Number(el.qMaxTurns.value) || 0,
       stop_on_turn_limit: el.qStopOnTurnLimit.checked,
       agent_commands: el.qAgentCommands.value.split('\n').map((l) => l.trim()).filter(Boolean),
+      ephemeral_stacks: el.qEphemeralStacks.value.split('\n').map((l) => l.trim()).filter(Boolean),
       base_branches: snapshot?.workspace?.policy?.base_branches,
     };
     try {
@@ -868,7 +875,16 @@ Critérios de aceitação:
     failed: { label: 'Falhou', tone: 'danger' },
     canceled: { label: 'Cancelada', tone: 'neutral' },
   };
-  const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', stream: 'Frente', merge: 'Integração' };
+  const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', investigate: 'Investigação', stream: 'Frente', merge: 'Integração' };
+  const CAUSE_STATUS = {
+    open: { label: 'Em correção', sev: 'média' },
+    fixed: { label: 'Corrigida', sev: 'baixa' },
+    pending: { label: 'Pendente', sev: 'alta' },
+    blocked: { label: 'Bloqueada', sev: 'alta' },
+    inherited: { label: 'Herdada', sev: 'média' },
+    infra: { label: 'Infraestrutura', sev: 'média' },
+    unverified: { label: 'Não reverificada', sev: 'média' },
+  };
   const PLAN_SOURCE = {
     architect: '',
     heuristic: 'Simulação: escolha por palavras-chave da US.',
@@ -1036,6 +1052,39 @@ Critérios de aceitação:
     const code = text.slice(at).replace(/^```[^\n]*\n?/, '').replace(/\n?```\s*$/, '');
     return `<span class="issue-desc">${esc(text.slice(0, at).trim())}</span>
       <details class="check-out"><summary>Ver saída</summary><pre>${esc(code)}</pre></details>`;
+  }
+
+  function causeDetail(label, value) {
+    return value ? `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>` : '';
+  }
+
+  function renderCause(c, index, total) {
+    const status = CAUSE_STATUS[c.status] || CAUSE_STATUS.open;
+    const attempts = c.attempts ? ` · tentativa ${esc(c.attempts)}` : '';
+    const details = [
+      causeDetail('Causa raiz', c.root_cause),
+      causeDetail('Evidência', c.evidence),
+      causeDetail('Estratégia', (c.strategy || []).join('; ')),
+      causeDetail('Teste de regressão', c.regression_test),
+      causeDetail('Prova', c.proof),
+      causeDetail('Motivo', c.reason),
+    ].join('');
+    return `
+      <li>
+        <span class="sev" data-sev="${esc(status.sev)}">${esc(status.label)}</span>
+        <span class="issue-desc">${esc(c.title || c.fingerprint)}</span>
+        <span class="issue-meta"><span>Causa ${index + 1} de ${total}${attempts}</span>${c.owner ? `<span>${esc(c.owner)}</span>` : ''}</span>
+        ${details ? `<dl class="cause-details">${details}</dl>` : ''}
+      </li>`;
+  }
+
+  function renderCauses(causes) {
+    if (!causes?.length) return '';
+    return `
+      <div class="issues">
+        <h3>Causas <span class="muted">${causes.length}</span></h3>
+        <ul>${causes.map((c, i) => renderCause(c, i, causes.length)).join('')}</ul>
+      </div>`;
   }
 
   function renderIssues(issues, title) {
@@ -1380,7 +1429,8 @@ Critérios de aceitação:
     const head = `
       <h2 id="storyTitle">${esc(st.title || 'User Story')}</h2>
       <div class="story-meta">${meta}</div>
-      ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}`;
+      ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
+      ${renderCauses(st.causes)}`;
     if (el.storyHead.dataset.html !== head) {
       el.storyHead.innerHTML = head;
       el.storyHead.dataset.html = head;
@@ -1739,8 +1789,116 @@ Critérios de aceitação:
     };
   }
 
+  // ---------- prompts ----------
+  let promptItems = [];
+  let promptKey = null;
+  let nextPromptKey = null;
+
+  const currentPrompt = () => promptItems.find((p) => p.key === promptKey);
+  const promptDirty = () => {
+    const item = currentPrompt();
+    return Boolean(item) && el.promptValue.value.trimEnd() !== item.value.trimEnd();
+  };
+
+  function renderPromptList() {
+    const groups = [...new Set(promptItems.map((p) => p.group))];
+    el.promptList.innerHTML = groups.map((group) => `
+      <div class="prompt-group">
+        <h2>${esc(group)}</h2>
+        ${promptItems.filter((p) => p.group === group).map((p) => `
+          <button type="button" data-prompt="${esc(p.key)}"${p.key === promptKey ? ' aria-current="true"' : ''}>
+            <span>${esc(p.title)}</span>${p.customized ? '<span class="tag">Customizado</span>' : ''}
+          </button>`).join('')}
+      </div>`).join('');
+  }
+
+  function renderPromptEditor() {
+    const item = currentPrompt();
+    el.promptForm.hidden = !item;
+    if (!item) return;
+    el.promptTitle.textContent = item.title;
+    el.promptDescription.textContent = item.description;
+    el.promptParts.innerHTML = item.parts.map((part) => `<li${part.includes('este texto') ? ' data-current="true"' : ''}>${esc(part)}</li>`).join('');
+    el.promptWarning.hidden = !item.warning;
+    el.promptWarning.textContent = item.warning || '';
+    el.promptValue.value = item.value;
+    el.promptDefault.textContent = item.default;
+    el.promptContractBox.hidden = !item.contract;
+    el.promptContract.textContent = item.contract || '';
+    el.promptResetBtn.disabled = !item.customized;
+    el.promptDiscard.hidden = true;
+    el.promptStatus.textContent = '';
+  }
+
+  function selectPrompt(key) {
+    promptKey = key;
+    nextPromptKey = null;
+    renderPromptList();
+    renderPromptEditor();
+  }
+
+  function applyPrompts(items) {
+    promptItems = items;
+    if (!promptKey) promptKey = items[0]?.key ?? null;
+    renderPromptList();
+  }
+
+  function showPromptError(message) {
+    el.promptsError.hidden = !message;
+    el.promptsError.textContent = message;
+  }
+
+  async function loadPrompts() {
+    try {
+      const keepDraft = promptDirty();
+      applyPrompts(await api('GET', '/api/prompts'));
+      showPromptError('');
+      if (!keepDraft) renderPromptEditor();
+    } catch (err) {
+      showPromptError(err.message);
+    }
+  }
+
+  async function savePrompt(call, message) {
+    try {
+      applyPrompts(await call());
+      showPromptError('');
+      renderPromptEditor();
+      el.promptStatus.textContent = message;
+    } catch (err) {
+      showPromptError(err.message);
+    }
+  }
+
+  el.promptList.addEventListener('click', (e) => {
+    const key = e.target.closest('[data-prompt]')?.dataset.prompt;
+    if (!key || key === promptKey) return;
+    if (promptDirty()) {
+      nextPromptKey = key;
+      el.promptDiscard.hidden = false;
+      el.promptDiscardBtn.focus();
+      return;
+    }
+    selectPrompt(key);
+  });
+  el.promptForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const path = `/api/prompts/${encodeURIComponent(promptKey)}`;
+    savePrompt(() => api('PUT', path, { value: el.promptValue.value }), 'Salvo. Vale a partir da próxima execução.');
+  });
+  el.promptResetBtn.addEventListener('click', () => {
+    const path = `/api/prompts/${encodeURIComponent(promptKey)}`;
+    savePrompt(() => api('DELETE', path), 'Padrão restaurado.');
+  });
+  el.promptDiscardBtn.addEventListener('click', () => selectPrompt(nextPromptKey));
+  el.promptKeepBtn.addEventListener('click', () => {
+    nextPromptKey = null;
+    el.promptDiscard.hidden = true;
+    el.promptValue.focus();
+  });
+
   // ---------- views ----------
-  const VIEWS = { execucao: 'Execução', nova: 'Nova execução', repositorio: 'Repositório', provedores: 'Provedores', logs: 'Logs' };
+  const VIEWS = { execucao: 'Execução', nova: 'Nova execução', repositorio: 'Repositório', provedores: 'Provedores', prompts: 'Prompts', logs: 'Logs' };
   const viewFromHash = () => (VIEWS[location.hash.slice(1)] ? location.hash.slice(1) : null);
 
   function showView(name) {
@@ -1752,6 +1910,7 @@ Critérios de aceitação:
     el.sidebar.parentElement.dataset.currentView = name;
     document.title = `${VIEWS[name]} · FazTudo`;
     setMenu(false);
+    if (name === 'prompts') loadPrompts();
     if (name === 'logs' && el.autoScroll.checked) el.log.scrollTop = el.log.scrollHeight;
     if (name === 'repositorio') loadRepos();
   }

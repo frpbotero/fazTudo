@@ -24,7 +24,8 @@ func newCandidateTest(t *testing.T, exec *fakeExecutor) (*Orchestrator, string) 
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	o, repo := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	o.stages = candidateStages
+	o.baseStages = candidateStages
+	o.stages = o.baseStages
 	policy := o.ws.Policy()
 	policy.Git, policy.Candidates = true, 3
 	if _, err := o.ws.SetPolicy(policy); err != nil {
@@ -88,6 +89,7 @@ func TestBestOfNTieIsBrokenBySelector(t *testing.T) {
 		SelectorStage.Role: {"C é mais simples\n```json\n{\"choice\": \"c\", \"reason\": \"mais simples\"}\n```"},
 	}}
 	o, repo := newCandidateTest(t, exec)
+	writeFile(t, repo, "AGENTS.md", "Prefira o código mais simples.")
 	exec.onCall = func(req provider.Request) {
 		if i := strings.Index(req.Role, "candidato "); i >= 0 {
 			writeFile(t, req.WorkDir, "app.js", "// "+req.Role[i+len("candidato "):]+"\n")
@@ -111,11 +113,14 @@ func TestBestOfNTieIsBrokenBySelector(t *testing.T) {
 		if r.Role == SelectorStage.Role && !strings.Contains(r.Prompt, "+// A") {
 			t.Error("the selector must see the candidates' diffs")
 		}
+		if r.Role == SelectorStage.Role && !strings.Contains(r.Prompt, "Prefira o código mais simples.") {
+			t.Error("the selector must judge by the project instructions")
+		}
 	}
 }
 
 func TestBestOfNWithoutChangesIsNotAFailure(t *testing.T) {
-	exec := &fakeExecutor{}
+	exec := &fakeExecutor{onCall: func(provider.Request) {}}
 	o, _ := newCandidateTest(t, exec)
 	_ = o.Start(realStory("já implementado"))
 	run := waitDone(t, o)

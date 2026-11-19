@@ -310,3 +310,20 @@ func TestReadOnlyIsForwarded(t *testing.T) {
 		t.Error("ReadOnly must reach the invocation")
 	}
 }
+
+func TestDiagnoseRunsCommandsButCannotEdit(t *testing.T) {
+	args := ClaudeCLI.Args(Invocation{ReadOnly: true, Diagnose: true, Commands: []string{"npx jest"}})
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "--tools "+claudeDiagnoseTools) || !strings.Contains(joined, "Bash(npx jest)") {
+		t.Fatalf("args = %v", args)
+	}
+	for _, tool := range []string{"Edit", "Write"} {
+		if strings.Contains(joined, tool) {
+			t.Fatalf("%s must not be available: %v", tool, args)
+		}
+	}
+	if !strings.Contains(strings.Join(CodexCLI.Args(Invocation{ReadOnly: true, Diagnose: true}), " "), "read-only") {
+		t.Fatal("a CLI that cannot express it stays read-only")
+	}
+}

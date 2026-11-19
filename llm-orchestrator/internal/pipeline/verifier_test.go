@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -43,6 +44,16 @@ func newVerifierTest(t *testing.T, exec *fakeExecutor, check func(n int) quality
 	o := New(exec, ws, verifierStages, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	var mu sync.Mutex
 	calls := 0
+	if exec.onCall == nil {
+		// An agent that changes nothing ends the fix loop: these tests model one that works.
+		edits := 0
+		exec.onCall = func(provider.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			edits++
+			writeFile(t, repo, fmt.Sprintf("src/edit-%d.txt", edits), "x")
+		}
+	}
 	o.runCheck = func(_ context.Context, _ string, c quality.Command, _ time.Duration) quality.Result {
 		mu.Lock()
 		calls++
@@ -91,14 +102,14 @@ func TestFailingCommandGoesBackToImplementer(t *testing.T) {
 	for i, s := range steps {
 		ids[i] = s.ID + ":" + string(s.Status)
 	}
-	want := "spec:done frontend:done checks:done fix-checks-1-frontend:done checks-verify-2:done"
+	want := "spec:done frontend:done checks:done investigate-checks-1:done fix-checks-1-frontend:done checks-verify-2:done"
 	if got := strings.Join(ids, " "); got != want {
 		t.Fatalf("steps =\n%s\nwant\n%s", got, want)
 	}
 	if exec.count("fe") != 2 {
 		t.Errorf("frontend calls = %d, want 2 (implementation + fix)", exec.count("fe"))
 	}
-	fix := exec.prompts[3] // discovery, spec, frontend, fix
+	fix := lastPromptOf(exec, "fe")
 	for _, want := range []string{"npm test", "expected 2, got 1", "Correções obrigatórias"} {
 		if !strings.Contains(fix, want) {
 			t.Errorf("fix prompt missing %q:\n%s", want, fix)
@@ -122,8 +133,9 @@ func TestPersistentFailureMovesOnWithPendingIssues(t *testing.T) {
 	if run.Stories[0].Status != StepWarning || run.Stories[1].Status != StepWarning {
 		t.Errorf("stories = %s, %s; both must finish with pending issues", run.Stories[0].Status, run.Stories[1].Status)
 	}
-	if got := exec.count("fe"); got != 2*(1+maxVerifierRounds) {
-		t.Errorf("frontend calls = %d, want %d (both stories developed)", got, 2*(1+maxVerifierRounds))
+	// The second story only develops: it inherits the failure the first one left.
+	if got, want := exec.count("fe"), 1+maxCauseAttempts+1; got != want {
+		t.Errorf("frontend calls = %d, want %d (both stories developed)", got, want)
 	}
 	if st := run.Stories[0].Steps; st[len(st)-1].Status != StepWarning {
 		t.Errorf("last verification must keep the pending issues: %+v", st[len(st)-1])

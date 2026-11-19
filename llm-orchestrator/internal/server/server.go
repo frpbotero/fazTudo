@@ -117,6 +117,9 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("PUT /api/workspace/policy", s.handlePutPolicy)
 	mux.HandleFunc("GET /api/workspace/repos", s.handleListRepos)
 	mux.HandleFunc("GET /api/git/commits/{hash}", s.handleShowCommit)
+	mux.HandleFunc("GET /api/prompts", s.handleGetPrompts)
+	mux.HandleFunc("PUT /api/prompts/{key}", s.handlePutPrompt)
+	mux.HandleFunc("DELETE /api/prompts/{key}", s.handleDeletePrompt)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", s.handlePutConfig)
 	mux.HandleFunc("POST /api/providers/{id}/exhaust", s.handleExhaust)
@@ -234,7 +237,7 @@ func (s *Server) detectStories(ctx context.Context, md string) (stories.Document
 	defer cancel()
 	resp, err := s.router.Execute(ctx, provider.Request{
 		Role:     "Identificação de User Stories",
-		System:   stories.DetectSystem,
+		System:   s.orch.Prompt("stories.detect") + "\n" + stories.DetectContract,
 		Prompt:   stories.DetectPrompt(md),
 		WorkDir:  os.TempDir(),
 		Tier:     provider.TierLight,
@@ -479,6 +482,38 @@ func (s *Server) handleShowCommit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"patch": patch})
 }
 
+func (s *Server) handleGetPrompts(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.orch.Prompts())
+}
+
+func (s *Server) handlePutPrompt(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	s.finishPromptEdit(w, r.PathValue("key"), s.orch.SetPrompt(r.PathValue("key"), body.Value))
+}
+
+func (s *Server) handleDeletePrompt(w http.ResponseWriter, r *http.Request) {
+	s.finishPromptEdit(w, r.PathValue("key"), s.orch.ResetPrompt(r.PathValue("key")))
+}
+
+// finishPromptEdit logs only the key: the text may hold private instructions.
+func (s *Server) finishPromptEdit(w http.ResponseWriter, key string, err error) {
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	s.log.Info("prompt updated", "key", key)
+	s.detectMu.Lock()
+	s.detectKey = [sha256.Size]byte{} // a new detection prompt must not reuse a cached document
+	s.detectMu.Unlock()
+	s.persist()
+	writeJSON(w, http.StatusOK, s.orch.Prompts())
+}
+
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.router.Config())
 }
@@ -540,7 +575,12 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 // persist saves the current configuration. Failures are logged and surfaced
 // through the snapshot's settings status; the in-memory change still applies.
 func (s *Server) persist() {
-	if err := s.store.Update(func() settings.File { return settings.Capture(s.router, s.ws) }); err != nil {
+	capture := func() settings.File {
+		file := settings.Capture(s.router, s.ws)
+		file.Prompts = s.orch.PromptOverrides()
+		return file
+	}
+	if err := s.store.Update(capture); err != nil {
 		s.log.Error("failed to save configuration", "path", s.store.Path(), "err", err)
 	}
 }

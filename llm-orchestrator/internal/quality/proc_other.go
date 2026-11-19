@@ -2,6 +2,9 @@
 
 package quality
 
-import "os/exec"
+import (
+	"os/exec"
+	"time"
+)
 
-func isolate(*exec.Cmd) {}
+func isolate(*exec.Cmd, time.Duration) (finish func()) { return func() {} }

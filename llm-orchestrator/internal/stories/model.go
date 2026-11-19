@@ -12,14 +12,21 @@ import (
 // maxOutlineLine caps each line sent to the model; it only needs structure.
 const maxOutlineLine = 120
 
-// DetectSystem instructs the model that finds story starts in a document.
-const DetectSystem = `Você identifica User Stories em documentos Markdown de backlog.
+// DetectInstructions tells the model what counts as a story; a user may
+// rewrite them. DetectContract is the format FromModel reads, and stays fixed.
+const (
+	DetectInstructions = `Você identifica User Stories em documentos Markdown de backlog.
 Recebe o documento com o número de cada linha no formato "N| texto".
 Uma User Story começa na linha que a abre (normalmente um título como "US-A01 — ...", "HU 3", "História: ..."
 ou o primeiro "Como <papel>, quero ..."). Títulos de épico, seções gerais, índices, tabelas e checklists não são US.
-Responda SOMENTE com JSON, sem texto extra nem bloco de código:
+`
+	DetectContract = `Responda SOMENTE com JSON, sem texto extra nem bloco de código:
 {"stories":[{"line":<número da linha onde a US começa>,"id":"<identificador, ex.: US-A01; vazio se não houver>"}]}
 Liste todas as US, na ordem do documento.`
+)
+
+// DetectSystem instructs the model that finds story starts in a document.
+const DetectSystem = DetectInstructions + DetectContract
 
 // largeDocLineThreshold triggers structural outline filtering for large backlogs,
 // keeping token usage low instead of forwarding thousands of body lines.

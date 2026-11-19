@@ -6,6 +6,7 @@ package quality
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -28,27 +29,47 @@ type Result struct {
 	TimedOut   bool   `json:"timed_out,omitempty"`
 	Output     string `json:"output,omitempty"`
 	DurationMS int64  `json:"duration_ms"`
+	// Evidence holds the failure lines of the whole output, which Output, a
+	// tail, may have lost. Failures is what they identify.
+	Evidence string    `json:"-"`
+	Failures []Failure `json:"failures,omitempty"`
 }
 
 // maxOutputBytes is how much of a command's output is kept: the tail, where
 // test runners print failures and summaries.
 const maxOutputBytes = 8 << 10
 
-// Run executes c through the shell inside dir. The whole process group is
-// killed on timeout or cancellation, so test runners do not leave browsers or
-// dev servers behind.
+// stopGrace is how long a canceled command has to run its teardown; removing
+// a Docker stack takes tens of seconds.
+const stopGrace = 60 * time.Second
+
+// pipeGrace is how long Wait outlasts the group's kill before closing the
+// output pipes that an escaped process may still hold.
+const pipeGrace = 5 * time.Second
+
+// Run executes c through the shell inside dir. On timeout or cancellation the
+// process group gets stopGrace to clean up and is then killed, so test runners
+// leave neither Docker stacks nor browsers or dev servers behind.
 func Run(ctx context.Context, dir string, c Command, timeout time.Duration) Result {
+	return run(ctx, dir, c, timeout, stopGrace)
+}
+
+func run(ctx context.Context, dir string, c Command, timeout, grace time.Duration) Result {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", c.Run)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "CI=1", "NO_COLOR=1", "FORCE_COLOR=0")
-	cmd.WaitDelay = 5 * time.Second
-	isolate(cmd)
+	// Teardowns write to the same pipes: Wait must not close them early.
+	cmd.WaitDelay = grace + pipeGrace
+	finish := isolate(cmd, grace)
+	defer finish()
 	out := &tailBuffer{max: maxOutputBytes}
-	cmd.Stdout = out
-	cmd.Stderr = out
+	evidence := &evidenceLog{}
+	output := io.MultiWriter(out, evidence)
+	cmd.Stdout = output
+	cmd.Stderr = output
 
 	started := time.Now()
 	err := cmd.Run()
@@ -69,6 +90,10 @@ func Run(ctx context.Context, dir string, c Command, timeout time.Duration) Resu
 	default:
 		res.ExitCode = -1
 		res.Output = strings.TrimSpace(res.Output + "\n" + err.Error())
+	}
+	if !res.Passed && !res.TimedOut {
+		res.Evidence = evidence.String()
+		res.Failures = ParseFailures(c, res.Evidence)
 	}
 	return res
 }

@@ -379,3 +379,91 @@ func TestSameOriginAcceptsBodylessRequestOfUnknownLength(t *testing.T) {
 		}
 	}
 }
+
+func promptValue(t *testing.T, resp *http.Response, key string) (string, bool) {
+	t.Helper()
+	var items []pipeline.PromptItem
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Key == key {
+			return item.Value, item.Customized
+		}
+	}
+	t.Fatalf("no prompt %s", key)
+	return "", false
+}
+
+func TestPromptEditsArePersistedAndRestored(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp := do(t, ts, http.MethodPut, "/api/prompts/fix.task", `{"value":"meu texto"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if value, customized := promptValue(t, resp, "fix.task"); value != "meu texto" || !customized {
+		t.Fatalf("value=%q customized=%v", value, customized)
+	}
+	file, err := lastStore.Load()
+	if err != nil || file.Prompts["fix.task"] != "meu texto" {
+		t.Fatalf("saved = %+v, err = %v", file.Prompts, err)
+	}
+
+	resp = do(t, ts, http.MethodDelete, "/api/prompts/fix.task", "")
+	if _, customized := promptValue(t, resp, "fix.task"); customized {
+		t.Fatal("reset must drop the customization")
+	}
+	file, _ = lastStore.Load()
+	if _, saved := file.Prompts["fix.task"]; saved {
+		t.Fatalf("the key must leave config.json: %+v", file.Prompts)
+	}
+}
+
+func TestInvalidPromptEditsAreRefused(t *testing.T) {
+	ts, _ := newTestServer(t)
+	for name, request := range map[string][2]string{
+		"unknown": {"/api/prompts/nao.existe", `{"value":"x"}`},
+		"blank":   {"/api/prompts/fix.task", `{"value":"  "}`},
+		"nul":     {"/api/prompts/fix.task", `{"value":"a\u0000b"}`},
+		"huge":    {"/api/prompts/fix.task", `{"value":"` + strings.Repeat("x", 33<<10) + `"}`},
+	} {
+		if resp := do(t, ts, http.MethodPut, request[0], request[1]); resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d", name, resp.StatusCode)
+		}
+	}
+}
+
+func TestCrossOriginPromptEditIsBlocked(t *testing.T) {
+	ts, orch := newTestServer(t)
+
+	resp := do(t, ts, http.MethodPut, "/api/prompts/fix.task", `{"value":"injetado"}`, "Origin", "https://evil.example")
+
+	if resp.StatusCode != http.StatusForbidden || orch.Prompt("fix.task") == "injetado" {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestPromptTextStaysOutOfTheLogs(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	router := provider.NewRouter(true, []provider.CLI{provider.ClaudeCLI})
+	ws, err := workspace.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	orch := pipeline.New(router, ws, pipeline.DefaultStages, nil, logger)
+	store := settings.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	srv := New(context.Background(), Deps{
+		Orchestrator: orch, Router: router, Workspace: ws, Settings: store, Hub: NewHub(),
+		Static: fstest.MapFS{"index.html": {Data: []byte("ok")}}, Version: "test", Logger: logger,
+	})
+	ts := httptest.NewServer(srv.Handler())
+
+	do(t, ts, http.MethodPut, "/api/prompts/fix.task", `{"value":"texto-confidencial"}`)
+	ts.Close() // waits for the handlers, which log after answering
+
+	if strings.Contains(logs.String(), "texto-confidencial") {
+		t.Fatalf("logs = %s", logs.String())
+	}
+}

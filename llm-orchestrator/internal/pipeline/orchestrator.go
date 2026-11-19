@@ -90,7 +90,7 @@ type Step struct {
 	Effort   string        `json:"effort,omitempty"`
 	Output   string        `json:"output,omitempty"`
 	Note     string        `json:"note,omitempty"`
-	Kind     string        `json:"kind,omitempty"`  // "" (stage), "fix", "verify" or "stream"
+	Kind     string        `json:"kind,omitempty"`  // "" (stage), "fix", "verify", "investigate" or "stream"
 	Agent    string        `json:"agent,omitempty"` // implementer running a stream
 	Round    int           `json:"round,omitempty"` // fix/verification round
 	Gate     string        `json:"gate,omitempty"`  // gate that requested a fix
@@ -129,7 +129,9 @@ type StoryRun struct {
 	DependsOn []string `json:"depends_on,omitempty"`
 	// Trace links the tests the specification requires to the test files.
 	Trace []quality.Trace `json:"trace,omitempty"`
-	Steps []Step          `json:"steps"`
+	// Causes are the problems found, followed across fix rounds.
+	Causes []Cause `json:"causes,omitempty"`
+	Steps  []Step  `json:"steps"`
 }
 
 // Run describes the current or last pipeline execution: a shared discovery
@@ -199,6 +201,9 @@ type Orchestrator struct {
 	onChange func()
 	logger   *slog.Logger
 	runCheck func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
+	// sweepStacks and lockStackSlot keep disposable test stacks in check.
+	sweepStacks   func(ctx context.Context, roots, patterns []string) ([]string, error)
+	lockStackSlot func(ctx context.Context, onWait func()) (func(), error)
 	// attempts and retryDelay control how failing agent calls are retried.
 	attempts   int
 	retryDelay time.Duration
@@ -214,19 +219,34 @@ type Orchestrator struct {
 	usageMu   sync.Mutex
 	usagePath string
 
-	mu     sync.RWMutex
-	limits agentLimits
-	run    Run
-	last   StartOptions
-	cancel context.CancelFunc
-	done   chan struct{}
+	// baseStages are the stages as given; stages and texts add the customized
+	// prompts, resolved when a run starts so a run never changes midway.
+	baseStages []Stage
+	texts      promptTexts
+
+	mu      sync.RWMutex
+	prompts map[string]string
+	limits  agentLimits
+	run     Run
+	last    StartOptions
+	cancel  context.CancelFunc
+	done    chan struct{}
 }
+
+// defaultSweepStacks and defaultLockStackSlot reach Docker and the machine-wide
+// lock; tests replace them.
+var (
+	defaultSweepStacks   = quality.SweepStacks
+	defaultLockStackSlot = workspace.LockStackSlot
+)
 
 // New creates an orchestrator. The discovery stage always runs first (or is
 // reused from the session cache), followed by stages. onChange is called
 // (without locks held) after every state mutation and must not block.
 func New(exec Executor, ws *workspace.Manager, stages []Stage, onChange func(), logger *slog.Logger) *Orchestrator {
-	o := &Orchestrator{exec: exec, ws: ws, stages: stages, onChange: onChange, logger: logger, runCheck: quality.Run,
+	o := &Orchestrator{exec: exec, ws: ws, baseStages: stages, stages: resolveStages(stages, nil), texts: resolveTexts(nil),
+		onChange: onChange, logger: logger, runCheck: quality.Run,
+		sweepStacks: defaultSweepStacks, lockStackSlot: defaultLockStackSlot,
 		attempts: agentAttempts, retryDelay: agentRetryDelay}
 	o.run.Discovery = newStep(DiscoveryStage)
 	o.run.Stories = []StoryRun{{Status: StepPending, Steps: o.freshSteps()}}
@@ -307,6 +327,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		o.mu.Unlock()
 		return err
 	}
+	customized := o.usePrompts()
 	if opts.Rediscover {
 		o.ws.Invalidate()
 	}
@@ -344,11 +365,14 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 	}
 	o.logf(LevelInfo, "Execução iniciada em %s: %d US (origem: %s, modo: %s).", repo, len(opts.Stories), opts.Source, mode)
 	o.logger.Info("pipeline started", "repository", repo, "stories", len(opts.Stories), "source", opts.Source, "dry_run", opts.DryRun)
+	o.logCustomPrompts(customized)
 
 	go func() {
 		defer close(done)
 		defer unlock()
 		defer cancel()
+		defer o.sweepRun(repo, opts.DryRun)
+		o.sweepRun(repo, opts.DryRun)
 		o.execute(ctx, repo, opts)
 	}()
 	return nil
@@ -435,14 +459,18 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	o.done = make(chan struct{})
 	done := o.done
 	opts := o.last
+	customized := o.usePrompts()
 	o.mu.Unlock()
 	o.notify()
+	o.logCustomPrompts(customized)
 	o.logf(LevelInfo, "Refazendo %q a partir de %s.", previous.Title, o.stages[stageAt].Title)
 
 	go func() {
 		defer close(done)
 		defer unlock()
 		defer cancel()
+		defer o.sweepRun(o.ws.Path(), opts.DryRun)
+		o.sweepRun(o.ws.Path(), opts.DryRun)
 		o.retryExecute(ctx, opts, story, stageAt, started)
 	}()
 	return nil
@@ -547,6 +575,11 @@ type storyState struct {
 	verifiedAt time.Time // when a verifier last approved the repository
 	blocked    string    // Passo 0 reason when the story cannot be developed yet
 	pending    int       // issues a gate could not get fixed within its rounds
+	red        []string  // commands that failed last, retried first
+	skipped    bool      // the last assessment left costlier commands out
+	// lastFailures and stalls track whether a fix loop is getting anywhere.
+	lastFailures int
+	stalls       int
 }
 
 func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptions) {
@@ -555,7 +588,7 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 		return
 	}
 	graph := o.updateGraph(ctx, ss)
-	report, ok := o.discover(ctx, repo, graph)
+	report, ok := o.discover(ctx, ss, graph)
 	if !ok || !o.guardInputs(ss, discoveryRef) {
 		return
 	}
@@ -616,7 +649,7 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 		return
 	}
 	graph := o.updateGraph(ctx, ss)
-	report, ok := o.discover(ctx, repo, graph) // the saved one, or a new one
+	report, ok := o.discover(ctx, ss, graph) // the saved one, or a new one
 	if !ok {
 		return
 	}
@@ -886,7 +919,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 				resp, ok := o.runStage(ctx, ref, provider.Request{
 					Role:     stage.Role,
 					System:   stage.System,
-					Prompt:   buildVerifyPrompt(stage, st.sc, ss.report, issues, fixes, round),
+					Prompt:   buildVerifyPrompt(o.texts.verifyTask, stage, st.sc, ss.report, issues, fixes, round),
 					Tier:     stage.Tier,
 					WorkDir:  ss.repo,
 					ReadOnly: stage.ReadOnly,
@@ -1120,6 +1153,7 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 	if gate.Verifier {
 		rounds = maxVerifierRounds
 	}
+	st.lastFailures, st.stalls = 0, 0
 	for round := 1; ; round++ {
 		if !ev.parsed {
 			if !ev.simulated {
@@ -1137,18 +1171,38 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 			}
 		})
 		if !verdict.NeedsChanges() {
+			o.closeCauses(st, nil)
 			if round > 1 {
 				o.logf(LevelSuccess, "%s aprovou as correções.", gate.Title)
 			}
 			return true
 		}
 
-		if round > rounds {
-			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d problema(s) persistem após %d rodadas de correção", len(verdict.Issues), rounds))
+		fixable := o.triage(ss, st, verdict.Issues)
+		settle := func(msg string) bool {
+			o.closeCauses(st, verdict.Issues)
+			return o.settleGate(st, stepID, gate, verdict.Issues, msg)
 		}
-		fixes := o.scheduleFixes(st.si, gate, stepID, verdict.Issues, round)
+		switch {
+		case round > rounds:
+			return settle(fmt.Sprintf("%d problema(s) persistem após %d rodadas de correção", len(verdict.Issues), rounds))
+		case len(fixable) == 0:
+			return settle(o.settleNote(st, verdict.Issues))
+		case st.stalled(countCauses(verdict.Issues)):
+			return settle(fmt.Sprintf("%d problema(s) sem redução há %d rodadas", len(verdict.Issues), maxStalledRounds))
+		}
+		fixable, afterID, alive := o.investigate(ctx, ss, st, gate, stepID, fixable, round)
+		if !alive {
+			return false
+		}
+		if len(fixable) == 0 {
+			return settle(o.settleNote(st, verdict.Issues))
+		}
+		tier := o.repairTier(st, fixable)
+		o.countAttempts(st, fixable)
+		fixes := o.scheduleFixes(st.si, gate, afterID, fixable, round)
 		if len(fixes) == 0 {
-			return o.settleGate(st, stepID, gate, verdict.Issues, fmt.Sprintf("%d problema(s) sem implementador para corrigi-los", len(verdict.Issues)))
+			return settle(fmt.Sprintf("%d problema(s) sem implementador para corrigi-los", len(verdict.Issues)))
 		}
 		verifyID := fmt.Sprintf("%s-verify-%d", gate.ID, round+1)
 		o.insertSteps(st.si, fixes[len(fixes)-1].step.ID, Step{
@@ -1156,25 +1210,31 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 			Status: StepPending, Kind: "verify", Round: round + 1,
 		})
 
+		fixesStarted := time.Now()
 		var done []Step
 		for _, f := range fixes {
 			ref := stepRef{st.si, f.step.ID}
 			fixResp, ok := o.runStage(ctx, ref, provider.Request{
 				Role:    f.stage.Role,
 				System:  f.stage.System,
-				Prompt:  buildFixPrompt(f.stage, gate, st.sc, ss.report, st.planText, ev.report, f.step.Issues, round),
-				Tier:    f.stage.Tier,
+				Prompt:  buildFixPrompt(o.texts.fixTask, gate, st.sc, ss.report, st.planText, ev.report, repairBrief(f.step.Issues, o.causes(st.si)), f.step.Issues, round),
+				Tier:    fixTier(f.stage, tier),
 				WorkDir: ss.repo,
 			})
 			if !ok || !o.afterAgent(ctx, ss, st, ref) {
 				return false
 			}
+			o.recordFix(st, f.step.Issues, fixResp.Output)
 			f.step.Output = fixResp.Output
 			done = append(done, f.step)
 			o.logf(LevelSuccess, "%s concluída via %s.", f.step.Title, fixResp.Name)
 		}
 
-		var alive bool
+		if !ss.dry && len(o.changedFiles(ss, fixesStarted)) == 0 {
+			o.updateStep(stepRef{st.si, verifyID}, func(s *Step) { s.Note = "Sem alterações desde a última verificação" })
+			stepID = verifyID
+			return settle("as correções não alteraram nenhum arquivo")
+		}
 		if ev, alive = recheck(ctx, stepRef{st.si, verifyID}, verdict.Issues, done, round+1); !alive {
 			return false
 		}
@@ -1193,6 +1253,14 @@ func (o *Orchestrator) settleGate(st *storyState, stepID string, gate Stage, iss
 	st.pending += len(issues)
 	o.logf(LevelWarn, "%s: %s. Seguindo com as pendências registradas.", gate.Title, msg)
 	return true
+}
+
+// fixTier raises a fix to the heavy model for a cause's second attempt.
+func fixTier(stage Stage, tier provider.Tier) provider.Tier {
+	if tier == provider.TierHeavy {
+		return tier
+	}
+	return stage.Tier
 }
 
 type scheduledFix struct {
@@ -1243,7 +1311,8 @@ func (o *Orchestrator) scheduleFixes(si int, gate Stage, afterID string, issues 
 
 // discover returns the session's discovery for repo, running it only when
 // there is no cached report.
-func (o *Orchestrator) discover(ctx context.Context, repo, graph string) (*workspace.Report, bool) {
+func (o *Orchestrator) discover(ctx context.Context, ss *session, graph string) (*workspace.Report, bool) {
+	repo := ss.repo
 	if cached := o.ws.Discovery(); cached != nil && cached.Path == repo {
 		o.updateStep(discoveryRef, func(s *Step) {
 			s.Status = StepSkipped
@@ -1264,8 +1333,8 @@ func (o *Orchestrator) discover(ctx context.Context, repo, graph string) (*works
 
 	resp, ok := o.runStage(ctx, discoveryRef, provider.Request{
 		Role:     DiscoveryStage.Role,
-		System:   DiscoveryStage.System,
-		Prompt:   buildDiscoveryPrompt(repo, stacks, graph),
+		System:   o.texts.discovery.System,
+		Prompt:   buildDiscoveryPrompt(o.texts.discovery.Task, repo, stacks, graph, ss.instructions),
 		Tier:     DiscoveryStage.Tier,
 		WorkDir:  repo,
 		ReadOnly: true,
