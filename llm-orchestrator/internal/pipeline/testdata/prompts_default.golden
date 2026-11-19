@@ -83,10 +83,13 @@ Revise as mudanças desta US. Cada violação vai em issues com arquivo:linha.
 3. Testes: cada critério coberto, ID no nome, expectativas corretas.
 4. Robustez: entrada validada, erro tratado, sem duplicação.
 5. Interface: acessível, responsiva, nada cobrindo controle.
+6. Estrutura: modo revisão da skill `structural-health` (arquivos desta US e quem depende deles).
 === review.lens.spec
 Todo requisito, critério, contrato, estado e código de erro da US/EDD implementado exatamente? Defenda o usuário: aponte requisito ausente, parcial ou alterado.
 === review.lens.simplicity
 Duplicação, código morto, abstração ou try/catch sobrando, helper existente não reutilizado, import faltando, trecho apagado sem motivo, estilo diferente do projeto, código minificado. Padrão de projeto do plano ignorado; componente acoplado. Nome que não revela intenção ou abreviado; boolean sem forma de pergunta (is/has), lista no singular, função sem verbo. Função com mais de uma responsabilidade, > 20 linhas, > 3 argumentos, if/else aninhado sem guard clause.
+=== review.lens.structure
+Modo revisão da skill `structural-health`: ligação escondida, ligação desnecessária, sobra e caso especial nos arquivos desta US e em quem depende deles. Estilo e nomes são de outro revisor.
 === review.lens.tests
 Cada critério e caso de teste da especificação coberto, com ID no nome? Expectativa contrária à especificação, teste frágil ou vazio.
 === review.lens.ux

@@ -2,37 +2,53 @@ package pipeline
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/skills"
 	"llm-orchestrator/internal/workspace"
 )
 
-func TestPromptsNameOnlyInstalledSkills(t *testing.T) {
-	saved := installedSkills
-	t.Cleanup(func() { installedSkills = saved })
-	installedSkills = func(names []string) []string {
-		var out []string
-		for _, n := range names {
-			if n != "api-and-interface-design" {
-				out = append(out, n)
-			}
-		}
-		return out
-	}
-	stage := Stage{ID: "backend", Task: "faça", Skills: []string{"test-driven-development", "api-and-interface-design"}}
+func TestPromptsPointAtBundledSkills(t *testing.T) {
+	stage := Stage{ID: "backend", Task: "faça", Skills: []string{"test-driven-development", "not-bundled"}}
 	prompt := buildPrompt(stage, storyContext{}, nil, nil)
-	if !strings.Contains(prompt, "## Skills de referência") || !strings.Contains(prompt, "`test-driven-development`") {
-		t.Errorf("installed skill missing from prompt:\n%s", prompt)
+	if !strings.Contains(prompt, "## Skills") || !strings.Contains(prompt, skills.File("/skills", "test-driven-development")) {
+		t.Errorf("bundled skill path missing from prompt:\n%s", prompt)
 	}
-	if strings.Contains(prompt, "api-and-interface-design") {
-		t.Error("a skill that is not installed must not be named")
+	if strings.Contains(prompt, "not-bundled") {
+		t.Error("a skill that is not bundled must not be named")
 	}
 
-	installedSkills = func([]string) []string { return nil }
+	saved := skillsDir
+	t.Cleanup(func() { skillsDir = saved })
+	skillsDir = func() string { return "" }
 	if prompt := buildPrompt(stage, storyContext{}, nil, nil); strings.Contains(prompt, "## Skills") {
-		t.Error("no installed skill: no skills section")
+		t.Error("skills unavailable: no skills section")
+	}
+}
+
+func TestStageSkillsAreBundled(t *testing.T) {
+	names := slices.Clone(fixSkills)
+	for _, s := range DefaultStages {
+		names = append(names, s.Skills...)
+	}
+	for _, n := range names {
+		if !skills.Has(n) {
+			t.Errorf("skill %q is named by a stage but not bundled (scripts/update-skills.sh)", n)
+		}
+	}
+}
+
+func TestCodeReviewChecksStructure(t *testing.T) {
+	i := slices.IndexFunc(DefaultStages, func(s Stage) bool { return s.ID == "review" })
+	if i < 0 {
+		t.Fatal("review stage missing")
+	}
+	review := DefaultStages[i]
+	if !slices.Contains(review.Skills, "structural-health") || !strings.Contains(review.Task, "structural-health") {
+		t.Errorf("code review must run structural-health in review mode: %+v", review)
 	}
 }
 

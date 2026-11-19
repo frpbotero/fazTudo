@@ -56,6 +56,9 @@ func TestLimitedRequests(t *testing.T) {
 	o := &Orchestrator{}
 	policy := workspace.DefaultPolicy()
 	o.useLimits(policy, []quality.Command{{Name: "test", Run: "npm test"}})
+	if got := o.limited(provider.Request{ReadOnly: true}).ReadDirs; !slices.Equal(got, []string{"/skills"}) {
+		t.Errorf("every agent may read the bundled skills: ReadDirs = %v", got)
+	}
 	write := o.limited(provider.Request{})
 	if write.MaxTurns != defaultWriteTurns || !slices.Contains(write.Commands, "npm test") ||
 		!slices.Contains(write.Commands, "npx jest") || !slices.Contains(write.Commands, workspace.DefaultAgentCommands[0]) {

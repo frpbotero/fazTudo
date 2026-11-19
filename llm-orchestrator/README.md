@@ -23,13 +23,23 @@ fica em `graphify-out/` (fora do git via `.git/info/exclude`); o discovery receb
 e todo agente recebe o caminho do `graph.json` para consultar (`graphify query/explain/affected`)
 antes de varrer arquivos. Sem graphify, o pipeline segue sem o grafo (aviso no log).
 
-**Skills.** Cada etapa nomeia as skills de [agent-skills](https://github.com/addyosmani/agent-skills)
-que deve seguir (especificação → `spec-driven-development`; arquiteto → `planning-and-task-breakdown`,
-`api-and-interface-design`; frontend/backend → `incremental-implementation`, `test-driven-development`
-e `frontend-ui-engineering`/`api-and-interface-design`; segurança → `security-and-hardening`; code review →
-`code-review-and-quality`, `code-simplification`; docs → `documentation-and-adrs`; rodadas de correção →
-`debugging-and-error-recovery`, `test-driven-development`). Só entram no prompt as instaladas em
-`~/.claude/skills` ou `~/.agents/skills` (`npx skills add addyosmani/agent-skills -g`).
+**Skills.** As etapas seguem playbooks embutidos no binário (`internal/skills/bundle`), gravados em
+`~/Library/Caches/faztudo/skills/<versão>` (ou o cache do usuário no Linux/Windows) e conferidos a cada
+chamada: arquivo alterado volta à cópia embutida. O prompt indica o caminho de cada `SKILL.md` e o agente
+o lê como arquivo, então Claude (com `--safe-mode`, `--add-dir` e escrita negada na pasta), Codex e Gemini
+(`--include-directories`) usam as mesmas versões, sem depender do que o usuário instalou. Etapas:
+especificação → `spec-driven-development`; arquiteto → `planning-and-task-breakdown`, `api-and-interface-design`;
+frontend/backend → `incremental-implementation`, `test-driven-development` e `frontend-ui-engineering`/
+`api-and-interface-design`; segurança → `security-and-hardening`; code review → `code-review-and-quality`,
+`code-simplification`, `structural-health`; docs → `documentation-and-adrs`; rodadas de correção →
+`debugging-and-error-recovery`, `test-driven-development`. Com revisores em paralelo, cada lente lê só a
+sua (a lente Estrutura usa `structural-health`).
+
+As de [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) (MIT) ficam fixadas no commit de
+`bundle/AGENT_SKILLS_COMMIT`; `make update-skills` (ou `scripts/update-skills.sh <commit>`) atualiza.
+`structural-health` é nossa, adaptada de `untangle-codebase` ([caldoai/skills](https://github.com/caldoai/skills),
+MIT): na revisão de cada US procura ligações escondidas, ligações desnecessárias, sobras e casos especiais
+no que a US mudou e em quem depende disso.
 
 **Contexto por US.** Cada etapa é um processo novo do CLI (sem `--resume`): nenhuma conversa passa de
 uma US para outra. O que atravessa US é só o que o orquestrador injeta: discovery, grafo e a lista das

@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -139,5 +140,16 @@ func TestKilledLensIsRetriedAlone(t *testing.T) {
 	}
 	if exec.count("rev · Spec") != 2 || exec.count("rev · Tests") != 1 {
 		t.Errorf("only the failed lens is retried: spec=%d tests=%d", exec.count("rev · Spec"), exec.count("rev · Tests"))
+	}
+}
+
+func TestEachLensReadsOnlyItsSkills(t *testing.T) {
+	stage := Stage{ID: "review", Task: "revise", Skills: []string{"code-review-and-quality", "structural-health"}}
+	prompt := buildPrompt(lensStage(stage, Lens{ID: "structure", Skills: []string{"structural-health"}}), storyContext{}, nil, nil)
+	if !strings.Contains(prompt, "`structural-health`") || strings.Contains(prompt, "code-review-and-quality") {
+		t.Errorf("structure lens must read only structural-health:\n%s", prompt)
+	}
+	if got := lensStage(stage, Lens{ID: "spec"}).Skills; !slices.Equal(got, stage.Skills) {
+		t.Errorf("a lens without skills keeps the stage's: %v", got)
 	}
 }
