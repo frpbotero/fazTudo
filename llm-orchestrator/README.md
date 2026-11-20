@@ -252,11 +252,11 @@ navegador e sem porta TCP aberta. A API roda no mesmo processo.
 | Sistema | Instalador | Como gerar |
 |---------|------------|------------|
 | macOS 13+ (Intel e Apple Silicon) | `FazTudo-<versão>-macos-universal.dmg` | `make dmg` (local) ou CI |
-| Windows 10/11 x64 | `FazTudo-<versão>-windows-amd64-setup.exe` | CI (`make desktop-windows` exige `makensis`) |
+| Windows 10/11 x64 | `FazTudo-<versão>-windows-amd64-setup.exe` | Fora da CI por enquanto: as verificações rodam via `/bin/sh` e a trava do repositório só existe em Unix. `make desktop-windows` (exige `makensis`) ainda compila localmente |
 | Linux x64 | `.deb`, `.rpm`, `.tar.gz` | CI (`make desktop-linux` + `scripts/package-linux.sh` no Linux) |
 
 Publicar versão: `git tag v0.2.0 && git push origin v0.2.0`. O workflow
-[`desktop-release`](../.github/workflows/desktop-release.yml) compila nos três sistemas e anexa
+[`desktop-release`](../.github/workflows/desktop-release.yml) compila no macOS e no Linux e anexa
 os instaladores à Release. Rodado manualmente (*Run workflow*), deixa os arquivos em *Artifacts*.
 
 ```bash

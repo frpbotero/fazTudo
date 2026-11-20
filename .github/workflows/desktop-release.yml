@@ -1,7 +1,10 @@
 # Builds the FazTudo desktop installers on native runners:
 #   macOS   -> .dmg (universal: Intel + Apple Silicon)
-#   Windows -> NSIS installer .exe (bootstraps WebView2 when missing)
 #   Linux   -> .deb, .rpm and .tar.gz
+# Windows is left out until the app supports it: project checks run through
+# /bin/sh and the repository lock is Unix-only, so the installer would build
+# an app that fails at its first verification (make desktop-windows still
+# builds it locally).
 # Push a tag like v0.2.0 to publish a GitHub Release, or run it manually to
 # just download the artifacts.
 name: desktop-release
@@ -29,8 +32,6 @@ jobs:
         include:
           - os: macos-latest
             target: mac
-          - os: windows-latest
-            target: windows
           - os: ubuntu-24.04
             target: linux
     runs-on: ${{ matrix.os }}
@@ -67,14 +68,6 @@ jobs:
       - name: macOS (.dmg)
         if: matrix.target == 'mac'
         run: make dmg VERSION=${{ steps.version.outputs.value }} APP_VERSION=${{ steps.version.outputs.value }}
-
-      - name: Windows (instalador .exe)
-        if: matrix.target == 'windows'
-        shell: bash
-        run: |
-          make desktop-windows VERSION=${{ steps.version.outputs.value }}
-          mkdir -p dist
-          cp build/bin/*-installer.exe "dist/FazTudo-${{ steps.version.outputs.value }}-windows-amd64-setup.exe"
 
       - name: Linux (.deb, .rpm, .tar.gz)
         if: matrix.target == 'linux'
