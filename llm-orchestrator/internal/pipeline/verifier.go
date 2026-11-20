@@ -3,12 +3,14 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/workspace"
 )
 
 // maxVerifierRounds is how many fix rounds an executable gate may trigger;
@@ -21,6 +23,13 @@ const (
 	maxIssueOutput = 3000
 	maxIssueLines  = 50
 )
+
+// maxTimeoutOutput is how much of a command cut by its time limit the report
+// quotes: enough to show which phase it was in.
+const maxTimeoutOutput = 600
+
+// sweepTimeout bounds one cleanup of disposable stacks.
+const sweepTimeout = 90 * time.Second
 
 // runVerifier executes a deterministic gate and its fix rounds. A verifier
 // whose repository did not change since the last approval is skipped.
@@ -43,7 +52,7 @@ func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storySt
 	if !o.enforceGate(ctx, ss, st, stage, ev, recheck) {
 		return false
 	}
-	st.verifiedAt = time.Now()
+	st.verifiedAt = quality.FileClock(ss.repo)
 	return true
 }
 
@@ -58,16 +67,16 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 	}
 	started := time.Now()
 	o.updateStep(ref, func(s *Step) { s.Status = StepRunning; s.StartedAt = &started })
-	a, ok := o.assess(ctx, ss, st, ss.repo, o.changedFiles(ss, st.started))
+	a, ok := o.reassess(ctx, ss, st)
 	if !ok {
 		o.cancelStep(ref, time.Since(started))
 		return nil, false
 	}
 	if a.passed() {
-		st.verifiedAt = time.Now()
+		st.verifiedAt = quality.FileClock(ss.repo)
 		return nil, true
 	}
-	report := verifierReport(a.results, a.findings, a.traces)
+	report := verifierReport(a)
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
 		s.Checks = a.results
@@ -96,7 +105,7 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 		return evaluation{simulated: true}, true
 	}
 
-	a, ok := o.assess(ctx, ss, st, ss.repo, o.changedFiles(ss, st.started))
+	a, ok := o.reassess(ctx, ss, st)
 	if !ok {
 		o.cancelStep(ref, time.Since(started))
 		return evaluation{}, false
@@ -110,7 +119,7 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 	if len(issues) > 0 {
 		verdict = Verdict{Status: VerdictChangesRequested, Issues: issues}
 	}
-	report := verifierReport(results, findings, traces)
+	report := verifierReport(a)
 	elapsed := time.Since(started)
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
@@ -128,18 +137,85 @@ type assessment struct {
 	findings []quality.Finding
 	traces   []quality.Trace
 	issues   []Issue
+	skipped  []string // commands left out because a cheaper layer failed
 }
 
 func (a assessment) passed() bool { return len(a.issues) == 0 }
 
-// assess runs the project commands in dir, the static checks on the changed
-// files and the test traceability. It returns false when ctx was canceled.
+// failedCommands lists what failed for a reason a retry can change: a command
+// out of time would only spend its whole limit again.
+func (a assessment) failedCommands() []string {
+	var names []string
+	for _, r := range a.results {
+		if !r.Passed && !r.TimedOut {
+			names = append(names, r.Name)
+		}
+	}
+	return names
+}
+
+// assess runs all the project commands in dir, the static checks on the
+// changed files and the test traceability. It returns false when ctx was
+// canceled.
 func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, dir string, changed []string) (assessment, bool) {
+	return o.assessChecks(ctx, ss, st, dir, changed, ss.checks)
+}
+
+// reassess proves a fix cheaply: first the commands that failed; only when
+// they pass, the others. A fix usually touches one failure, and the costliest
+// commands need to run just once, at the end.
+func (o *Orchestrator) reassess(ctx context.Context, ss *session, st *storyState) (assessment, bool) {
+	changed := o.changedFiles(ss, st.started)
+	failed := func(c quality.Command) bool { return slices.Contains(st.red, c.Name) }
+	red := slices.DeleteFunc(slices.Clone(ss.checks), func(c quality.Command) bool { return !failed(c) })
+	if len(red) == 0 {
+		a, ok := o.assess(ctx, ss, st, ss.repo, changed)
+		st.note(a)
+		return a, ok
+	}
+	first, ok := o.assessChecks(ctx, ss, st, ss.repo, changed, red)
+	if !ok || len(first.failedCommands()) > 0 {
+		st.note(first)
+		first.skipped = append(first.skipped, otherNames(ss.checks, red)...)
+		st.skipped = true
+		return first, ok
+	}
+	rest := slices.DeleteFunc(slices.Clone(ss.checks), failed)
+	a, ok := o.assessChecks(ctx, ss, st, ss.repo, changed, rest)
+	a.results = append(first.results, a.results...)
+	st.note(a)
+	return a, ok
+}
+
+func otherNames(checks, excluded []quality.Command) []string {
+	var names []string
+	for _, c := range checks {
+		if !slices.Contains(excluded, c) {
+			names = append(names, c.Name)
+		}
+	}
+	return names
+}
+
+// note remembers what the next round needs to run again.
+func (st *storyState) note(a assessment) {
+	st.red = a.failedCommands()
+	st.skipped = len(a.skipped) > 0
+}
+
+// assessChecks runs checks from the cheapest layer and stops at the first
+// layer that fails: tests of code that does not compile only repeat the error.
+func (o *Orchestrator) assessChecks(ctx context.Context, ss *session, st *storyState, dir string, changed []string, checks []quality.Command) (assessment, bool) {
 	var a assessment
 	timeout := time.Duration(ss.policy.CheckTimeoutS) * time.Second
-	for _, c := range ss.checks {
+	failedLayer := -1
+	for _, c := range quality.InLayers(checks) {
+		if failedLayer >= 0 && quality.Layer(c) > failedLayer {
+			a.skipped = append(a.skipped, c.Name)
+			continue
+		}
 		o.logf(LevelInfo, "Executando %s: %s", c.Name, c.Run)
-		r := o.runCheck(ctx, dir, c, timeout)
+		r := o.runGated(ctx, ss, dir, c, timeout)
 		if ctx.Err() != nil {
 			return a, false
 		}
@@ -148,13 +224,9 @@ func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, 
 			o.logf(LevelSuccess, "%s passou em %s.", c.Name, time.Duration(r.DurationMS)*time.Millisecond)
 			continue
 		}
+		failedLayer = quality.Layer(c)
 		o.logf(LevelWarn, "%s falhou (%s).", c.Name, exitLabel(r))
-		a.issues = append(a.issues, Issue{
-			Agent:       o.assignCommand(c, st.plan),
-			Severity:    "alta",
-			Description: commandIssue(c, r),
-			Location:    c.Name,
-		})
+		a.addFailure(o.commandFailure(ss, st, c, r))
 	}
 
 	a.findings = append(a.findings, quality.Syntax(ctx, dir, changed)...)
@@ -174,8 +246,108 @@ func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, 
 	}
 
 	a.traces = quality.TraceTests(dir, st.reqs)
-	a.issues = append(a.issues, o.traceIssues(a.traces, st.plan)...)
+	a.issues = append(a.issues, o.traceIssues(ss, a.traces, st.plan)...)
 	return a, true
+}
+
+// addFailure keeps one issue per cause: a command that only repeats failures
+// another already reported adds nothing but a second owner for them.
+func (a *assessment) addFailure(is Issue) {
+	reported := func(f string) bool {
+		return slices.ContainsFunc(a.issues, func(other Issue) bool { return slices.Contains(other.Fingerprints, f) })
+	}
+	if len(is.Fingerprints) > 0 && !slices.ContainsFunc(is.Fingerprints, func(f string) bool { return !reported(f) }) {
+		return
+	}
+	a.issues = append(a.issues, is)
+}
+
+// commandFailure turns a failed command into an issue, with what identifies
+// the failures behind it.
+func (o *Orchestrator) commandFailure(ss *session, st *storyState, c quality.Command, r quality.Result) Issue {
+	is := Issue{Severity: "alta", Description: commandIssue(c, r), Location: c.Name, Infra: r.TimedOut}
+	if r.TimedOut {
+		is.Agent = o.assignCommand(c, st.plan)
+		is.Fingerprints = []string{quality.TextFingerprint("timeout", c.Name)}
+		return is
+	}
+	failures := r.Failures
+	if len(failures) == 0 {
+		failures = quality.ParseFailures(c, failureText(r))
+	}
+	is.Agent = o.assignFailure(ss, c, failures, st.plan)
+	is.Fingerprints = quality.Fingerprints(failures)
+	is.Class = classBuild
+	for _, f := range failures {
+		if !f.Compile {
+			is.Class = classTest
+		}
+		is.Titles = append(is.Titles, failureTitle(f))
+		if f.File != "" {
+			is.Files = append(is.Files, path.Join(f.Dir, f.File))
+		}
+	}
+	return is
+}
+
+func failureTitle(f quality.Failure) string {
+	switch {
+	case f.Test != "" && f.Message != "":
+		return f.Test + ": " + f.Message
+	case f.Test != "":
+		return f.Test
+	case f.File != "":
+		return fmt.Sprintf("%s:%d %s", f.File, f.Line, f.Message)
+	}
+	return f.Message
+}
+
+// runGated runs c, giving a command that starts a stack the machine's single
+// slot. Holding it, every disposable stack of the repository is garbage, so
+// one more sweep costs nothing and caps what agents and killed runs left.
+// Stories running side by side may each have an agent using a stack, so there
+// only the run's ends sweep.
+func (o *Orchestrator) runGated(ctx context.Context, ss *session, dir string, c quality.Command, timeout time.Duration) quality.Result {
+	if !quality.Heavy(c) {
+		return o.runCheck(ctx, dir, c, timeout)
+	}
+	release, err := o.lockStackSlot(ctx, func() { o.logf(LevelInfo, "Aguardando vaga para E2E: %s.", c.Name) })
+	switch {
+	case err == nil:
+		defer release()
+	case ctx.Err() != nil:
+		return quality.Result{Name: c.Name, Command: c.Run, ExitCode: -1, Output: err.Error()}
+	default:
+		o.logf(LevelWarn, "Vaga de E2E indisponível (%v); seguindo sem o limite.", err)
+	}
+	if ss.policy.Sequential {
+		roots := []string{ss.repo, dir}
+		o.sweepLeftovers(roots, ss.policy.EphemeralStacks)
+		defer o.sweepLeftovers(roots, ss.policy.EphemeralStacks)
+	}
+	return o.runCheck(ctx, dir, c, timeout)
+}
+
+// sweepRun removes the stacks an earlier run or an agent left behind in repo.
+// The repository lock guarantees no other run is using them.
+func (o *Orchestrator) sweepRun(repo string, dry bool) {
+	if !dry {
+		o.sweepLeftovers([]string{repo}, o.ws.Policy().EphemeralStacks)
+	}
+}
+
+// sweepLeftovers never fails a run: the context is its own, since the run's
+// may already be canceled, and a stack that survives is only reported.
+func (o *Orchestrator) sweepLeftovers(roots, patterns []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), sweepTimeout)
+	defer cancel()
+	removed, err := o.sweepStacks(ctx, roots, patterns)
+	if len(removed) > 0 {
+		o.logf(LevelInfo, "Stacks de teste removidas: %s.", strings.Join(removed, ", "))
+	}
+	if err != nil {
+		o.logf(LevelWarn, "Limpeza de stacks de teste: %v.", err)
+	}
 }
 
 // changedFiles lists files modified since t, excluding protected inputs.
@@ -208,8 +380,57 @@ func (o *Orchestrator) assignFile(file string, plan Plan) string {
 	return o.prefer("backend", plan)
 }
 
+// assignFailure finds who owns a failing command from the evidence, in order:
+// the front of the plan that covers the failing file, the stack of the
+// directory the command runs in, and last its wording.
+func (o *Orchestrator) assignFailure(ss *session, c quality.Command, failures []quality.Failure, plan Plan) string {
+	dir := quality.CommandDir(c)
+	for _, f := range failures {
+		if f.File == "" {
+			continue
+		}
+		if agent := planOwner(plan, path.Join(dir, f.File)); agent != "" {
+			return o.prefer(agent, plan)
+		}
+	}
+	if agent := stackOwner(ss.report, dir); agent != "" {
+		return o.prefer(agent, plan)
+	}
+	return o.assignCommand(c, plan)
+}
+
+// planOwner is the agent of the plan's front whose files cover file.
+func planOwner(plan Plan, file string) string {
+	for _, s := range plan.Streams {
+		for _, covered := range s.Files {
+			if strings.HasPrefix(file, strings.TrimPrefix(covered, "./")) {
+				return s.Agent
+			}
+		}
+	}
+	return ""
+}
+
+// stackOwner tells interface code from services by the stack found in dir.
+func stackOwner(report *workspace.Report, dir string) string {
+	if report == nil || dir == "" {
+		return ""
+	}
+	owner := ""
+	for _, s := range report.Stacks {
+		if path.Clean(s.Dir) != path.Clean(dir) {
+			continue
+		}
+		if s.Name == "Angular" || s.Name == "Playwright" {
+			return "frontend"
+		}
+		owner = "backend"
+	}
+	return owner
+}
+
 func (o *Orchestrator) assignCommand(c quality.Command, plan Plan) string {
-	if containsAny(strings.ToLower(c.Name+" "+c.Run), "e2e", "playwright", "cypress", "frontend", "web") {
+	if containsAny(strings.ToLower(c.Name+" "+c.Run), "e2e", "playwright", "cypress", "frontend", "front", "web") {
 		return o.prefer("frontend", plan)
 	}
 	return defaultImplementer(o.stages, plan)
@@ -217,9 +438,9 @@ func (o *Orchestrator) assignCommand(c quality.Command, plan Plan) string {
 
 func (o *Orchestrator) assignKind(kind string, plan Plan) string {
 	switch kind {
-	case "e2e", "integration":
+	case "e2e":
 		return o.prefer("frontend", plan)
-	case "unit":
+	case "unit", "integration":
 		return o.prefer("backend", plan)
 	}
 	return defaultImplementer(o.stages, plan)
@@ -227,11 +448,12 @@ func (o *Orchestrator) assignKind(kind string, plan Plan) string {
 
 // traceIssues turns required tests missing from the repository into one
 // issue per responsible implementer.
-func (o *Orchestrator) traceIssues(traces []quality.Trace, plan Plan) []Issue {
+func (o *Orchestrator) traceIssues(ss *session, traces []quality.Trace, plan Plan) []Issue {
 	missing := map[string][]string{}
 	var order []string
 	for _, t := range traces {
-		if t.Found() {
+		// With the E2E stage off, nobody in this flow writes those tests.
+		if t.Found() || (t.Kind == "e2e" && ss.policy.StageDisabled("e2e")) {
 			continue
 		}
 		agent := o.assignKind(t.Kind, plan)
@@ -253,14 +475,31 @@ func (o *Orchestrator) traceIssues(traces []quality.Trace, plan Plan) []Issue {
 			Description: fmt.Sprintf("%d caso(s) de teste da especificação sem teste no repositório. "+
 				"Escreva-os com o ID no nome: %s", len(ids), strings.Join(ids, "; ")),
 			Location: "rastreabilidade",
+			Class:    classMissingTest,
+			// The list shrinks as tests appear: it is still the same task.
+			Fingerprints: []string{quality.TextFingerprint("rastreabilidade", agent)},
+			Titles:       []string{"Testes da especificação sem implementação"},
 		})
 	}
 	return issues
 }
 
 func commandIssue(c quality.Command, r quality.Result) string {
+	if r.TimedOut {
+		return fmt.Sprintf("`%s` (%s) excedeu o tempo limite depois de %s, sem concluir. Não indica erro no código: "+
+			"aumente o tempo limite em Portões de qualidade. Última saída:\n```\n%s\n```",
+			c.Run, c.Name, (time.Duration(r.DurationMS) * time.Millisecond).Round(time.Second), tail(r.Output, maxTimeoutOutput))
+	}
 	return fmt.Sprintf("`%s` (%s) %s. Corrija o código até passar. Mude teste só se contrariar a especificação, com motivo. "+
-		"Falhas:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(quality.FailureSummary(r.Output, maxIssueLines), maxIssueOutput))
+		"Falhas:\n```\n%s\n```", c.Run, c.Name, exitLabel(r), tail(quality.FailureSummary(failureText(r), maxIssueLines), maxIssueOutput))
+}
+
+// failureText prefers the evidence kept from the whole output over its tail.
+func failureText(r quality.Result) string {
+	if r.Evidence != "" {
+		return r.Evidence
+	}
+	return r.Output
 }
 
 func exitLabel(r quality.Result) string {
@@ -289,7 +528,8 @@ func findingLocation(f quality.Finding) string {
 
 // verifierReport is the Markdown summary shown in the step and sent to the
 // implementers in fix rounds.
-func verifierReport(results []quality.Result, findings []quality.Finding, traces []quality.Trace) string {
+func verifierReport(a assessment) string {
+	results, findings, traces := a.results, a.findings, a.traces
 	var b strings.Builder
 	b.WriteString("## Comandos do projeto\n\n")
 	if len(results) == 0 {
@@ -304,6 +544,10 @@ func verifierReport(results []quality.Result, findings []quality.Finding, traces
 		if !r.Passed && r.Output != "" {
 			fmt.Fprintf(&b, "\n```\n%s\n```\n\n", tail(r.Output, maxIssueOutput))
 		}
+	}
+
+	if len(a.skipped) > 0 {
+		fmt.Fprintf(&b, "\nNão executados nesta rodada, até o que falhou passar: %s.\n", strings.Join(a.skipped, ", "))
 	}
 
 	b.WriteString("\n## Checagens estáticas dos arquivos alterados\n\n")

@@ -3,6 +3,7 @@ package workspace
 import (
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 
@@ -56,7 +57,15 @@ type Policy struct {
 	// AgentCommands are shell command prefixes writing agents may run besides
 	// the project checks (e.g. "npm install"). Nil uses DefaultAgentCommands.
 	AgentCommands []string `json:"agent_commands"`
+	// EphemeralStacks are name patterns (path.Match) of the disposable Docker
+	// Compose projects test runs create in this repository; the orchestrator
+	// removes the ones left behind. Nil uses DefaultEphemeralStacks; an empty
+	// list turns the cleanup off.
+	EphemeralStacks []string `json:"ephemeral_stacks"`
 }
+
+// DefaultEphemeralStacks match the usual name of an isolated E2E stack.
+var DefaultEphemeralStacks = []string{"*-e2e-*"}
 
 // DefaultAgentCommands let the E2E agent run Playwright, which starts the
 // application itself through the webServer of playwright.config.
@@ -116,6 +125,8 @@ func DefaultPolicy() Policy {
 		Flow:           FlowFull,
 		MaxFixRounds:   0, // 0 defaults to the engine's maxFixRounds (2)
 		AgentCommands:  slices.Clone(DefaultAgentCommands),
+
+		EphemeralStacks: slices.Clone(DefaultEphemeralStacks),
 	}
 }
 
@@ -170,6 +181,16 @@ func (p Policy) Normalize() Policy {
 		}
 	}
 	p.AgentCommands = commands
+	if p.EphemeralStacks == nil {
+		p.EphemeralStacks = slices.Clone(def.EphemeralStacks)
+	}
+	stacks := []string{}
+	for _, s := range p.EphemeralStacks {
+		if s = strings.TrimSpace(s); s != "" && !slices.Contains(stacks, s) {
+			stacks = append(stacks, s)
+		}
+	}
+	p.EphemeralStacks = stacks
 	bases := map[string]string{}
 	for repo, branch := range p.BaseBranches {
 		if repo, branch = strings.TrimSpace(repo), strings.TrimSpace(branch); repo != "" && branch != "" {
@@ -204,6 +225,8 @@ func (p Policy) Validate() error {
 		return fmt.Errorf("o limite de turnos deve estar entre 0 e %d", maxAgentTurns)
 	case len(p.AgentCommands) > maxChecks:
 		return fmt.Errorf("no máximo %d comandos liberados aos agentes", maxChecks)
+	case len(p.EphemeralStacks) > maxPatterns:
+		return fmt.Errorf("no máximo %d padrões de stacks descartáveis", maxPatterns)
 	case !p.AutoChecks && len(p.Checks) == 0:
 		return errors.New("informe ao menos um comando ou use os detectados automaticamente")
 	}
@@ -219,6 +242,12 @@ func (p Policy) Validate() error {
 		// A prefix becomes a permission rule; it must read as a plain command.
 		if len(c) > 200 || strings.HasPrefix(c, "-") || strings.ContainsAny(c, "\n\r()") {
 			return fmt.Errorf("comando liberado inválido: %q", c)
+		}
+	}
+	for _, s := range p.EphemeralStacks {
+		// A pattern matching every name would remove the user's own stacks.
+		if _, err := path.Match(s, ""); err != nil || len(s) > 200 || strings.Trim(s, "*?") == "" {
+			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
 	}
 	for _, c := range p.Checks {

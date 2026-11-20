@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -89,7 +90,7 @@ type CLI struct {
 // agentSystem is the system prompt of every call. It never changes, so the
 // CLI's prompt cache covers it and the shared context that follows; the
 // stage's own role goes at the end of the prompt (withRole).
-const agentSystem = "Agente de engenharia em execução automática: ninguém vai responder perguntas; decida e siga. " +
+const agentSystem = "Agente de engenharia em execução automática: ninguém vai responder perguntas nem liberar nada; decida e siga. " +
 	"Economia de contexto: leia só os arquivos da tarefa; consulte o grafo do código e busque em caminhos específicos antes de abrir arquivos; " +
 	"não releia arquivo que não mudou; nunca despeje log inteiro (filtre a falha, `| tail -n 50`); resposta final curta."
 
@@ -112,6 +113,8 @@ func instructionsFirst(inv Invocation) string {
 const (
 	claudeReadTools  = "Read,Grep,Glob"
 	claudeWriteTools = "Read,Grep,Glob,Edit,Write,Bash"
+	// claudeDiagnoseTools has no tool that edits files.
+	claudeDiagnoseTools = "Read,Grep,Glob,Bash"
 )
 
 // safeCommands are the shell commands any writing agent may run besides the
@@ -125,7 +128,32 @@ var safeCommands = []string{
 // commands and the ones the repository policy lists. Anything else is denied
 // (--permission-mode dontAsk), never prompted.
 func claudeAllowed(commands []string) []string {
-	rules := []string{"Read", "Grep", "Glob", "Edit", "Write"}
+	return append([]string{"Read", "Grep", "Glob", "Edit", "Write"}, bashRules(commands)...)
+}
+
+func claudeDiagnoseAllowed(commands []string) []string {
+	return append([]string{"Read", "Grep", "Glob"}, bashRules(commands)...)
+}
+
+// claudeReadDirs grants read access to dirs and denies edits inside them;
+// deny rules win over the allowlist. "//" marks an absolute path in a rule.
+func claudeReadDirs(dirs []string) []string {
+	var args []string
+	for _, d := range dirs {
+		args = append(args, "--add-dir", d)
+	}
+	if len(dirs) > 0 {
+		args = append(args, "--disallowedTools")
+		for _, d := range dirs {
+			pattern := "/" + filepath.ToSlash(d) + "/**"
+			args = append(args, fmt.Sprintf("Edit(%s)", pattern), fmt.Sprintf("Write(%s)", pattern))
+		}
+	}
+	return args
+}
+
+func bashRules(commands []string) []string {
+	var rules []string
 	for _, c := range append(slices.Clone(safeCommands), commands...) {
 		if c = strings.TrimSpace(c); c != "" {
 			rules = append(rules, fmt.Sprintf("Bash(%s)", c), fmt.Sprintf("Bash(%s *)", c))
@@ -155,12 +183,16 @@ var ClaudeCLI = CLI{
 		// and, unlike --bare, keeps the claude.ai login.
 		args := []string{"-p", "--safe-mode", "--no-session-persistence", "--output-format", "json",
 			"--append-system-prompt", agentSystem}
-		if inv.ReadOnly {
+		if inv.ReadOnly && inv.Diagnose {
+			args = append(args, "--permission-mode", "dontAsk", "--tools", claudeDiagnoseTools, "--allowedTools")
+			args = append(args, claudeDiagnoseAllowed(inv.Commands)...)
+		} else if inv.ReadOnly {
 			args = append(args, "--permission-mode", "plan", "--tools", claudeReadTools)
 		} else {
 			args = append(args, "--permission-mode", "dontAsk", "--tools", claudeWriteTools, "--allowedTools")
 			args = append(args, claudeAllowed(inv.Commands)...)
 		}
+		args = append(args, claudeReadDirs(inv.ReadDirs)...)
 		args = append(args, "--autocompact", "auto")
 		if inv.MaxTurns > 0 {
 			args = append(args, "--max-turns", strconv.Itoa(inv.MaxTurns))
@@ -244,6 +276,9 @@ var GeminiCLI = CLI{
 				}
 			}
 		}
+		for _, d := range inv.ReadDirs {
+			args = append(args, "--include-directories", d)
+		}
 		if inv.Model != "" {
 			args = append(args, "--model", inv.Model)
 		}
@@ -262,12 +297,16 @@ type Invocation struct {
 	Prompt   string
 	WorkDir  string
 	ReadOnly bool // the agent may read the repository but not change it
+	Diagnose bool // a ReadOnly agent may also run Commands
 	// MaxTurns bounds the agent's turns where the CLI supports it; 0 = no limit.
 	MaxTurns int
 	// Commands are the shell commands a writing agent may run (the
 	// repository's checks and policy); they come from configuration, never
 	// from an agent's output.
 	Commands []string
+	// ReadDirs are directories outside WorkDir the agent may read but not
+	// change (the bundled skills).
+	ReadDirs []string
 }
 
 // Runner executes an invocation and returns the combined output. On failure

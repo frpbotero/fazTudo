@@ -33,28 +33,33 @@ type agentLimits struct {
 }
 
 // useLimits derives the agent limits of a run from its policy: the project
-// checks and the policy's extra commands are the only shell writers may run.
+// checks, the tools to reproduce a failure and the policy's extra commands are
+// the only shell writers may run.
 func (o *Orchestrator) useLimits(policy workspace.Policy, checks []quality.Command) {
 	l := agentLimits{writeTurns: defaultWriteTurns, readTurns: defaultReadTurns, stop: policy.StopOnTurnLimit}
 	if policy.MaxTurns > 0 {
 		l.writeTurns, l.readTurns = policy.MaxTurns, max(policy.MaxTurns/2, minReadTurns)
 	}
-	for _, c := range checks {
-		l.commands = append(l.commands, c.Run)
-	}
-	l.commands = append(l.commands, policy.AgentCommands...)
+	l.commands = append(quality.RepairCommands(checks), policy.AgentCommands...)
 	o.mu.Lock()
 	o.limits = l
 	o.mu.Unlock()
 }
 
-// limited applies the run's limits to a request.
+// limited applies the run's limits to a request and lets the agent read the
+// bundled skills its prompt points at.
 func (o *Orchestrator) limited(req provider.Request) provider.Request {
 	o.mu.RLock()
 	l := o.limits
 	o.mu.RUnlock()
+	if dir := skillsDir(); dir != "" {
+		req.ReadDirs = []string{dir}
+	}
 	if req.ReadOnly {
 		req.MaxTurns = l.readTurns
+		if req.Diagnose {
+			req.Commands = l.commands
+		}
 		return req
 	}
 	req.MaxTurns, req.Commands = l.writeTurns, l.commands

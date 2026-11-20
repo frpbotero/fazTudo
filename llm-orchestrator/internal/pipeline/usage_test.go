@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func TestPromptsShareTheirOpening(t *testing.T) {
 	report := &workspace.Report{Path: "/repo", Summary: "mapa"}
 	spec := buildPrompt(DefaultStages[1], sc, report, nil)
 	arch := buildPrompt(DefaultStages[2], sc, report, []Step{{ID: "spec", Output: "edd"}})
-	fix := buildFixPrompt(DefaultStages[4], DefaultStages[5], sc, report, "", "", nil, 1)
+	fix := buildFixPrompt(fixTask, DefaultStages[5], sc, report, "", "", "", nil, 1)
 	head := spec[:strings.Index(spec, "## User Story")]
 	for name, p := range map[string]string{"arch": arch, "fix": fix} {
 		if !strings.HasPrefix(p, head) {
@@ -55,8 +56,12 @@ func TestLimitedRequests(t *testing.T) {
 	o := &Orchestrator{}
 	policy := workspace.DefaultPolicy()
 	o.useLimits(policy, []quality.Command{{Name: "test", Run: "npm test"}})
+	if got := o.limited(provider.Request{ReadOnly: true}).ReadDirs; !slices.Equal(got, []string{"/skills"}) {
+		t.Errorf("every agent may read the bundled skills: ReadDirs = %v", got)
+	}
 	write := o.limited(provider.Request{})
-	if write.MaxTurns != defaultWriteTurns || write.Commands[0] != "npm test" || len(write.Commands) != 1+len(workspace.DefaultAgentCommands) {
+	if write.MaxTurns != defaultWriteTurns || !slices.Contains(write.Commands, "npm test") ||
+		!slices.Contains(write.Commands, "npx jest") || !slices.Contains(write.Commands, workspace.DefaultAgentCommands[0]) {
 		t.Errorf("write request = %+v", write)
 	}
 	if read := o.limited(provider.Request{ReadOnly: true}); read.MaxTurns != defaultReadTurns || read.Commands != nil {

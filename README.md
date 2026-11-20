@@ -27,6 +27,7 @@ Roda como aplicativo desktop (macOS, Windows e Linux) ou como servidor local com
 - [Consumo de tokens](#consumo-de-tokens)
 - [Várias janelas](#várias-janelas)
 - [Modo servidor](#modo-servidor)
+- [Modo console](#modo-console)
 - [Desenvolvimento](#desenvolvimento)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Documentação detalhada](#documentação-detalhada)
@@ -291,6 +292,30 @@ make docker               # imagem distroless (modo simulação)
 > liberados (Claude: `--permission-mode dontAsk` com `--allowedTools`; Codex: `--sandbox workspace-write`;
 > Gemini: `--approval-mode auto_edit`), e os comandos de verificação rodam no shell. Por isso o servidor escuta só em `127.0.0.1` e recusa escritas vindas de
 > outras origens. Não exponha a porta em redes não confiáveis.
+
+---
+
+## Modo console
+
+O mesmo binário também funciona sem janela e sem iniciar o servidor web:
+
+```bash
+cd llm-orchestrator
+go run . run --repo /caminho/do/projeto --file /caminho/US.md
+go run . run --repo /caminho/do/projeto --file /caminho/US.md --stories US-1,US-3 --real
+go run . tui --repo /caminho/do/projeto
+```
+
+`run` usa simulação por padrão; `--real` executa os CLIs e pode alterar o repositório. A execução
+permanece no terminal e Ctrl+C solicita parada. De outro terminal, `status`, `logs` e `stop` consultam
+ou controlam a execução ativa pela configuração local, sem abrir uma porta. `resume` continua a última
+execução interrompida e `retry --story 0 --step review` refaz uma etapa com falha. Use `--config` para
+escolher o mesmo arquivo de configuração em todos os comandos.
+
+`faztudo help` lista os comandos para repositório, política de qualidade, provedores, modelos,
+prompts, branches e diffs. As políticas e configurações podem ser exportadas com `show` e aplicadas
+de um arquivo JSON com `apply --file`. Na TUI, Tab troca a seção e a linha `>` executa os mesmos
+comandos da CLI; caminhos com espaços podem ficar entre aspas.
 
 ---
 

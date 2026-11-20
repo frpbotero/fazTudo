@@ -31,6 +31,15 @@ type Issue struct {
 	Severity    string `json:"severity,omitempty"`
 	Description string `json:"description"`
 	Location    string `json:"location,omitempty"`
+	// Infra marks a failure no code change can fix, such as a command that ran
+	// out of time: it goes to the report, never to an implementer.
+	Infra bool `json:"infra,omitempty"`
+	// Class, Fingerprints, Titles and Files identify the failure behind the
+	// issue. Only the orchestrator's own checks set them.
+	Class        string   `json:"class,omitempty"`
+	Fingerprints []string `json:"fingerprints,omitempty"`
+	Titles       []string `json:"titles,omitempty"`
+	Files        []string `json:"files,omitempty"`
 }
 
 // Verdict is a quality gate's structured outcome.
@@ -106,6 +115,7 @@ func parseVerdict(output string, stages []Stage, plan Plan) (Verdict, bool) {
 		if strings.TrimSpace(is.Description) == "" {
 			continue
 		}
+		is.Infra, is.Class, is.Fingerprints, is.Titles, is.Files = false, "", nil, nil, nil // not a model's to claim
 		is.Agent = strings.ToLower(strings.TrimSpace(is.Agent))
 		if !isImplementer(stages, is.Agent) {
 			is.Agent = defaultImplementer(stages, plan)

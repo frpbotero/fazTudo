@@ -31,7 +31,7 @@ func UpdateGraph(ctx context.Context, repo string) (string, error) {
 	if err != nil {
 		return "", ErrGraphUnavailable
 	}
-	excludeFromGit(repo, GraphDir+"/")
+	ExcludeFromGit(repo, GraphDir+"/")
 	ctx, cancel := context.WithTimeout(ctx, graphTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "update", ".")
@@ -60,10 +60,10 @@ func GraphReport(graph string) string {
 	return string(data)
 }
 
-// excludeFromGit adds pattern to the repository's local exclude file, so
+// ExcludeFromGit adds pattern to the repository's local exclude file, so
 // generated files never show up as changes nor end up in a commit. Best
 // effort: without git there is nothing to exclude from.
-func excludeFromGit(repo, pattern string) {
+func ExcludeFromGit(repo, pattern string) {
 	info := filepath.Join(repo, ".git", "info")
 	if st, err := os.Stat(info); err != nil || !st.IsDir() {
 		return

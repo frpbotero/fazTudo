@@ -2,6 +2,7 @@ package quality
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,7 +43,8 @@ func TestRunReportsExitCodeAndOutputTail(t *testing.T) {
 
 func TestRunTimeoutKillsProcessGroup(t *testing.T) {
 	start := time.Now()
-	r := Run(context.Background(), t.TempDir(), Command{Run: "sleep 30 & sleep 30"}, 300*time.Millisecond)
+	// A background job ignores SIGINT, so only the group's kill ends it.
+	r := run(context.Background(), t.TempDir(), Command{Run: "sleep 30 & sleep 30"}, 300*time.Millisecond, 200*time.Millisecond)
 	if r.Passed || !r.TimedOut {
 		t.Fatalf("expected timeout, got %+v", r)
 	}
@@ -228,6 +230,25 @@ func TestChangedSinceSkipsGeneratedDirs(t *testing.T) {
 	}
 }
 
+func TestFileClockOrdersFilesWrittenAfterIt(t *testing.T) {
+	root := t.TempDir()
+	for i := range 50 {
+		since := FileClock(root)
+		name := fmt.Sprintf("f%d.js", i)
+		write(t, root, name, "")
+		if got := ChangedSince(root, since); !slices.Contains(got, name) {
+			t.Fatalf("a file written right after FileClock must count as changed: %v", got)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	FileClock(root)
+	if left, _ := filepath.Glob(filepath.Join(root, ".git", "faztudo-clock-*")); len(left) > 0 {
+		t.Errorf("probe files left behind: %v", left)
+	}
+}
+
 func TestIsTestFile(t *testing.T) {
 	for path, want := range map[string]bool{
 		"tests/unit/cart.test.mjs": true, "src/cart_test.go": true, "e2e/flow.ts": true,
@@ -257,5 +278,27 @@ func TestTraceFindsTestCodeOutsideTestNames(t *testing.T) {
 	}
 	if traces[1].Found() {
 		t.Errorf("a plain source comment is not a test: %+v", traces[1])
+	}
+}
+
+func TestTestIDsListCriterionIDsOfTestFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, text string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/cart.test.ts", "it('UT-CART-01 soma itens', () => {}) // UTF-8, SHA-256\nit(\"IT-CART-PAY-2\", f)")
+	write("pkg/cart_test.go", "func TestUT_CART_03(t *testing.T) {} // E2E-CHECKOUT-07")
+	write("src/cart.ts", "// UT-CART-99 is not a test file")
+	got := TestIDs(root)
+	want := []string{"E2E-CHECKOUT-07", "IT-CART-PAY-2", "UT-CART-01"}
+	if !slices.Equal(got, want) {
+		t.Errorf("TestIDs = %v, want %v", got, want)
 	}
 }

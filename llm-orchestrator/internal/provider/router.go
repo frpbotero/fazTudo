@@ -47,10 +47,15 @@ type Request struct {
 	Tier    Tier
 	// ReadOnly runs the CLI in a mode that cannot modify the repository.
 	ReadOnly bool
+	// Diagnose lets a ReadOnly agent run Commands, without any tool to edit
+	// files. CLIs that cannot express it stay read-only.
+	Diagnose bool
 	// MaxTurns bounds the agent's turns (CLIs that support it); 0 = no limit.
 	MaxTurns int
-	// Commands are the shell commands a writing agent may run.
+	// Commands are the shell commands an agent may run.
 	Commands []string
+	// ReadDirs are directories outside WorkDir the agent may read.
+	ReadDirs []string
 }
 
 // Response is the result of a successful task.
@@ -398,8 +403,10 @@ func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response
 			Prompt:   req.Prompt,
 			WorkDir:  req.WorkDir,
 			ReadOnly: req.ReadOnly,
+			Diagnose: req.Diagnose,
 			MaxTurns: req.MaxTurns,
 			Commands: req.Commands,
+			ReadDirs: req.ReadDirs,
 		}
 		if req.Tier == TierLight {
 			if p.cli.LightModel != "" {

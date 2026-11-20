@@ -62,7 +62,8 @@ func TestReferencedDependenciesInSimulation(t *testing.T) {
 
 func TestParallelStoriesInSimulation(t *testing.T) {
 	exec := &fakeExecutor{outputs: map[string][]string{AnalysisStage.Role: {independentPair}}}
-	o, _ := newTest(t, exec)
+	o, repo := newTest(t, exec)
+	writeFile(t, repo, "CLAUDE.md", "Login antes de perfil.")
 	var both sync.WaitGroup
 	both.Add(2)
 	exec.onCall = func(req provider.Request) {
@@ -85,6 +86,9 @@ func TestParallelStoriesInSimulation(t *testing.T) {
 		t.Errorf("US-3 = wave %d, depends on %v", s.Wave, s.DependsOn)
 	}
 	for _, r := range exec.reqs {
+		if !strings.Contains(r.Prompt, "Login antes de perfil.") {
+			t.Errorf("%s prompt lacks the project instructions", r.Role)
+		}
 		if r.Role == AnalysisStage.Role {
 			continue
 		}
@@ -111,7 +115,8 @@ func newParallelStoryTest(t *testing.T, exec *fakeExecutor) (*Orchestrator, stri
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	o, repo := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	o.stages = testStages
+	o.baseStages = testStages
+	o.stages = o.baseStages
 	o.attempts = 1
 	policy := o.ws.Policy()
 	policy.Git = true

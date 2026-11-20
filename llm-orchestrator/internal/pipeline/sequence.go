@@ -42,7 +42,8 @@ var IntegrationStage = Stage{
 	Role:  "Integration Engineer",
 	Tier:  provider.TierStandard,
 	System: "Resolve conflitos de merge entre US desenvolvidas em paralelo. Preserva o comportamento dos dois lados. " +
-		"Sem git commit/merge/push (orquestrador conclui o merge)." + engineeringRules,
+		"Sem git commit/merge/push (orquestrador conclui o merge).",
+	Rules: true,
 }
 
 const analysisInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
@@ -72,7 +73,7 @@ func storyKeys(list []stories.Story) []string {
 	return keys
 }
 
-func buildAnalysisPrompt(opts StartOptions, keys []string, discovery *workspace.Report) string {
+func buildAnalysisPrompt(task string, opts StartOptions, keys []string, discovery *workspace.Report, instructions string) string {
 	var b strings.Builder
 	if discovery != nil {
 		fmt.Fprintf(&b, "## Repositório\n\n`%s`\n\n", discovery.Path)
@@ -80,6 +81,7 @@ func buildAnalysisPrompt(opts StartOptions, keys []string, discovery *workspace.
 			fmt.Fprintf(&b, "### Discovery\n\n%s\n\n", clip(summary, maxArtifactBytes))
 		}
 	}
+	writeInstructions(&b, instructions)
 	if opts.Preamble != "" {
 		fmt.Fprintf(&b, "## Contexto do documento\n\n%s\n\n", clip(opts.Preamble, maxPreambleBytes))
 	}
@@ -88,7 +90,7 @@ func buildAnalysisPrompt(opts StartOptions, keys []string, discovery *workspace.
 		fmt.Fprintf(&b, "### Chave `%s`: %s\n\n%s\n\n", keys[i], s.Title, clip(strings.TrimSpace(s.Content), maxAnalysisStory))
 	}
 	b.WriteString("## Sua tarefa\n\n")
-	b.WriteString(AnalysisStage.Task)
+	b.WriteString(task)
 	b.WriteString(analysisInstructions)
 	return b.String()
 }
@@ -215,8 +217,8 @@ func (o *Orchestrator) analyzeSequence(ctx context.Context, ss *session, opts St
 	keys := storyKeys(opts.Stories)
 	resp, ok := o.runStage(ctx, analysisRef, provider.Request{
 		Role:     AnalysisStage.Role,
-		System:   AnalysisStage.System,
-		Prompt:   buildAnalysisPrompt(opts, keys, ss.report),
+		System:   o.texts.analysis.System,
+		Prompt:   buildAnalysisPrompt(o.texts.analysis.Task, opts, keys, ss.report, ss.instructions),
 		Tier:     AnalysisStage.Tier,
 		WorkDir:  ss.repo,
 		ReadOnly: true,
@@ -357,7 +359,9 @@ func (o *Orchestrator) storyTask(ss *session, opts StartOptions, si int, resume 
 	if resume != nil && resume.si == si {
 		return o.restoreStoryState(si, resume.started, opts, ss), resume.stageAt, false
 	}
-	started := time.Now()
+	// The file system's clock: the story's changed files are those stamped
+	// after this, and a time.Now() could postdate the first agent's writes.
+	started := quality.FileClock(ss.repo)
 	o.updateStory(si, func(r *StoryRun) { r.Status = StepRunning; r.StartedAt = &started })
 	if total := len(opts.Stories); total > 1 {
 		o.logf(LevelInfo, "Iniciando %s (%d de %d).", opts.Stories[si].Title, si+1, total)
@@ -386,7 +390,8 @@ func (o *Orchestrator) newStoryContext(si int, opts StartOptions, ss *session) s
 	sc := storyContext{
 		Preamble: opts.Preamble, Story: opts.Stories[si], Position: si + 1, Total: len(opts.Stories),
 		Rules: ss.rules(), Instructions: ss.instructions,
-		Audit: ss.policy.StageDisabled("arch"),
+		Audit:       ss.policy.StageDisabled("arch"),
+		AuditNotice: o.texts.auditNotice,
 	}
 	o.mu.RLock()
 	defer o.mu.RUnlock()
@@ -628,7 +633,7 @@ func (o *Orchestrator) resolveConflicts(ctx context.Context, ss *session, opts S
 	o.markRunning(ref, started)
 	resp, err := o.executeRetrying(ctx, ref, provider.Request{
 		Role:    IntegrationStage.Role,
-		System:  IntegrationStage.System,
+		System:  o.texts.integration.System,
 		Prompt:  buildIntegrationPrompt(o.newStoryContext(si, opts, ss), ss.report, conflicts),
 		Tier:    IntegrationStage.Tier,
 		WorkDir: ss.repo,

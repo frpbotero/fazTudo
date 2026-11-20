@@ -29,6 +29,9 @@ type File struct {
 	Repository      string                            `json:"repository,omitempty"`
 	// Quality holds the quality policy of each repository, keyed by path.
 	Quality map[string]workspace.Policy `json:"quality,omitempty"`
+	// Prompts holds the customized texts, by catalog key; the rest follows
+	// each version's defaults.
+	Prompts map[string]string `json:"prompts,omitempty"`
 }
 
 // Status reports where configuration is stored and the last save outcome.

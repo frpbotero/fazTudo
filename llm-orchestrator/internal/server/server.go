@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"llm-orchestrator/internal/health"
 	"llm-orchestrator/internal/pipeline"
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/settings"
@@ -111,12 +112,17 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/pipeline/stop", s.handleStop)
 	mux.HandleFunc("POST /api/pipeline/retry", s.handleRetry)
 	mux.HandleFunc("POST /api/pipeline/resume", s.handleResume)
+	mux.HandleFunc("GET /api/health/areas", s.handleHealthAreas)
+	mux.HandleFunc("POST /api/health/start", s.handleHealthStart)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
 	mux.HandleFunc("PUT /api/workspace", s.handlePutWorkspace)
 	mux.HandleFunc("DELETE /api/workspace/discovery", s.handleResetDiscovery)
 	mux.HandleFunc("PUT /api/workspace/policy", s.handlePutPolicy)
 	mux.HandleFunc("GET /api/workspace/repos", s.handleListRepos)
 	mux.HandleFunc("GET /api/git/commits/{hash}", s.handleShowCommit)
+	mux.HandleFunc("GET /api/prompts", s.handleGetPrompts)
+	mux.HandleFunc("PUT /api/prompts/{key}", s.handlePutPrompt)
+	mux.HandleFunc("DELETE /api/prompts/{key}", s.handleDeletePrompt)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	mux.HandleFunc("PUT /api/config", s.handlePutConfig)
 	mux.HandleFunc("POST /api/providers/{id}/exhaust", s.handleExhaust)
@@ -234,7 +240,7 @@ func (s *Server) detectStories(ctx context.Context, md string) (stories.Document
 	defer cancel()
 	resp, err := s.router.Execute(ctx, provider.Request{
 		Role:     "Identificação de User Stories",
-		System:   stories.DetectSystem,
+		System:   s.orch.Prompt("stories.detect") + "\n" + stories.DetectContract,
 		Prompt:   stories.DetectPrompt(md),
 		WorkDir:  os.TempDir(),
 		Tier:     provider.TierLight,
@@ -361,13 +367,56 @@ func (s *Server) handleStop(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleResume(w http.ResponseWriter, _ *http.Request) {
 	if err := s.orch.Resume(); err != nil {
 		status := http.StatusUnprocessableEntity
-		if errors.Is(err, pipeline.ErrAlreadyRunning) || errors.Is(err, workspace.ErrRepositoryBusy) {
+		if isConflict(err) {
 			status = http.StatusConflict
 		}
 		writeError(w, status, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "resuming"})
+}
+
+// isConflict tells the errors that depend on what else is running.
+func isConflict(err error) bool {
+	return errors.Is(err, pipeline.ErrAlreadyRunning) || errors.Is(err, workspace.ErrRepositoryBusy) ||
+		errors.Is(err, pipeline.ErrCleanupNotResumable)
+}
+
+// handleHealthAreas suggests where a code health run is worth it. It calls
+// no model and changes nothing.
+func (s *Server) handleHealthAreas(w http.ResponseWriter, r *http.Request) {
+	repo := s.ws.Path()
+	if repo == "" {
+		writeError(w, http.StatusUnprocessableEntity, "configure o repositório antes de pedir sugestões")
+		return
+	}
+	suggestion, err := health.Suggest(r.Context(), repo, health.DefaultGraph(repo))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, suggestion)
+}
+
+// handleHealthStart launches a code health run on one area.
+func (s *Server) handleHealthStart(w http.ResponseWriter, r *http.Request) {
+	var opts pipeline.CleanupOptions
+	if !decodeJSON(w, r, &opts) {
+		return
+	}
+	err := s.orch.StartCleanup(opts)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "started", "area": opts.Area})
+	case errors.Is(err, pipeline.ErrInvalidArea), errors.Is(err, pipeline.ErrInvalidRounds):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case isConflict(err), errors.Is(err, pipeline.ErrCleanupNeedsGit):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, workspace.ErrNotConfigured):
+		writeError(w, http.StatusUnprocessableEntity, "configure o repositório antes de iniciar")
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
@@ -380,7 +429,7 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.orch.RetryFailed(body.Story, strings.TrimSpace(body.Step)); err != nil {
 		status := http.StatusUnprocessableEntity
-		if errors.Is(err, pipeline.ErrAlreadyRunning) || errors.Is(err, workspace.ErrRepositoryBusy) {
+		if isConflict(err) {
 			status = http.StatusConflict
 		}
 		writeError(w, status, err.Error())
@@ -479,6 +528,38 @@ func (s *Server) handleShowCommit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"patch": patch})
 }
 
+func (s *Server) handleGetPrompts(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.orch.Prompts())
+}
+
+func (s *Server) handlePutPrompt(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Value string `json:"value"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	s.finishPromptEdit(w, r.PathValue("key"), s.orch.SetPrompt(r.PathValue("key"), body.Value))
+}
+
+func (s *Server) handleDeletePrompt(w http.ResponseWriter, r *http.Request) {
+	s.finishPromptEdit(w, r.PathValue("key"), s.orch.ResetPrompt(r.PathValue("key")))
+}
+
+// finishPromptEdit logs only the key: the text may hold private instructions.
+func (s *Server) finishPromptEdit(w http.ResponseWriter, key string, err error) {
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	s.log.Info("prompt updated", "key", key)
+	s.detectMu.Lock()
+	s.detectKey = [sha256.Size]byte{} // a new detection prompt must not reuse a cached document
+	s.detectMu.Unlock()
+	s.persist()
+	writeJSON(w, http.StatusOK, s.orch.Prompts())
+}
+
 func (s *Server) handleGetConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.router.Config())
 }
@@ -540,7 +621,12 @@ func (s *Server) handleRestore(w http.ResponseWriter, r *http.Request) {
 // persist saves the current configuration. Failures are logged and surfaced
 // through the snapshot's settings status; the in-memory change still applies.
 func (s *Server) persist() {
-	if err := s.store.Update(func() settings.File { return settings.Capture(s.router, s.ws) }); err != nil {
+	capture := func() settings.File {
+		file := settings.Capture(s.router, s.ws)
+		file.Prompts = s.orch.PromptOverrides()
+		return file
+	}
+	if err := s.store.Update(capture); err != nil {
 		s.log.Error("failed to save configuration", "path", s.store.Path(), "err", err)
 	}
 }

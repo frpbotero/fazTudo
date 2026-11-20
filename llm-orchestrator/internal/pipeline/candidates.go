@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"llm-orchestrator/internal/provider"
+	"llm-orchestrator/internal/quality"
 	"llm-orchestrator/internal/vcs"
 )
 
@@ -224,7 +225,7 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 	}
 	if chosen.Passed {
 		// The repository now holds exactly what was just verified.
-		st.verifiedAt = time.Now()
+		st.verifiedAt = quality.FileClock(ss.repo)
 	}
 	return &provider.Response{Output: output, Name: chosen.Provider, Model: chosen.Model, Duration: elapsed}, true
 }
@@ -262,6 +263,7 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 	}
 
 	var b strings.Builder
+	writeInstructions(&b, ss.instructions) // the better candidate is the one that follows them
 	b.WriteString("## Candidatos\n\nEmpate nas verificações automáticas. Compare os diffs.\n\n")
 	for _, c := range tied {
 		diff, err := ss.git.Diff(ctx, base, c.hash, maxCandidateDiff)
@@ -274,7 +276,7 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 		"```json\n{\"choice\": \"A\", \"reason\": \"motivo em uma frase\"}\n```")
 
 	req := o.limited(provider.Request{
-		Role: SelectorStage.Role, System: SelectorStage.System, Prompt: b.String(),
+		Role: SelectorStage.Role, System: o.texts.selector.System, Prompt: b.String(),
 		Tier: SelectorStage.Tier, WorkDir: ss.repo, ReadOnly: true,
 	})
 	resp, err := o.exec.Execute(ctx, req, o.providerLog)

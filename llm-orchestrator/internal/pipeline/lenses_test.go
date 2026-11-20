@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,8 @@ func TestReviewLensesRunInParallelAndMerge(t *testing.T) {
 	if _, err := o.ws.SetPolicy(pol); err != nil {
 		t.Fatal(err)
 	}
-	o.stages = lensStages
+	o.baseStages = lensStages
+	o.stages = o.baseStages
 	writeFile(t, repo, "AGENTS.md", "Sempre escreva testes primeiro.")
 
 	_ = o.Start(realStory("API de carrinho"))
@@ -74,7 +76,7 @@ func TestReviewLensesRunInParallelAndMerge(t *testing.T) {
 		if req.ReadOnly != wantRO {
 			t.Errorf("%s: ReadOnly = %v", req.Role, req.ReadOnly)
 		}
-		if req.Role != DiscoveryStage.Role && !strings.Contains(req.Prompt, "Sempre escreva testes primeiro.") {
+		if !strings.Contains(req.Prompt, "Sempre escreva testes primeiro.") {
 			t.Errorf("%s prompt lacks the project instructions", req.Role)
 		}
 	}
@@ -86,7 +88,8 @@ func TestReviewRunsAsUnifiedByDefault(t *testing.T) {
 		"rev":  {"ok\n```json\n{\"status\":\"approved\",\"issues\":[]}\n```"},
 	}}
 	o, _ := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	o.stages = lensStages
+	o.baseStages = lensStages
+	o.stages = o.baseStages
 
 	_ = o.Start(realStory("API de carrinho"))
 	run := waitDone(t, o)
@@ -126,7 +129,8 @@ func TestKilledLensIsRetriedAlone(t *testing.T) {
 	if _, err := o.ws.SetPolicy(polKilled); err != nil {
 		t.Fatal(err)
 	}
-	o.stages = lensStages
+	o.baseStages = lensStages
+	o.stages = o.baseStages
 	o.attempts, o.retryDelay = 2, time.Millisecond
 
 	_ = o.Start(realStory("API de carrinho"))
@@ -136,5 +140,16 @@ func TestKilledLensIsRetriedAlone(t *testing.T) {
 	}
 	if exec.count("rev · Spec") != 2 || exec.count("rev · Tests") != 1 {
 		t.Errorf("only the failed lens is retried: spec=%d tests=%d", exec.count("rev · Spec"), exec.count("rev · Tests"))
+	}
+}
+
+func TestEachLensReadsOnlyItsSkills(t *testing.T) {
+	stage := Stage{ID: "review", Task: "revise", Skills: []string{"code-review-and-quality", "structural-health"}}
+	prompt := buildPrompt(lensStage(stage, Lens{ID: "structure", Skills: []string{"structural-health"}}), storyContext{}, nil, nil)
+	if !strings.Contains(prompt, "`structural-health`") || strings.Contains(prompt, "code-review-and-quality") {
+		t.Errorf("structure lens must read only structural-health:\n%s", prompt)
+	}
+	if got := lensStage(stage, Lens{ID: "spec"}).Skills; !slices.Equal(got, stage.Skills) {
+		t.Errorf("a lens without skills keeps the stage's: %v", got)
 	}
 }

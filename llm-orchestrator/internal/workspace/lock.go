@@ -12,16 +12,34 @@ import (
 // the repository: two runs would check out branches over each other.
 var ErrRepositoryBusy = errors.New("outra janela do FazTudo já está executando neste repositório")
 
-// lockFile is the per-repository lock shared by every FazTudo process.
-func lockFile(repo string) (string, error) {
+// lockDir holds the locks shared by every FazTudo process.
+func lockDir() (string, error) {
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err
 	}
-	sum := sha1.Sum([]byte(repo))
 	dir = filepath.Join(dir, "faztudo", "locks")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
+	return dir, nil
+}
+
+// lockFile is the per-repository lock shared by every FazTudo process.
+func lockFile(repo string) (string, error) {
+	dir, err := lockDir()
+	if err != nil {
+		return "", err
+	}
+	sum := sha1.Sum([]byte(repo))
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".lock"), nil
+}
+
+// stackSlotFile is the machine-wide lock of the single test stack.
+func stackSlotFile() (string, error) {
+	dir, err := lockDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "stack-slot.lock"), nil
 }
