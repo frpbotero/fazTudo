@@ -67,6 +67,31 @@ func CodeFiles(root string) []string {
 	return out
 }
 
+// FileClock is "now" as the file system stamps it. Compare file times
+// against it, never against time.Now: Linux stamps files from a clock that
+// ticks every few milliseconds and HFS+ or FAT round to seconds, so a file
+// written right after time.Now() may carry an earlier time. The probe goes
+// in dir's .git when there is one, out of the working tree, else in the
+// system temporary directory; on failure it falls back to time.Now.
+func FileClock(dir string) time.Time {
+	probeDir := filepath.Join(dir, ".git")
+	if st, err := os.Stat(probeDir); err != nil || !st.IsDir() {
+		probeDir = os.TempDir()
+	}
+	f, err := os.CreateTemp(probeDir, "faztudo-clock-*")
+	if err != nil {
+		return time.Now()
+	}
+	name := f.Name()
+	f.Close()
+	defer os.Remove(name)
+	st, err := os.Stat(name)
+	if err != nil {
+		return time.Now()
+	}
+	return st.ModTime()
+}
+
 // ChangedSince lists files modified at or after t, sorted.
 func ChangedSince(root string, t time.Time) []string {
 	var out []string

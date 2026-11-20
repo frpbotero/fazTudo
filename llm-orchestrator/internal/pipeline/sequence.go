@@ -359,7 +359,9 @@ func (o *Orchestrator) storyTask(ss *session, opts StartOptions, si int, resume 
 	if resume != nil && resume.si == si {
 		return o.restoreStoryState(si, resume.started, opts, ss), resume.stageAt, false
 	}
-	started := time.Now()
+	// The file system's clock: the story's changed files are those stamped
+	// after this, and a time.Now() could postdate the first agent's writes.
+	started := quality.FileClock(ss.repo)
 	o.updateStory(si, func(r *StoryRun) { r.Status = StepRunning; r.StartedAt = &started })
 	if total := len(opts.Stories); total > 1 {
 		o.logf(LevelInfo, "Iniciando %s (%d de %d).", opts.Stories[si].Title, si+1, total)

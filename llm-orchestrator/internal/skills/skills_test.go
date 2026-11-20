@@ -44,3 +44,24 @@ func TestHas(t *testing.T) {
 		t.Error("unknown names must not be reported as bundled")
 	}
 }
+
+func TestConcurrentInstallsDoNotCollide(t *testing.T) {
+	base := t.TempDir()
+	errs := make(chan error, 8)
+	for range 8 {
+		go func() {
+			// Separate processes do not share the package mutex: bypass it.
+			dir := filepath.Join(base, version)
+			errs <- writeIfChanged(bundle, "bundle/skills/structural-health/SKILL.md", File(dir, "structural-health"))
+		}()
+	}
+	for range 8 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(base, version, "skills", "structural-health", "*.tmp"))
+	if len(leftovers) > 0 {
+		t.Errorf("temporary files left behind: %v", leftovers)
+	}
+}

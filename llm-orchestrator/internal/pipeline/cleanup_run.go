@@ -135,6 +135,7 @@ func (o *Orchestrator) runCleanup(ctx context.Context, repo string, opts Cleanup
 	}
 	o.updateCleanup(func(c *CleanupInfo) { c.Baseline = baseline })
 
+	agentStarted := quality.FileClock(repo)
 	logRel := path.Join(cleanupOutDir, "saude-"+started.Format("20060102-150405")+".md")
 	stage := o.texts.cleanup
 	prompt := buildCleanupPrompt(stage.Task, report, cleanupPrompt{
@@ -147,7 +148,7 @@ func (o *Orchestrator) runCleanup(ctx context.Context, repo string, opts Cleanup
 		return
 	}
 	guarded := o.guardInputs(ss, cleanupAgentRef)
-	changed := o.commitCleanup(ctx, ss, opts.Area, started)
+	changed := o.commitCleanup(ctx, ss, opts.Area, agentStarted)
 	o.keepDecisionLog(repo, logRel)
 	if !guarded {
 		o.updateCleanup(func(c *CleanupInfo) {

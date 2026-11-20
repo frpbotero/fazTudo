@@ -103,9 +103,24 @@ func writeIfChanged(fsys embed.FS, p, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, want, 0o644); err != nil {
+	// A temporary file of its own: another process (a second window, a
+	// parallel test binary) may be installing the same bundle.
+	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	_, werr := tmp.Write(want)
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Chmod(tmp.Name(), 0o644)
+	}
+	if werr == nil {
+		werr = os.Rename(tmp.Name(), dst)
+	}
+	if werr != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return werr
 }

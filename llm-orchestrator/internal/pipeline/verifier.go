@@ -52,7 +52,7 @@ func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storySt
 	if !o.enforceGate(ctx, ss, st, stage, ev, recheck) {
 		return false
 	}
-	st.verifiedAt = time.Now()
+	st.verifiedAt = quality.FileClock(ss.repo)
 	return true
 }
 
@@ -73,7 +73,7 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 		return nil, false
 	}
 	if a.passed() {
-		st.verifiedAt = time.Now()
+		st.verifiedAt = quality.FileClock(ss.repo)
 		return nil, true
 	}
 	report := verifierReport(a)
