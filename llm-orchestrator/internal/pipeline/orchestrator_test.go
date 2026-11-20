@@ -99,9 +99,11 @@ func one(dry bool) StartOptions {
 	return StartOptions{Stories: []stories.Story{{ID: "US-1", Title: "US-1 X", Content: "story X"}}, Source: "Markdown", DryRun: dry}
 }
 
+// waitDone allows a shared CI runner's slowness: these runs finish in tens
+// of milliseconds, and the limit only matters when one hangs.
 func waitDone(t *testing.T, o *Orchestrator) Run {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := o.Wait(ctx); err != nil {
 		t.Fatal("run did not finish:", err)
