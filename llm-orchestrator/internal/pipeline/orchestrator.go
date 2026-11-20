@@ -1224,7 +1224,7 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 			Status: StepPending, Kind: "verify", Round: round + 1,
 		})
 
-		fixesStarted := time.Now()
+		fixesStarted := quality.FileClock(ss.repo)
 		var done []Step
 		for _, f := range fixes {
 			ref := stepRef{st.si, f.step.ID}

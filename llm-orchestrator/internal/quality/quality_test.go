@@ -2,6 +2,7 @@ package quality
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -226,6 +227,25 @@ func TestChangedSinceSkipsGeneratedDirs(t *testing.T) {
 
 	if got := ChangedSince(root, since); !slices.Equal(got, []string{"src/new.js"}) {
 		t.Fatalf("changed = %v", got)
+	}
+}
+
+func TestFileClockOrdersFilesWrittenAfterIt(t *testing.T) {
+	root := t.TempDir()
+	for i := range 50 {
+		since := FileClock(root)
+		name := fmt.Sprintf("f%d.js", i)
+		write(t, root, name, "")
+		if got := ChangedSince(root, since); !slices.Contains(got, name) {
+			t.Fatalf("a file written right after FileClock must count as changed: %v", got)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	FileClock(root)
+	if left, _ := filepath.Glob(filepath.Join(root, ".git", "faztudo-clock-*")); len(left) > 0 {
+		t.Errorf("probe files left behind: %v", left)
 	}
 }
 
