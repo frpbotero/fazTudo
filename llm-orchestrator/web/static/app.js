@@ -1609,12 +1609,14 @@ Critérios de aceitação:
     const p = snapshot.providers.find((x) => x.id === fs.dataset.id);
     if (!p) return;
     const chosen = ['heavy_model', 'std_model'].map((n) => selectedModel(fs, n));
-    let efforts = p.efforts;
+    let efforts = p.efforts || [];
     for (const id of chosen) {
       const m = p.models.find((x) => x.id === id);
       if (m?.efforts?.length) efforts = efforts.filter((e) => m.efforts.includes(e));
     }
     const effortSel = fs.querySelector('[name="effort"]');
+    // A CLI without effort levels (Gemini) has nothing to choose.
+    effortSel.closest('.field').hidden = !efforts.length;
     const current = effortSel.value || p.effort;
     effortSel.innerHTML = efforts.map((e) => `<option value="${esc(e)}"${e === current ? ' selected' : ''}>${esc(e)}</option>`).join('');
     if (!efforts.includes(current) && efforts.length) effortSel.value = efforts.includes('medium') ? 'medium' : efforts[0];

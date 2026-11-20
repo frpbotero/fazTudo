@@ -314,10 +314,12 @@ func (r *Router) States() []State {
 			Default:   p.cli.ID == r.primary,
 			Installed: p.installed,
 			Status:    StatusAvailable,
-			Efforts:   p.efforts,
-			Models:    p.models,
-			Catalog:   displayHome(p.catalog),
-			Settings:  p.settings,
+			// Never null: a CLI without effort levels (Gemini) is an empty
+			// list, which the panel can iterate.
+			Efforts:  append([]string{}, p.efforts...),
+			Models:   p.models,
+			Catalog:  displayHome(p.catalog),
+			Settings: p.settings,
 		}
 		switch {
 		case !p.resetAt.IsZero():

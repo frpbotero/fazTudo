@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"slices"
@@ -325,5 +326,18 @@ func TestDiagnoseRunsCommandsButCannotEdit(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(CodexCLI.Args(Invocation{ReadOnly: true, Diagnose: true}), " "), "read-only") {
 		t.Fatal("a CLI that cannot express it stays read-only")
+	}
+}
+
+func TestStatesNeverSendNullEfforts(t *testing.T) {
+	r := NewRouter(true, []CLI{ClaudeCLI, GeminiCLI})
+	for _, s := range r.States() {
+		data, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), `"efforts":null`) {
+			t.Errorf("%s: efforts must be a list, even empty (the panel iterates it): %s", s.ID, data)
+		}
 	}
 }
