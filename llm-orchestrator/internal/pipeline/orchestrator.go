@@ -125,6 +125,9 @@ type StoryRun struct {
 	// Validation is whether the delivery was approved, apart from Status,
 	// which only says the story finished. Empty until the story closes.
 	Validation Validation `json:"validation,omitempty"`
+	// Risk is what the policy's risk rules found: level, reasons and the
+	// stages they made mandatory.
+	Risk *workspace.Risk `json:"risk,omitempty"`
 	// Integration is whether the story entered the base branch; the note
 	// says why it was kept out.
 	Integration     Integration `json:"integration,omitempty"`
@@ -648,8 +651,10 @@ type storyState struct {
 	pending    int       // issues a gate could not get fixed within its rounds
 	// inconclusive counts gates that never produced a valid verdict.
 	inconclusive int
-	red          []string // commands that failed last, retried first
-	skipped      bool     // the last assessment left costlier commands out
+	// risk is what the policy's risk rules found so far; it only grows.
+	risk    workspace.Risk
+	red     []string // commands that failed last, retried first
+	skipped bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -695,16 +700,27 @@ func (o *Orchestrator) closeStory(st *storyState, total int) {
 	case total > 1:
 		o.logf(LevelSuccess, "%s entregue (%d de %d).", st.sc.Story.Title, st.si+1, total)
 	}
+	var missingNote string
 	o.updateStory(st.si, func(r *StoryRun) {
 		r.Status = status
 		r.DurationMS = time.Since(st.started).Milliseconds()
 		r.Validation = storyValidation(r.Steps)
+		if missing := o.missingRequired(st, r.Steps); len(missing) > 0 && st.blocked == "" {
+			r.Validation = worseValidation(r.Validation, ValidationInconclusive)
+			missingNote = strings.Join(missing, ", ")
+		}
 		if st.blocked != "" || o.run.DryRun {
 			// Nothing was checked for real: a blocked story was not built and
 			// a simulation runs no command nor model.
 			r.Validation = ValidationNotEvaluated
 		}
+		if missingNote != "" && r.Status == StepDone {
+			r.Status = StepWarning
+		}
 	})
+	if missingNote != "" {
+		o.logf(LevelWarn, "%s: etapa(s) obrigatória(s) pela política de risco sem resultado (%s); validação inconclusiva.", st.sc.Story.Title, missingNote)
+	}
 }
 
 // finishSucceeded ends a run that went through every story, pointing out the
@@ -831,6 +847,9 @@ func (o *Orchestrator) restoreStoryState(si int, started time.Time, opts StartOp
 	}
 	o.mu.RLock()
 	runStory := o.run.Stories[si]
+	if runStory.Risk != nil {
+		st.risk = *runStory.Risk
+	}
 	if runStory.Plan != nil {
 		st.plan = *runStory.Plan
 	}
@@ -867,6 +886,7 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 	if len(ss.checks) == 0 {
 		o.logf(LevelWarn, "Nenhum comando de verificação configurado ou detectado; o portão executável fará só as checagens estáticas.")
 	}
+	o.warnRiskVersusFlow(policy)
 	if opts.DryRun || !policy.Git {
 		return ss, true
 	}
@@ -947,15 +967,20 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 	}
 
 	o.planAudit(ss, st)
+	o.assessStoryRisk(ss, st, nil)
 	streamed := false
 	for stageIndex, stage := range o.stages {
 		if stageIndex < startAt {
 			continue
 		}
+		if stage.Gate || stage.Verifier {
+			// The real diff may raise the risk set from the story's text.
+			o.assessStoryRisk(ss, st, o.changedFiles(ss, st.started))
+		}
 		if stage.Selectable && !st.plan.Includes(stage.ID) {
 			continue // already marked as omitted when the plan was applied
 		}
-		if ss.policy.StageDisabled(stage.ID) {
+		if ss.policy.StageDisabled(stage.ID) && !st.requiredByRisk(stage.ID) {
 			continue // marked as omitted when the story's steps were created
 		}
 		ref := stepRef{st.si, stage.ID}
@@ -1006,6 +1031,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			o.applySpec(st, resp)
 		case stage.Planner:
 			st.plan, st.planText = o.applyPlan(st.si, st.sc, resp), resp.Output
+			o.enforceRisk(ss, st) // the architect may add stages, not drop mandatory ones
 		case stage.Gate:
 			recheck := func(ctx context.Context, ref stepRef, issues []Issue, fixes []Step, round int) (evaluation, bool) {
 				if ev, ok := o.checkFixes(ctx, ss, st, ref); !ok {

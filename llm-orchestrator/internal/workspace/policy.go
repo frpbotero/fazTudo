@@ -72,6 +72,9 @@ type Policy struct {
 	// sandbox) is never used to write, not even on failover, and a run no
 	// installed provider can serve does not start.
 	StrictCommands bool `json:"strict_commands,omitempty"`
+	// RiskRules make stages mandatory for risky stories; see RiskRule. Nil
+	// uses DefaultRiskRules; an empty list turns them off.
+	RiskRules []RiskRule `json:"risk_rules"`
 }
 
 // DefaultEphemeralStacks match the usual name of an isolated E2E stack.
@@ -194,6 +197,9 @@ func (p Policy) Normalize() Policy {
 	if p.EphemeralStacks == nil {
 		p.EphemeralStacks = slices.Clone(def.EphemeralStacks)
 	}
+	if p.RiskRules == nil {
+		p.RiskRules = slices.Clone(DefaultRiskRules)
+	}
 	stacks := []string{}
 	for _, s := range p.EphemeralStacks {
 		if s = strings.TrimSpace(s); s != "" && !slices.Contains(stacks, s) {
@@ -242,6 +248,9 @@ func (p Policy) Validate() error {
 	}
 	if len(p.BaseBranches) > maxPatterns {
 		return fmt.Errorf("no máximo %d branches base", maxPatterns)
+	}
+	if err := validateRiskRules(p.RiskRules); err != nil {
+		return err
 	}
 	for repo, branch := range p.BaseBranches {
 		if len(branch) > maxBranchLen || len(repo) > maxBranchLen || strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, " \t\n\r~^:?*[\\") {

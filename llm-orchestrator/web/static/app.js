@@ -661,6 +661,7 @@ Critérios de aceitação:
       base_branches: snapshot?.workspace?.policy?.base_branches,
       promote_unverified: el.qPromoteUnverified.checked,
       strict_commands: el.qStrictCommands.checked,
+      risk_rules: snapshot?.workspace?.policy?.risk_rules,
     };
     try {
       await api('PUT', '/api/workspace/policy', policy);
@@ -1482,6 +1483,9 @@ Critérios de aceitação:
     const meta = [
       pill(status),
       VALIDATION[st.validation] ? pill(VALIDATION[st.validation]) : '',
+      st.risk && st.risk.level !== 'baixo'
+        ? `<span title="${esc((st.risk.reasons || []).join('\n'))}">${pill({ label: `Risco ${st.risk.level.replace('medio', 'médio').replace('critico', 'crítico')}`, tone: st.risk.level === 'medio' ? 'neutral' : 'warn' })}</span>`
+        : '',
       INTEGRATION[st.integration] ? `<span title="${esc(st.integration_note || '')}">${pill(INTEGRATION[st.integration])}</span>` : '',
       st.branch ? `<code>${esc(st.branch)}</code>` : '',
       st.depends_on?.length ? `<span>Depende de ${esc(st.depends_on.join(', '))}</span>` : '',
