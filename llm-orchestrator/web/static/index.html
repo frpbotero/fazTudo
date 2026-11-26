@@ -463,7 +463,10 @@
         <div id="qCustom" class="field">
           <label for="qChecks" class="sr-only">Comandos personalizados</label>
           <textarea id="qChecks" rows="5" spellcheck="false" placeholder="unitários: npm run test:unit&#10;e2e: npx playwright test"></textarea>
-          <p class="note">Um por linha, no formato <code>nome: comando</code>. Executados na raiz do repositório com <code>CI=1</code>.</p>
+          <p class="note">Um por linha, no formato <code>nome: comando</code>. Executados na raiz do repositório com <code>CI=1</code>.
+            Para ligar cada caso de teste aos critérios, diga onde está o relatório: <code>go [go-json]: go test -json ./...</code>,
+            <code>web [junit:reports/junit.xml]: npm test</code> ou <code>e2e [playwright-json:reports/e2e.json]: npx playwright test</code>.
+            Sem relatório, só o código de saída conta.</p>
         </div>
       </fieldset>
 

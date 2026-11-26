@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"llm-orchestrator/internal/quality"
 )
 
 func write(t *testing.T, root, rel, content string) {
@@ -308,5 +310,32 @@ func TestReadInstructionsListsSpecKit(t *testing.T) {
 	}
 	if strings.Contains(got, "003-vazia") || strings.Contains(got, "T001") {
 		t.Errorf("only feature paths with artifacts belong in the prompt:\n%s", got)
+	}
+}
+
+func TestPolicyCheckReports(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	set := func(r *quality.ReportSpec) error {
+		p := m.Policy()
+		p.AutoChecks = false
+		p.Checks = []quality.Command{{Name: "go", Run: "go test -json ./...", Report: r}}
+		_, err := m.SetPolicy(p)
+		return err
+	}
+	for _, ok := range []*quality.ReportSpec{nil, {Format: " go-json "}, {Format: "junit", Path: "reports/junit.xml"}, {Format: "playwright-json", Path: "e2e.json"}} {
+		if err := set(ok); err != nil {
+			t.Errorf("%+v refused: %v", ok, err)
+		}
+	}
+	if got := m.Policy().Checks[0].Report; got == nil || got.Format != "playwright-json" {
+		t.Errorf("report not kept: %+v", got)
+	}
+	if err := set(&quality.ReportSpec{}); err != nil || m.Policy().Checks[0].Report != nil {
+		t.Errorf("an empty report means none: %v, %+v", err, m.Policy().Checks[0].Report)
+	}
+	for _, bad := range []*quality.ReportSpec{{Format: "tap"}, {Format: "junit"}, {Format: "junit", Path: "../x.xml"}, {Format: "junit", Path: "/tmp/x.xml"}} {
+		if err := set(bad); err == nil {
+			t.Errorf("%+v must be refused", bad)
+		}
 	}
 }

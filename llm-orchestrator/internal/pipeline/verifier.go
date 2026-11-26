@@ -80,7 +80,7 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 	report := verifierReport(a)
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
-		s.Checks = a.results
+		s.Checks = quality.WithoutCases(a.results)
 		s.Findings = a.findings
 		s.Output = report
 		s.DurationMS = time.Since(started).Milliseconds()
@@ -113,6 +113,12 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 	}
 	results, findings, traces, issues := a.results, a.findings, a.traces, a.issues
 	if len(traces) > 0 {
+		if ss.git != nil {
+			commit, _ := ss.git.Head(ctx)
+			for i := range traces {
+				traces[i].Commit = commit
+			}
+		}
 		o.updateStory(st.si, func(r *StoryRun) { r.Trace = traces })
 	}
 
@@ -124,7 +130,7 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 	elapsed := time.Since(started)
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
-		s.Checks = results
+		s.Checks = quality.WithoutCases(results)
 		s.Findings = findings
 		s.Output = report
 		s.DurationMS = elapsed.Milliseconds()
@@ -161,7 +167,20 @@ func (a assessment) failedCommands() []string {
 // changed files and the test traceability. It returns false when ctx was
 // canceled.
 func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, dir string, changed []string) (assessment, bool) {
-	return o.assessChecks(ctx, ss, st, dir, changed, ss.checks)
+	a, ok := o.assessChecks(ctx, ss, st, dir, changed, ss.checks)
+	o.linkTraces(ss, st, &a)
+	return a, ok
+}
+
+// linkTraces ties the traces to the cases the commands reported, once every
+// command of the assessment ran, and asks for the required tests that only
+// exist as skipped cases.
+func (o *Orchestrator) linkTraces(ss *session, st *storyState, a *assessment) {
+	if len(a.traces) == 0 {
+		return
+	}
+	a.traces = quality.LinkResults(a.traces, a.results)
+	a.issues = append(a.issues, o.skippedIssues(ss, a.traces, st.plan)...)
 }
 
 // reassess proves a fix cheaply: first the commands that failed; only when
@@ -178,6 +197,7 @@ func (o *Orchestrator) reassess(ctx context.Context, ss *session, st *storyState
 	}
 	first, ok := o.assessChecks(ctx, ss, st, ss.repo, changed, red)
 	if !ok || len(first.failedCommands()) > 0 {
+		o.linkTraces(ss, st, &first)
 		st.note(first)
 		first.skipped = append(first.skipped, otherNames(ss.checks, red)...)
 		st.skipped = true
@@ -186,6 +206,7 @@ func (o *Orchestrator) reassess(ctx context.Context, ss *session, st *storyState
 	rest := slices.DeleteFunc(slices.Clone(ss.checks), failed)
 	a, ok := o.assessChecks(ctx, ss, st, ss.repo, changed, rest)
 	a.results = append(first.results, a.results...)
+	o.linkTraces(ss, st, &a)
 	st.note(a)
 	return a, ok
 }
@@ -493,6 +514,38 @@ func (o *Orchestrator) traceIssues(ss *session, traces []quality.Trace, plan Pla
 	return issues
 }
 
+// skippedIssues asks for the required tests whose every reported case was
+// skipped: a test that never runs proves nothing.
+func (o *Orchestrator) skippedIssues(ss *session, traces []quality.Trace, plan Plan) []Issue {
+	skipped := map[string][]string{}
+	var order []string
+	for _, t := range traces {
+		if t.Status != quality.TraceSkipped || (t.Kind == "e2e" && ss.policy.StageDisabled("e2e")) {
+			continue
+		}
+		agent := o.assignKind(t.Kind, plan)
+		if _, seen := skipped[agent]; !seen {
+			order = append(order, agent)
+		}
+		skipped[agent] = append(skipped[agent], t.ID)
+	}
+	var issues []Issue
+	for _, agent := range order {
+		ids := skipped[agent]
+		issues = append(issues, Issue{
+			Agent:    agent,
+			Severity: "alta",
+			Description: fmt.Sprintf("%d caso(s) de teste da especificação só aparecem como ignorados (skip) no relatório: %s. "+
+				"Teste ignorado não comprova o critério; faça-o rodar.", len(ids), strings.Join(ids, ", ")),
+			Location:     "rastreabilidade",
+			Class:        classMissingTest,
+			Fingerprints: []string{quality.TextFingerprint("ignorado", agent)},
+			Titles:       []string{"Testes da especificação ignorados"},
+		})
+	}
+	return issues
+}
+
 func commandIssue(c quality.Command, r quality.Result) string {
 	if r.TimedOut {
 		return fmt.Sprintf("`%s` (%s) excedeu o tempo limite depois de %s, sem concluir. Não indica erro no código: "+
@@ -569,20 +622,27 @@ func verifierReport(a assessment) string {
 
 	if len(traces) > 0 {
 		found := 0
-		var missing []string
+		byStatus := map[string][]string{}
 		for _, t := range traces {
 			if t.Found() {
 				found++
-			} else {
-				missing = append(missing, t.ID)
 			}
+			byStatus[t.Status] = append(byStatus[t.Status], t.ID)
 		}
-		fmt.Fprintf(&b, "\n## Rastreabilidade dos testes\n\n%d de %d casos de teste encontrados nos arquivos de teste.\n", found, len(traces))
-		if len(missing) > 0 {
-			fmt.Fprintf(&b, "Sem teste: %s\n", strings.Join(missing, ", "))
+		fmt.Fprintf(&b, "\n## Rastreabilidade dos testes\n\n%d de %d casos de teste encontrados nos arquivos de teste; "+
+			"%d comprovados por execução.\n", found, len(traces), len(byStatus[quality.TraceProven]))
+		for _, status := range traceReportOrder {
+			if ids := byStatus[status]; len(ids) > 0 {
+				fmt.Fprintf(&b, "- %s: %s\n", status, strings.Join(ids, ", "))
+			}
 		}
 	}
 	return b.String()
+}
+
+// traceReportOrder lists what a trace may be short of, worst first.
+var traceReportOrder = []string{
+	quality.TraceFailed, quality.TraceMissing, quality.TraceSkipped, quality.TraceNoReport, quality.TraceNotRun, quality.TraceExitOnly,
 }
 
 func describeChecks(checks []quality.Command) string {

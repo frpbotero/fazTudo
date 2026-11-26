@@ -18,6 +18,9 @@ import (
 type Command struct {
 	Name string `json:"name"`
 	Run  string `json:"run"`
+	// Report, when set, is the per-test report the command produces; without
+	// it only the exit code says anything.
+	Report *ReportSpec `json:"report,omitempty"`
 }
 
 // Result is the outcome of one check.
@@ -33,6 +36,10 @@ type Result struct {
 	// tail, may have lost. Failures is what they identify.
 	Evidence string    `json:"-"`
 	Failures []Failure `json:"failures,omitempty"`
+	// Report is what came of reading the command's report, and Cases what it
+	// recorded; both stay empty for a command without one.
+	Report *ReportOutcome `json:"report,omitempty"`
+	Cases  []Case         `json:"cases,omitempty"`
 }
 
 // maxOutputBytes is how much of a command's output is kept: the tail, where
@@ -68,7 +75,13 @@ func run(ctx context.Context, dir string, c Command, timeout, grace time.Duratio
 	out := &tailBuffer{max: maxOutputBytes}
 	evidence := &evidenceLog{}
 	output := io.MultiWriter(out, evidence)
-	cmd.Stdout = output
+	var stdout *capBuffer
+	if c.Report != nil && c.Report.Format == ReportGoJSON && c.Report.Path == "" {
+		stdout = &capBuffer{}
+		cmd.Stdout = io.MultiWriter(out, evidence, stdout)
+	} else {
+		cmd.Stdout = output
+	}
 	cmd.Stderr = output
 
 	started := time.Now()
@@ -94,6 +107,13 @@ func run(ctx context.Context, dir string, c Command, timeout, grace time.Duratio
 	if !res.Passed && !res.TimedOut {
 		res.Evidence = evidence.String()
 		res.Failures = ParseFailures(c, res.Evidence)
+	}
+	if res.TimedOut {
+		if c.Report != nil {
+			res.Report = &ReportOutcome{Format: c.Report.Format, Path: c.Report.Path, Status: ReportMissing, Detail: "o comando excedeu o tempo limite"}
+		}
+	} else {
+		readReport(dir, c, &res, started, stdout)
 	}
 	return res
 }
