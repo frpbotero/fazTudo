@@ -323,7 +323,7 @@ func (o *Orchestrator) runStoriesInPlace(ctx context.Context, ss *session, opts 
 		if !o.developStoryFrom(ctx, ss, st, startAt, fresh) {
 			return false
 		}
-		o.closeStory(st, len(opts.Stories))
+		o.closeStory(ss, st, len(opts.Stories))
 		if !o.promoteStory(ctx, ss, st) {
 			return false
 		}
@@ -451,7 +451,7 @@ func (o *Orchestrator) runStoriesInParallel(ctx context.Context, ss *session, op
 		go func() {
 			defer wg.Done()
 			if lane.ok = o.developStoryFrom(waveCtx, lane.ss, lane.st, lane.startAt, lane.fresh); lane.ok {
-				o.closeStory(lane.st, len(opts.Stories))
+				o.closeStory(lane.ss, lane.st, len(opts.Stories))
 				return
 			}
 			cancel()

@@ -39,6 +39,9 @@ type Stage struct {
 	Implementer bool
 	// Gate stages return a verdict; requested changes trigger fix rounds.
 	Gate bool
+	// Acceptor marks the functional QA gate: it reads the executed evidence
+	// and its scenarios are held to it.
+	Acceptor bool
 	// Verifier stages call no model: the orchestrator runs the project's
 	// commands and static checks, and failures go back to the implementers.
 	Verifier bool
@@ -375,6 +378,21 @@ var DefaultStages = []Stage{
 		Inputs: reviewInputs,
 	},
 	{
+		ID:       "acceptance",
+		Title:    "QA funcional e aceitação",
+		Role:     "Functional QA",
+		Tier:     provider.TierStandard,
+		Gate:     true,
+		Acceptor: true,
+		ReadOnly: true,
+		System: "QA funcional. Só leitura: não altera código nem testes. Julga a jornada e as regras de negócio pelos critérios " +
+			"originais da US, não pela descrição da implementação. A evidência executada vem do orquestrador; você a interpreta.",
+		Task: "Para cada critério de aceite e cenário do plano, inclusive negativos e estados de erro e vazio: " +
+			"aceito, recusado ou sem evidência, citando o caso executado que comprova (ID em tests) ou, para inspeção, arquivo:linha. " +
+			"Regra de negócio sem caso que a exercite é sem evidência. Cenário que a implementação não atende é recusado, com a correção.",
+		Inputs: []string{"context", "spec", "arch", "e2e"},
+	},
+	{
 		ID:         "docs",
 		Title:      "Documentação do fluxo",
 		Role:       "Technical Writer",
@@ -460,6 +478,8 @@ type storyContext struct {
 	Audit bool
 	// AuditNotice is the customized text of the audit notice, if any.
 	AuditNotice string
+	// Evidence is what the runner proved, given to the functional QA only.
+	Evidence string
 	// PortBase starts the port range of a story run beside others; 0 alone.
 	PortBase int
 	// Answers are the user's answers to the product decisions the story left
@@ -522,6 +542,7 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 			fmt.Fprintf(&b, "### %s (%s)\n\n%s\n\n", s.Title, s.Role, clip(strings.TrimSpace(s.Output), maxArtifactBytes))
 		}
 	}
+	b.WriteString(sc.Evidence)
 	writeSkills(&b, stage.Skills)
 	b.WriteString("## Sua tarefa\n\n")
 	b.WriteString(stage.Task)
@@ -552,6 +573,8 @@ func stageInstructions(stage Stage) string {
 		return specInstructions
 	case stage.Planner:
 		return planInstructions
+	case stage.Acceptor:
+		return acceptanceInstructions
 	case stage.Gate:
 		return verdictInstructions
 	}
@@ -716,9 +739,10 @@ func buildVerifyPrompt(task string, gate Stage, sc storyContext, discovery *work
 	for _, f := range fixes {
 		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), maxArtifactBytes))
 	}
+	b.WriteString(sc.Evidence)
 	writeSkills(&b, gate.Skills)
 	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação, rodada %d: %s %s", round, task, gate.Task)
-	b.WriteString(verdictInstructions)
+	b.WriteString(stageInstructions(gate))
 	return b.String()
 }
 

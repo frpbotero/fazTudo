@@ -560,7 +560,7 @@ Critérios de aceitação:
   const FLOW_OFF = {
     full: [],
     balanced: ['security', 'e2e', 'docs'],
-    fast: ['security', 'review', 'e2e', 'docs'],
+    fast: ['security', 'review', 'e2e', 'acceptance', 'docs'],
     audit: ['context', 'spec', 'arch', 'frontend', 'backend', 'e2e', 'docs'],
   };
   const stageBoxes = () => [...el.qStages.querySelectorAll('input[data-stage]')];
@@ -1149,6 +1149,28 @@ Critérios de aceitação:
 
   // Passo 0's readiness: each criterion with its evidence and, when the story
   // waits on the user, the open decisions with a field for each answer.
+  // The functional QA's scenarios, as held to the executed evidence.
+  const SCENARIO_TONE = { 'aceito': 'success', 'recusado': 'danger', 'sem evidência': 'warn', 'invalidado': 'warn' };
+
+  function renderAcceptance(list) {
+    if (!list?.length) return '';
+    const accepted = list.filter((a) => a.status === 'aceito').length;
+    return `
+      <details class="trace-all">
+        <summary>Aceitação funcional: ${accepted} de ${list.length} cenário(s) aceito(s)</summary>
+        <table>${list.map((a) => `
+          <tr>
+            <td>${esc(a.criterion)}${a.negative ? ' <span class="note">(negativo)</span>' : ''}<br><span class="note">${esc(a.scenario || '')}</span></td>
+            <td><span class="note" data-tone="${SCENARIO_TONE[a.status] || ''}">${esc(a.status)}</span></td>
+            <td>${(a.tests || []).map((t) => `<code>${esc(t)}</code>`).join(' ')} ${esc(a.evidence || '')}
+              ${a.note ? `<br><span class="note">${esc(a.note)}</span>` : ''}
+              ${a.responsible ? `<br><span class="note">Responsável: ${esc(a.responsible)}</span>` : ''}
+              ${(a.artifacts || []).length ? `<br>${a.artifacts.map((f) => `<code>${esc(f)}</code>`).join(' ')}` : ''}</td>
+          </tr>`).join('')}
+        </table>
+      </details>`;
+  }
+
   function renderReadiness(st, si, running) {
     const r = st.readiness;
     if (!r) return '';
@@ -1593,6 +1615,7 @@ Critérios de aceitação:
       <div class="story-meta">${meta}</div>
       ${renderReadiness(st, si, run.running)}
       ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
+      ${renderAcceptance(st.acceptance)}
       ${renderCauses(st.causes)}`;
     if (el.storyHead.dataset.html !== head) {
       el.storyHead.innerHTML = head;

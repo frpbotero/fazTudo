@@ -148,6 +148,8 @@ type StoryRun struct {
 	StartCommit string `json:"start_commit,omitempty"`
 	// Reproduction is a bug fix's proof that its tests fail before the fix.
 	Reproduction *Reproduction `json:"reproduction,omitempty"`
+	// Acceptance is the functional QA's judgment of each scenario.
+	Acceptance []ScenarioResult `json:"acceptance,omitempty"`
 	// Integration is whether the story entered the base branch; the note
 	// says why it was kept out.
 	Integration     Integration `json:"integration,omitempty"`
@@ -689,8 +691,10 @@ type storyState struct {
 	// must fail; repro is the last reproduction made.
 	startCommit string
 	repro       *Reproduction
-	red         []string // commands that failed last, retried first
-	skipped     bool     // the last assessment left costlier commands out
+	// acceptedAt is when the functional QA last accepted every scenario.
+	acceptedAt time.Time
+	red        []string // commands that failed last, retried first
+	skipped    bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -721,7 +725,10 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 
 // closeStory records how a developed story ended: delivered, delivered with
 // pending issues, or blocked in Passo 0.
-func (o *Orchestrator) closeStory(st *storyState, total int) {
+func (o *Orchestrator) closeStory(ss *session, st *storyState, total int) {
+	if o.invalidateAcceptance(ss, st) {
+		o.logf(LevelWarn, "%s: código alterado depois da aceitação funcional; os cenários precisam ser aceitos de novo.", st.sc.Story.Title)
+	}
 	status := StepDone
 	switch {
 	case st.waiting > 0:
@@ -761,7 +768,10 @@ func (o *Orchestrator) closeStory(st *storyState, total int) {
 			// a simulation runs no command nor model.
 			r.Validation = ValidationNotEvaluated
 		}
-		if missingNote != "" && r.Status == StepDone {
+		if slices.ContainsFunc(r.Acceptance, func(a ScenarioResult) bool { return a.Status == ScenarioInvalidated }) {
+			r.Validation = worseValidation(r.Validation, ValidationInconclusive)
+		}
+		if (missingNote != "" || r.Validation == ValidationInconclusive) && r.Status == StepDone {
 			r.Status = StepWarning
 		}
 	})
@@ -1087,7 +1097,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			resp, ok = o.runStage(ctx, ref, provider.Request{
 				Role:     stage.Role,
 				System:   stage.System,
-				Prompt:   buildPrompt(stage, st.sc, ss.report, o.stepsBefore(ref)),
+				Prompt:   buildPrompt(stage, o.stageContext(st, stage), ss.report, o.stepsBefore(ref)),
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
@@ -1118,7 +1128,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 				resp, ok := o.runStage(ctx, ref, provider.Request{
 					Role:     stage.Role,
 					System:   stage.System,
-					Prompt:   buildVerifyPrompt(o.texts.verifyTask, stage, st.sc, ss.report, issues, fixes, round),
+					Prompt:   buildVerifyPrompt(o.texts.verifyTask, stage, o.stageContext(st, stage), ss.report, issues, fixes, round),
 					Tier:     stage.Tier,
 					WorkDir:  ss.repo,
 					ReadOnly: stage.ReadOnly,
@@ -1126,14 +1136,24 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 				if !ok || !o.afterAgent(ctx, ss, st, ref) {
 					return evaluation{}, false
 				}
-				return o.llmEvaluation(resp, st.plan), true
+				return o.gateEvaluation(ss, st, stage, resp), true
 			}
-			if !o.enforceGate(ctx, ss, st, stage, o.llmEvaluation(resp, st.plan), recheck) {
+			if !o.enforceGate(ctx, ss, st, stage, o.gateEvaluation(ss, st, stage, resp), recheck) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// stageContext is the story's context as stage reads it: the functional QA
+// also gets the executed evidence.
+func (o *Orchestrator) stageContext(st *storyState, stage Stage) storyContext {
+	sc := st.sc
+	if stage.Acceptor {
+		sc.Evidence = o.acceptanceEvidence(st)
+	}
+	return sc
 }
 
 // planAudit stands in for the architect when the flow turns it off (audit of
@@ -1393,6 +1413,9 @@ type evaluation struct {
 	// noEvidence marks an approval backed by nothing executed, such as a
 	// verifier with no command to run: it is not evaluated, not passed.
 	noEvidence bool
+	// inconclusive marks an approval whose evidence does not cover what it
+	// approves, such as an accepted scenario with no proven case.
+	inconclusive bool
 }
 
 // maxFormatRecoveries bounds how many times a gate is asked again, only for
@@ -1401,6 +1424,16 @@ const maxFormatRecoveries = 2
 
 // recheckFunc re-evaluates a gate in the verification step ref after fixes.
 type recheckFunc func(ctx context.Context, ref stepRef, issues []Issue, fixes []Step, round int) (evaluation, bool)
+
+// gateEvaluation reads a gate's answer; the functional QA's is also held to
+// the executed evidence.
+func (o *Orchestrator) gateEvaluation(ss *session, st *storyState, stage Stage, resp *provider.Response) evaluation {
+	ev := o.llmEvaluation(resp, st.plan)
+	if stage.Acceptor {
+		ev = o.judgeAcceptance(ss, st, ev)
+	}
+	return ev
+}
 
 func (o *Orchestrator) llmEvaluation(resp *provider.Response, plan Plan) evaluation {
 	v, problem := readVerdict(resp.Output, o.stages, plan)
@@ -1445,9 +1478,13 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 		})
 		if !verdict.NeedsChanges() {
 			o.closeCauses(st, nil)
-			if ev.noEvidence {
+			switch {
+			case ev.inconclusive:
+				o.setValidation(st, gate, ValidationInconclusive)
+				o.updateStep(stepRef{st.si, stepID}, func(s *Step) { s.Note = "Aprovado sem evidência para todos os cenários" })
+			case ev.noEvidence:
 				o.setValidation(st, gate, ValidationNotEvaluated)
-			} else {
+			default:
 				o.setValidation(st, gate, ValidationPassed)
 			}
 			if round > 1 {
