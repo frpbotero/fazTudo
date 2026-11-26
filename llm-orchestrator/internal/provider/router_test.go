@@ -341,3 +341,20 @@ func TestStatesNeverSendNullEfforts(t *testing.T) {
 		}
 	}
 }
+
+func TestPreferredProviderGoesFirstAndKeepsFailover(t *testing.T) {
+	real := &fakeRunner{}
+	r := newTestRouter(false, real, allInstalled)
+	resp, err := r.Execute(context.Background(), Request{Role: "review", Tier: TierStandard, ReadOnly: true, Prefer: Codex}, discard)
+	if err != nil || resp.Provider != Codex {
+		t.Fatalf("preferred provider = %v, %v", resp, err)
+	}
+	quota := &fakeRunner{results: map[string][]result{
+		"codex": {{out: "You've hit your usage limit. Try again in 2 hours.", err: errors.New("exit status 1")}},
+	}}
+	r = newTestRouter(false, quota, allInstalled)
+	resp, err = r.Execute(context.Background(), Request{Role: "review", Tier: TierStandard, ReadOnly: true, Prefer: Codex}, discard)
+	if err != nil || resp.Provider != Claude {
+		t.Errorf("a preferred provider out of quota falls back: %v, %v", resp, err)
+	}
+}

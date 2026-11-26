@@ -858,3 +858,20 @@ func BranchName(storyID string, at time.Time) string {
 	}
 	return fmt.Sprintf("%s%s-%s", BranchPrefix, slug, at.Format("20060102-150405"))
 }
+
+// RestoreFiles puts paths back as HEAD has them: a tracked file gets its
+// committed content, a file HEAD does not have is removed.
+func (r *Repo) RestoreFiles(ctx context.Context, paths []string) error {
+	for _, p := range paths {
+		if _, err := r.git(ctx, "cat-file", "-e", "HEAD:"+filepath.ToSlash(p)); err == nil {
+			if _, err := r.git(ctx, "checkout", "HEAD", "--", p); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.Remove(filepath.Join(r.dir, p)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}

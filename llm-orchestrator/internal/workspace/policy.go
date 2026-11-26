@@ -30,6 +30,15 @@ type Policy struct {
 	// repository's agents follow. Detection only suggests them; they apply
 	// once chosen here.
 	Profiles []string `json:"profiles,omitempty"`
+	// StyleBlocking makes the reviewers' style remarks binding; by default
+	// they are advice, since a project's conventions decide its style.
+	StyleBlocking bool `json:"style_blocking,omitempty"`
+	// MaxParallelReviews bounds the reviewers running at once; 0 is 3.
+	MaxParallelReviews int `json:"max_parallel_reviews,omitempty"`
+	// ReviewProvider is tried first for the reviews (another provider than
+	// the implementers'); empty keeps the default order. It becomes a default
+	// only after the evaluation shows it helps.
+	ReviewProvider string `json:"review_provider,omitempty"`
 	// Protected are glob patterns (base name or relative path) of input files
 	// agents must not modify.
 	Protected []string `json:"protected"`
@@ -187,6 +196,7 @@ func (p Policy) Normalize() Policy {
 		}
 	}
 	p.Profiles = profiles
+	p.ReviewProvider = strings.ToLower(strings.TrimSpace(p.ReviewProvider))
 	p.Checks = normalizeCommands(p.Checks)
 	p.MigrationChecks = normalizeCommands(p.MigrationChecks)
 	p.BenchmarkChecks = normalizeCommands(p.BenchmarkChecks)
@@ -287,6 +297,12 @@ func (p Policy) Validate() error {
 		if _, err := path.Match(s, ""); err != nil || len(s) > 200 || strings.Trim(s, "*?") == "" {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
+	}
+	if p.MaxParallelReviews < 0 || p.MaxParallelReviews > 5 {
+		return errors.New("o limite de revisões em paralelo deve estar entre 0 e 5")
+	}
+	if !slices.Contains([]string{"", "claude", "codex", "gemini"}, p.ReviewProvider) {
+		return fmt.Errorf("provider de revisão desconhecido: %q", p.ReviewProvider)
 	}
 	for _, name := range p.Profiles {
 		if !skills.HasProfile(name) {

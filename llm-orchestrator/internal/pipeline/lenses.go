@@ -30,10 +30,18 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 	}
 	results := make([]result, len(lenses))
 	var wg sync.WaitGroup
+	slots := make(chan struct{}, reviewLimit(ss.policy))
 	for i, l := range lenses {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				results[i] = result{nil, ctx.Err()}
+				return
+			}
 			req := provider.Request{
 				Role:     stage.Role + " · " + l.Title,
 				System:   stage.System,
@@ -41,6 +49,7 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
+				Prefer:   reviewProvider(ss, stage),
 			}
 			resp, err := o.executeRetrying(ctx, ref, req)
 			if err == nil {
@@ -105,7 +114,6 @@ func mergeReviews(lenses []Lens, responses []*provider.Response, stages []Stage,
 	var b strings.Builder
 	merged := Verdict{Status: VerdictApproved, Issues: []Issue{}}
 	parsed, missing := false, false
-	seen := map[string]bool{}
 	simulated := false
 	for i, resp := range responses {
 		simulated = simulated || resp.Simulated
@@ -121,13 +129,11 @@ func mergeReviews(lenses []Lens, responses []*provider.Response, stages []Stage,
 		}
 		merged.Status = VerdictChangesRequested
 		for _, is := range v.Issues {
-			key := strings.ToLower(strings.TrimSpace(is.Location + "|" + is.Description))
-			if !seen[key] {
-				seen[key] = true
-				merged.Issues = append(merged.Issues, is)
-			}
+			is.Sources = []string{lenses[i].Title}
+			merged.Issues = append(merged.Issues, is)
 		}
 	}
+	merged.Issues = consolidateIssues(merged.Issues)
 	if parsed && (!missing || merged.NeedsChanges()) {
 		data, _ := json.MarshalIndent(merged, "", "  ")
 		fmt.Fprintf(&b, "```json\n%s\n```\n", data)
