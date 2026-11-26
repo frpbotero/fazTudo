@@ -288,7 +288,7 @@ func readVerdict(output string, stages []Stage, plan Plan) (Verdict, string) {
 func fullPlan(stages []Stage, source string) Plan {
 	p := Plan{Source: source}
 	for _, s := range stages {
-		if s.Selectable {
+		if s.Selectable && !s.Conditional {
 			p.Agents = append(p.Agents, s.ID)
 		}
 	}

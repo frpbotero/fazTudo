@@ -18,6 +18,13 @@ type Policy struct {
 	// otherwise Checks is used as given.
 	AutoChecks bool              `json:"auto_checks"`
 	Checks     []quality.Command `json:"checks"`
+	// MigrationChecks prove a migration on a disposable database: apply,
+	// check integrity, roll back or recover, apply again. They run when a
+	// story's plan or risk calls for the migration check.
+	MigrationChecks []quality.Command `json:"migration_checks,omitempty"`
+	// BenchmarkChecks measure the workload a performance requirement is
+	// about; the performance specialist reads their output.
+	BenchmarkChecks []quality.Command `json:"benchmark_checks,omitempty"`
 	// Protected are glob patterns (base name or relative path) of input files
 	// agents must not modify.
 	Protected []string `json:"protected"`
@@ -168,25 +175,15 @@ func (p Policy) Normalize() Policy {
 		}
 	}
 	p.DisabledStages = disabled
-	checks := make([]quality.Command, 0, len(p.Checks))
-	for _, c := range p.Checks {
-		c.Name, c.Run = strings.TrimSpace(c.Name), strings.TrimSpace(c.Run)
-		if c.Run == "" {
-			continue
-		}
-		if c.Name == "" {
-			c.Name = c.Run
-		}
-		if c.Report != nil {
-			r := quality.ReportSpec{Format: strings.TrimSpace(c.Report.Format), Path: strings.TrimSpace(c.Report.Path)}
-			c.Report = nil
-			if r.Format != "" {
-				c.Report = &r
-			}
-		}
-		checks = append(checks, c)
+	p.Checks = normalizeCommands(p.Checks)
+	p.MigrationChecks = normalizeCommands(p.MigrationChecks)
+	p.BenchmarkChecks = normalizeCommands(p.BenchmarkChecks)
+	if len(p.MigrationChecks) == 0 {
+		p.MigrationChecks = nil
 	}
-	p.Checks = checks
+	if len(p.BenchmarkChecks) == 0 {
+		p.BenchmarkChecks = nil
+	}
 	var patterns []string
 	for _, s := range p.Protected {
 		if s = strings.TrimSpace(s); s != "" && !slices.Contains(patterns, s) {
@@ -279,7 +276,10 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
 	}
-	for _, c := range p.Checks {
+	if len(p.MigrationChecks) > maxChecks || len(p.BenchmarkChecks) > maxChecks {
+		return fmt.Errorf("no máximo %d comandos de migration e %d de benchmark", maxChecks, maxChecks)
+	}
+	for _, c := range slices.Concat(p.Checks, p.MigrationChecks, p.BenchmarkChecks) {
 		if len(c.Run) > maxCommandLen || len(c.Name) > 120 {
 			return fmt.Errorf("comando muito longo: %q", c.Name)
 		}
@@ -311,4 +311,27 @@ func validateReport(c quality.Command) error {
 		return fmt.Errorf("relatório de %q: o arquivo deve ficar dentro do repositório", c.Name)
 	}
 	return nil
+}
+
+// normalizeCommands trims commands, drops empty ones and names the unnamed.
+func normalizeCommands(list []quality.Command) []quality.Command {
+	checks := make([]quality.Command, 0, len(list))
+	for _, c := range list {
+		c.Name, c.Run = strings.TrimSpace(c.Name), strings.TrimSpace(c.Run)
+		if c.Run == "" {
+			continue
+		}
+		if c.Name == "" {
+			c.Name = c.Run
+		}
+		if c.Report != nil {
+			r := quality.ReportSpec{Format: strings.TrimSpace(c.Report.Format), Path: strings.TrimSpace(c.Report.Path)}
+			c.Report = nil
+			if r.Format != "" {
+				c.Report = &r
+			}
+		}
+		checks = append(checks, c)
+	}
+	return checks
 }

@@ -79,6 +79,14 @@ func TestCustomFlowTurnsOffOnlyTheChosenStages(t *testing.T) {
 func TestFullFlowIsTheDefault(t *testing.T) {
 	run, _ := runWithFlow(t, workspace.DefaultPolicy())
 	for id, status := range stepStatuses(run) {
+		stage, _ := lookupIn(DefaultStages, id)
+		// Specialties run only when the plan or the risk calls for them.
+		if stage.Conditional {
+			if status != StepOmitted {
+				t.Errorf("%s = %s, want omitted without plan or risk", id, status)
+			}
+			continue
+		}
 		if status != StepDone {
 			t.Errorf("%s = %s", id, status)
 		}
@@ -146,4 +154,13 @@ func TestAuditFlowKeepsFindingsAsPendingInsteadOfFixingThem(t *testing.T) {
 	if !strings.Contains(renderPendencies(run), "sem validação") {
 		t.Error("the finding must reach the pendencies file")
 	}
+}
+
+func lookupIn(stages []Stage, id string) (Stage, bool) {
+	for _, s := range stages {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return Stage{}, false
 }

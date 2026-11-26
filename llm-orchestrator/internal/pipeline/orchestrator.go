@@ -150,6 +150,11 @@ type StoryRun struct {
 	Reproduction *Reproduction `json:"reproduction,omitempty"`
 	// Acceptance is the functional QA's judgment of each scenario.
 	Acceptance []ScenarioResult `json:"acceptance,omitempty"`
+	// Specialties are the planning specialties' reports, by stage.
+	Specialties map[string]SpecialistReport `json:"specialties,omitempty"`
+	// Measurements are what the performance specialist read from the
+	// benchmarks.
+	Measurements []Measurement `json:"measurements,omitempty"`
 	// Integration is whether the story entered the base branch; the note
 	// says why it was kept out.
 	Integration     Integration `json:"integration,omitempty"`
@@ -693,8 +698,16 @@ type storyState struct {
 	repro       *Reproduction
 	// acceptedAt is when the functional QA last accepted every scenario.
 	acceptedAt time.Time
-	red        []string // commands that failed last, retried first
-	skipped    bool     // the last assessment left costlier commands out
+	// measured tells whether a benchmark ran for the performance gate, and
+	// benchmarks is what it printed.
+	measured   bool
+	benchmarks string
+	// stageAt is the index of the stage running; late lists the planning
+	// stages the risk required only after they had passed.
+	stageAt int
+	late    []string
+	red     []string // commands that failed last, retried first
+	skipped bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -1056,6 +1069,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		if stageIndex < startAt {
 			continue
 		}
+		st.stageAt = stageIndex
 		if stage.Gate || stage.Verifier {
 			// The real diff may raise the risk set from the story's text.
 			o.assessStoryRisk(ss, st, o.changedFiles(ss, st.started))
@@ -1079,10 +1093,25 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			continue
 		}
 		if stage.Verifier {
-			if !o.runVerifier(ctx, ss, st, stage) {
+			ok := false
+			switch stage.Commands {
+			case "migrations":
+				ok = o.runCommandGate(ctx, ss, st, stage, ss.policy.MigrationChecks,
+					"sem comandos de migration (`migration_checks`): integridade, compatibilidade e recuperação não foram testadas")
+			default:
+				ok = o.runVerifier(ctx, ss, st, stage)
+			}
+			if !ok {
 				return false
 			}
 			continue
+		}
+		if stage.Measured {
+			bench, alive := o.measure(ctx, ss, st)
+			if !alive {
+				return false
+			}
+			st.benchmarks = bench
 		}
 
 		var resp *provider.Response
@@ -1118,6 +1147,9 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		case stage.Planner:
 			st.plan, st.planText = o.applyPlan(st.si, st.sc, resp), resp.Output
 			o.enforceRisk(ss, st) // the architect may add stages, not drop mandatory ones
+			o.enforceSpecialties(st)
+		case stage.Specialist:
+			o.applySpecialist(st, ref, stage, resp)
 		case stage.Gate:
 			recheck := func(ctx context.Context, ref stepRef, issues []Issue, fixes []Step, round int) (evaluation, bool) {
 				if ev, ok := o.checkFixes(ctx, ss, st, ref); !ok {
@@ -1150,8 +1182,11 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 // also gets the executed evidence.
 func (o *Orchestrator) stageContext(st *storyState, stage Stage) storyContext {
 	sc := st.sc
-	if stage.Acceptor {
+	switch {
+	case stage.Acceptor:
 		sc.Evidence = o.acceptanceEvidence(st)
+	case stage.Measured:
+		sc.Evidence = st.benchmarks
 	}
 	return sc
 }
@@ -1383,7 +1418,8 @@ func (o *Orchestrator) applyPlan(si int, sc storyContext, resp *provider.Respons
 			names = append(names, stage.Title)
 			continue
 		}
-		if i := stepIndex(st.Steps, stage.ID); i >= 0 && !policy.StageDisabled(stage.ID) {
+		// A stage that already ran (a specialty before the plan) stays as it ended.
+		if i := stepIndex(st.Steps, stage.ID); i >= 0 && !policy.StageDisabled(stage.ID) && st.Steps[i].Status == StepPending {
 			st.Steps[i].Status = StepOmitted
 			st.Steps[i].Note = "Não selecionado pelo arquiteto"
 		}
@@ -1429,8 +1465,11 @@ type recheckFunc func(ctx context.Context, ref stepRef, issues []Issue, fixes []
 // the executed evidence.
 func (o *Orchestrator) gateEvaluation(ss *session, st *storyState, stage Stage, resp *provider.Response) evaluation {
 	ev := o.llmEvaluation(resp, st.plan)
-	if stage.Acceptor {
+	switch {
+	case stage.Acceptor:
 		ev = o.judgeAcceptance(ss, st, ev)
+	case stage.Measured:
+		ev = o.judgePerformance(st, ev)
 	}
 	return ev
 }

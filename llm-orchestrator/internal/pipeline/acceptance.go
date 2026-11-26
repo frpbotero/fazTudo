@@ -76,6 +76,7 @@ func (o *Orchestrator) acceptanceEvidence(st *storyState) string {
 		}
 		b.WriteString("\n")
 	}
+	b.WriteString(specialtyRequirements(run))
 	if len(run.Trace) == 0 {
 		b.WriteString("Nenhum caso de teste da especificação foi rastreado.\n")
 	}

@@ -32,10 +32,17 @@ func (o *Orchestrator) assessStoryRisk(ss *session, st *storyState, changed []st
 	}
 	var titles, unknown []string
 	for _, id := range added {
-		if s, ok := o.lookupStage(id); ok {
-			titles = append(titles, s.Title)
-		} else {
+		s, ok := o.lookupStage(id)
+		if !ok {
 			unknown = append(unknown, id)
+			continue
+		}
+		titles = append(titles, s.Title)
+		if i := slices.IndexFunc(o.stages, func(x Stage) bool { return x.ID == id }); i < st.stageAt && s.Specialist {
+			// A planning specialty found necessary only by the diff cannot plan
+			// what is already built; the gates after it still judge.
+			st.late = append(st.late, id)
+			o.logf(LevelWarn, "%s passou a ser exigida pelo diff depois de sua vez; segue sem ela, com as verificações seguintes.", s.Title)
 		}
 	}
 	msg := "Risco " + next.Level + " (" + strings.Join(next.Reasons, "; ") + ")"
@@ -58,6 +65,9 @@ func (o *Orchestrator) enforceRisk(ss *session, st *storyState) {
 	note := "Exigida pela política de risco: " + strings.Join(st.risk.Rules, ", ")
 	changed := false
 	for _, id := range st.risk.Required {
+		if slices.Contains(st.late, id) {
+			continue
+		}
 		stage, ok := o.lookupStage(id)
 		if !ok {
 			continue
@@ -87,6 +97,9 @@ func (st *storyState) requiredByRisk(id string) bool { return slices.Contains(st
 func (o *Orchestrator) missingRequired(st *storyState, steps []Step) []string {
 	var missing []string
 	for _, id := range st.risk.Required {
+		if slices.Contains(st.late, id) {
+			continue
+		}
 		stage, ok := o.lookupStage(id)
 		i := stepIndex(steps, id)
 		switch {
