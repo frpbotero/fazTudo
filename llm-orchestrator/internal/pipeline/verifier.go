@@ -39,6 +39,7 @@ func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storySt
 		o.updateStep(ref, func(s *Step) {
 			s.Status = StepSkipped
 			s.Note = "Sem alterações desde a última verificação aprovada"
+			s.Validation = ValidationPassed // the approval holds for unchanged code
 		})
 		return true
 	}
@@ -128,7 +129,9 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 		s.Output = report
 		s.DurationMS = elapsed.Milliseconds()
 	})
-	return evaluation{verdict: verdict, parsed: true}, true // issues quote the failures; no report
+	// Issues quote the failures; no report. Without any command run, an
+	// approval rests on static checks alone and is not an executed proof.
+	return evaluation{verdict: verdict, parsed: true, noEvidence: len(results) == 0}, true
 }
 
 // assessment is the outcome of the deterministic checks on one directory.

@@ -81,7 +81,7 @@ func TestRunCutByAppCloseResumesWhereItStopped(t *testing.T) {
 	if run.Resume == nil || run.Resume.Story != 0 || run.Resume.Step != "b" {
 		t.Fatalf("resume point = %+v, want story 0 step b", run.Resume)
 	}
-	if a := run.Stories[0].Steps[0]; a.Status != StepDone || a.Output != "artifact-ra" {
+	if a := run.Stories[0].Steps[0]; a.Status != StepDone || !strings.HasPrefix(a.Output, "artifact-ra") {
 		t.Fatalf("finished step A not kept: %+v", a)
 	}
 

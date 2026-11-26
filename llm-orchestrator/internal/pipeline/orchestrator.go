@@ -95,6 +95,9 @@ type Step struct {
 	Round    int           `json:"round,omitempty"` // fix/verification round
 	Gate     string        `json:"gate,omitempty"`  // gate that requested a fix
 	Issues   []Issue       `json:"issues,omitempty"`
+	// Validation is a gate's final outcome, recorded on the gate's own step;
+	// empty on steps that judge nothing.
+	Validation Validation `json:"validation,omitempty"`
 	// Checks and Findings are the results of an executable gate.
 	Checks   []quality.Result  `json:"checks,omitempty"`
 	Findings []quality.Finding `json:"findings,omitempty"`
@@ -116,9 +119,12 @@ type LogEntry struct {
 
 // StoryRun is the progress of one user story through the stages.
 type StoryRun struct {
-	ID         string     `json:"id"`
-	Title      string     `json:"title"`
-	Status     StepStatus `json:"status"`
+	ID     string     `json:"id"`
+	Title  string     `json:"title"`
+	Status StepStatus `json:"status"`
+	// Validation is whether the delivery was approved, apart from Status,
+	// which only says the story finished. Empty until the story closes.
+	Validation Validation `json:"validation,omitempty"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	DurationMS int64      `json:"duration_ms,omitempty"`
 	Plan       *Plan      `json:"plan,omitempty"`
@@ -146,6 +152,9 @@ type Run struct {
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 	Result     Result     `json:"result,omitempty"`
+	// Validation aggregates the stories' outcomes: Result says the run
+	// finished, Validation whether what it delivered was approved.
+	Validation Validation `json:"validation,omitempty"`
 	BaseBranch string     `json:"base_branch,omitempty"`
 	Protected  []string   `json:"protected,omitempty"` // input files guarded during the run
 	Discovery  Step       `json:"discovery"`
@@ -448,6 +457,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	}
 	o.run.Stories[story].Steps = fresh
 	o.run.Stories[story].Status = StepRunning
+	o.run.Stories[story].Validation = ""
 	started := time.Now()
 	o.run.Stories[story].StartedAt = &started
 	o.run.Stories[story].DurationMS = 0
@@ -456,6 +466,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 			continue // delivered stories of a parallel wave are kept
 		}
 		o.run.Stories[i].Status = StepPending
+		o.run.Stories[i].Validation = ""
 		o.run.Stories[i].StartedAt = nil
 		o.run.Stories[i].DurationMS = 0
 		o.run.Stories[i].Plan = nil
@@ -465,6 +476,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	}
 	o.run.Running = true
 	o.run.Result = ""
+	o.run.Validation = ""
 	o.run.FinishedAt = nil
 	o.run.Current = story
 	o.isJournalOwner = true
@@ -589,8 +601,10 @@ type storyState struct {
 	verifiedAt time.Time // when a verifier last approved the repository
 	blocked    string    // Passo 0 reason when the story cannot be developed yet
 	pending    int       // issues a gate could not get fixed within its rounds
-	red        []string  // commands that failed last, retried first
-	skipped    bool      // the last assessment left costlier commands out
+	// inconclusive counts gates that never produced a valid verdict.
+	inconclusive int
+	red          []string // commands that failed last, retried first
+	skipped      bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -630,28 +644,50 @@ func (o *Orchestrator) closeStory(st *storyState, total int) {
 	case st.pending > 0:
 		status = StepWarning
 		o.logf(LevelWarn, "%s entregue com %d pendência(s) não resolvida(s).", st.sc.Story.Title, st.pending)
+	case st.inconclusive > 0:
+		status = StepWarning
+		o.logf(LevelWarn, "%s entregue sem veredito válido em %d portão(ões); validação inconclusiva.", st.sc.Story.Title, st.inconclusive)
 	case total > 1:
 		o.logf(LevelSuccess, "%s entregue (%d de %d).", st.sc.Story.Title, st.si+1, total)
 	}
-	o.updateStory(st.si, func(r *StoryRun) { r.Status = status; r.DurationMS = time.Since(st.started).Milliseconds() })
+	o.updateStory(st.si, func(r *StoryRun) {
+		r.Status = status
+		r.DurationMS = time.Since(st.started).Milliseconds()
+		r.Validation = storyValidation(r.Steps)
+		if st.blocked != "" || o.run.DryRun {
+			// Nothing was checked for real: a blocked story was not built and
+			// a simulation runs no command nor model.
+			r.Validation = ValidationNotEvaluated
+		}
+	})
 }
 
 // finishSucceeded ends a run that went through every story, pointing out the
 // ones left with pending issues.
+// The run's Result only says it finished; Validation, set here, says whether
+// the delivery was approved.
 func (o *Orchestrator) finishSucceeded(msg string) {
-	o.mu.RLock()
+	o.mu.Lock()
 	var pending []string
 	for _, st := range o.run.Stories {
 		if st.Status == StepWarning {
 			pending = append(pending, cmp.Or(st.ID, st.Title))
 		}
 	}
-	o.mu.RUnlock()
-	if len(pending) > 0 {
-		o.finish(ResultSucceeded, LevelWarn, fmt.Sprintf("Pipeline concluído com pendências em: %s.", strings.Join(pending, ", ")))
-		return
+	validation := runValidation(o.run.Stories)
+	o.run.Validation = validation
+	dry := o.run.DryRun
+	o.mu.Unlock()
+	switch {
+	case len(pending) > 0:
+		o.finish(ResultSucceeded, LevelWarn, fmt.Sprintf("Pipeline concluído com pendências em: %s. Validação %s.", strings.Join(pending, ", "), validation.Label()))
+	case dry:
+		o.finish(ResultSucceeded, LevelSuccess, msg+" Simulação: nenhuma entrega foi validada.")
+	case validation != ValidationPassed:
+		o.finish(ResultSucceeded, LevelWarn, fmt.Sprintf("%s Validação %s.", msg, validation.Label()))
+	default:
+		o.finish(ResultSucceeded, LevelSuccess, msg)
 	}
-	o.finish(ResultSucceeded, LevelSuccess, msg)
 }
 
 // retryExecute rebuilds the transient session around the repository as it was
@@ -1146,14 +1182,23 @@ type evaluation struct {
 	parsed    bool
 	simulated bool
 	report    string
+	// problem says why no valid verdict could be read.
+	problem string
+	// noEvidence marks an approval backed by nothing executed, such as a
+	// verifier with no command to run: it is not evaluated, not passed.
+	noEvidence bool
 }
+
+// maxFormatRecoveries bounds how many times a gate is asked again, only for
+// the verdict, when its answer carried none that honors the contract.
+const maxFormatRecoveries = 2
 
 // recheckFunc re-evaluates a gate in the verification step ref after fixes.
 type recheckFunc func(ctx context.Context, ref stepRef, issues []Issue, fixes []Step, round int) (evaluation, bool)
 
 func (o *Orchestrator) llmEvaluation(resp *provider.Response, plan Plan) evaluation {
-	v, ok := parseVerdict(resp.Output, o.stages, plan)
-	return evaluation{verdict: v, parsed: ok, simulated: resp.Simulated, report: resp.Output}
+	v, problem := readVerdict(resp.Output, o.stages, plan)
+	return evaluation{verdict: v, parsed: problem == "", problem: problem, simulated: resp.Simulated, report: resp.Output}
 }
 
 // enforceGate reads a gate's verdict and, while it requests changes, sends the
@@ -1169,11 +1214,19 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 	}
 	st.lastFailures, st.stalls = 0, 0
 	for round := 1; ; round++ {
-		if !ev.parsed {
-			if !ev.simulated {
-				o.logf(LevelWarn, "%s não retornou um veredito em JSON; considerado aprovado.", gate.Title)
+		base := stepID
+		for try := 1; !ev.parsed && !ev.simulated && try <= maxFormatRecoveries; try++ {
+			var alive bool
+			if ev, stepID, alive = o.recoverVerdict(ctx, ss, st, gate, base, stepID, ev, try); !alive {
+				return false
 			}
-			return true
+		}
+		if !ev.parsed {
+			if ev.simulated {
+				o.setValidation(st, gate, ValidationNotEvaluated)
+				return true
+			}
+			return o.inconclusiveGate(st, stepID, gate, ev.problem)
 		}
 		verdict := ev.verdict
 		o.updateStep(stepRef{st.si, stepID}, func(s *Step) {
@@ -1186,6 +1239,11 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 		})
 		if !verdict.NeedsChanges() {
 			o.closeCauses(st, nil)
+			if ev.noEvidence {
+				o.setValidation(st, gate, ValidationNotEvaluated)
+			} else {
+				o.setValidation(st, gate, ValidationPassed)
+			}
 			if round > 1 {
 				o.logf(LevelSuccess, "%s aprovou as correções.", gate.Title)
 			}
@@ -1264,9 +1322,63 @@ func (o *Orchestrator) settleGate(st *storyState, stepID string, gate Stage, iss
 		s.Status = StepWarning
 		s.Error = msg + ". Pendências registradas; o pipeline segue."
 	})
+	o.setValidation(st, gate, ValidationFailed)
 	st.pending += len(issues)
 	o.logf(LevelWarn, "%s: %s. Seguindo com as pendências registradas.", gate.Title, msg)
 	return true
+}
+
+// recoverVerdict asks a gate again, read-only, only for the verdict its last
+// answer lacked. The request is a new step after stepID; base names it.
+func (o *Orchestrator) recoverVerdict(ctx context.Context, ss *session, st *storyState, gate Stage, base, stepID string, ev evaluation, try int) (evaluation, string, bool) {
+	o.logf(LevelWarn, "%s não retornou um veredito válido (%s); pedindo só o veredito (tentativa %d de %d).",
+		gate.Title, ev.problem, try, maxFormatRecoveries)
+	id := fmt.Sprintf("%s-formato-%d", base, try)
+	o.insertSteps(st.si, stepID, Step{
+		ID: id, Title: fmt.Sprintf("%s — formato do veredito (%d)", gate.Title, try), Role: gate.Role, Tier: gate.Tier,
+		Status: StepPending, Kind: "verify",
+	})
+	ref := stepRef{st.si, id}
+	resp, ok := o.runStage(ctx, ref, provider.Request{
+		Role:     gate.Role,
+		System:   gate.System,
+		Prompt:   buildFormatPrompt(ev.problem, ev.report),
+		Tier:     gate.Tier,
+		WorkDir:  ss.repo,
+		ReadOnly: true,
+	})
+	if !ok || !o.afterAgent(ctx, ss, st, ref) {
+		return evaluation{}, id, false
+	}
+	next := o.llmEvaluation(resp, st.plan)
+	// The recovered verdict is about the original review: keep its report
+	// for whoever fixes the issues.
+	if next.parsed {
+		next.report = ev.report
+	} else {
+		next.report = cmp.Or(strings.TrimSpace(ev.report), resp.Output)
+	}
+	return next, id, true
+}
+
+// inconclusiveGate ends a gate that never produced a valid verdict: the run
+// goes on, but the story cannot count as approved.
+func (o *Orchestrator) inconclusiveGate(st *storyState, stepID string, gate Stage, problem string) bool {
+	msg := fmt.Sprintf("Veredito inválido após %d tentativa(s) de recuperação: %s. Validação inconclusiva; o pipeline segue.", maxFormatRecoveries, problem)
+	o.updateStep(stepRef{st.si, stepID}, func(s *Step) {
+		s.Status = StepWarning
+		s.Error = msg
+	})
+	o.setValidation(st, gate, ValidationInconclusive)
+	st.inconclusive++
+	o.logf(LevelWarn, "%s: %s", gate.Title, msg)
+	return true
+}
+
+// setValidation records a gate's final outcome on the gate's own step, which
+// a retry keeps, unlike the dynamic rounds that led to it.
+func (o *Orchestrator) setValidation(st *storyState, gate Stage, v Validation) {
+	o.updateStep(stepRef{st.si, gate.ID}, func(s *Step) { s.Validation = v })
 }
 
 // fixTier raises a fix to the heavy model for a cause's second attempt.

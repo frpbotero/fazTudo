@@ -94,11 +94,13 @@ func lensTitles(lenses []Lens) string {
 
 // mergeReviews joins the lens reports and appends one verdict block: changes
 // are requested when any lens requested them, with duplicate issues dropped.
-// Without any parseable verdict the merged report carries none either.
+// An approval needs every lens to approve with a valid verdict: when one gave
+// none, the merged report carries no verdict either, so the gate recovers it
+// or ends inconclusive instead of approving what that lens never judged.
 func mergeReviews(lenses []Lens, responses []*provider.Response, stages []Stage, plan Plan) *provider.Response {
 	var b strings.Builder
 	merged := Verdict{Status: VerdictApproved, Issues: []Issue{}}
-	parsed := false
+	parsed, missing := false, false
 	seen := map[string]bool{}
 	simulated := false
 	for i, resp := range responses {
@@ -106,6 +108,7 @@ func mergeReviews(lenses []Lens, responses []*provider.Response, stages []Stage,
 		fmt.Fprintf(&b, "## Revisão: %s\n\n%s\n\n", lenses[i].Title, stripJSONBlocks(resp.Output))
 		v, ok := parseVerdict(resp.Output, stages, plan)
 		if !ok {
+			missing = missing || !resp.Simulated
 			continue
 		}
 		parsed = true
@@ -121,7 +124,7 @@ func mergeReviews(lenses []Lens, responses []*provider.Response, stages []Stage,
 			}
 		}
 	}
-	if parsed {
+	if parsed && (!missing || merged.NeedsChanges()) {
 		data, _ := json.MarshalIndent(merged, "", "  ")
 		fmt.Fprintf(&b, "```json\n%s\n```\n", data)
 	}

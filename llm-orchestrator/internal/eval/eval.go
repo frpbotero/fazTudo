@@ -5,6 +5,7 @@
 package eval
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,10 +62,19 @@ type Arm struct {
 
 // Result is the measured outcome of one arm on one task.
 type Result struct {
-	Task         string  `json:"task"`
-	Arm          string  `json:"arm"`
-	Workdir      string  `json:"workdir"`
-	Outcome      string  `json:"outcome"`
+	Task    string `json:"task"`
+	Arm     string `json:"arm"`
+	Workdir string `json:"workdir"`
+	Outcome string `json:"outcome"`
+	// Validation is whether the pipeline approved its delivery, apart from
+	// Outcome, which only says the run finished.
+	Validation string `json:"validation,omitempty"`
+	// Simulated results run no model nor command: they are reported but
+	// never ranked against real deliveries.
+	Simulated bool `json:"simulated,omitempty"`
+	// Verified tells an executable verification ran on the delivered code,
+	// so Findings were observed rather than absent.
+	Verified     bool    `json:"verified,omitempty"`
 	DurationS    float64 `json:"duration_s"`
 	AgentCalls   int     `json:"agent_calls"`
 	FixSteps     int     `json:"fix_steps"`
@@ -74,7 +84,10 @@ type Result struct {
 	TestsTotal   int     `json:"tests_total"`
 	Findings     int     `json:"findings"`
 	Score        float64 `json:"score"`
-	Error        string  `json:"error,omitempty"`
+	// NotEvaluated names the score dimensions with no observation; they add
+	// nothing to the score instead of counting as perfect.
+	NotEvaluated []string `json:"not_evaluated,omitempty"`
+	Error        string   `json:"error,omitempty"`
 }
 
 const defaultTimeout = 90 * time.Minute
@@ -218,6 +231,8 @@ func runOne(ctx context.Context, s Suite, task Task, arm Arm, router *provider.R
 
 	run := orch.Snapshot()
 	res.Outcome = string(run.Result)
+	res.Validation = string(run.Validation)
+	res.Simulated = run.DryRun
 	collect(&res, run)
 	writeLog(filepath.Join(dir, ".faztudo-eval.log"), run)
 
@@ -227,7 +242,7 @@ func runOne(ctx context.Context, s Suite, task Task, arm Arm, router *provider.R
 			res.HiddenPassed++
 		}
 	}
-	res.Score = score(res)
+	res.Score, res.NotEvaluated = score(res)
 	return res
 }
 
@@ -277,27 +292,50 @@ func collect(res *Result, run pipeline.Run) {
 		for i := len(st.Steps) - 1; i >= 0; i-- {
 			if s := st.Steps[i]; s.Status == pipeline.StepDone && (s.Checks != nil || s.Findings != nil) {
 				res.Findings += len(s.Findings)
+				res.Verified = true
 				break
 			}
 		}
 	}
 }
 
-// score weighs, from 0 to 100: hidden checks 40, test traceability 25,
-// pipeline success 20 and readability 15 (minus 1.5 per finding).
-func score(r Result) float64 {
-	ratio := func(a, b int) float64 {
+// Score dimensions, as the report names them.
+const (
+	dimHidden     = "checagens ocultas"
+	dimTrace      = "rastreabilidade de testes"
+	dimValidation = "entrega validada"
+	dimReadable   = "legibilidade"
+)
+
+// score weighs, from 0 to 100: hidden checks 40, test traceability 25, a
+// delivery the pipeline validated 20 and readability 15 (minus 1.5 per
+// finding). A dimension with no observation scores nothing and is returned
+// as not evaluated: missing tests or checks must never earn full marks, and
+// a run that merely finished is not a validated delivery.
+func score(r Result) (float64, []string) {
+	var s float64
+	var missing []string
+	ratio := func(dim string, weight float64, a, b int) {
 		if b == 0 {
-			return 1
+			missing = append(missing, dim)
+			return
 		}
-		return float64(a) / float64(b)
+		s += weight * float64(a) / float64(b)
 	}
-	s := 40*ratio(r.HiddenPassed, r.HiddenTotal) + 25*ratio(r.TestsFound, r.TestsTotal)
-	if r.Outcome == string(pipeline.ResultSucceeded) {
+	ratio(dimHidden, 40, r.HiddenPassed, r.HiddenTotal)
+	ratio(dimTrace, 25, r.TestsFound, r.TestsTotal)
+	switch {
+	case r.Simulated || r.Validation == "" || r.Validation == string(pipeline.ValidationNotEvaluated):
+		missing = append(missing, dimValidation)
+	case r.Validation == string(pipeline.ValidationPassed) && r.Outcome == string(pipeline.ResultSucceeded):
 		s += 20
 	}
-	s += 15 * max(0, 1-float64(r.Findings)/10)
-	return float64(int(s*10+0.5)) / 10
+	if r.Verified {
+		s += 15 * max(0, 1-float64(r.Findings)/10)
+	} else {
+		missing = append(missing, dimReadable)
+	}
+	return float64(int(s*10+0.5)) / 10, missing
 }
 
 // Report renders the results as Markdown: one table per task plus the mean
@@ -305,7 +343,8 @@ func score(r Result) float64 {
 func Report(results []Result) string {
 	var b strings.Builder
 	b.WriteString("# Relatório de avaliação do FazTudo\n\n")
-	b.WriteString("Pontuação (0–100): checagens ocultas 40 · rastreabilidade de testes 25 · pipeline concluído 20 · legibilidade 15.\n\n")
+	b.WriteString("Pontuação (0–100): checagens ocultas 40 · rastreabilidade de testes 25 · entrega validada 20 · legibilidade 15. " +
+		"Dimensão sem observação vale 0 e aparece como não avaliada. Resultados simulados ficam fora do ranking.\n\n")
 
 	byTask := map[string][]Result{}
 	var tasks []string
@@ -316,6 +355,9 @@ func Report(results []Result) string {
 			tasks = append(tasks, r.Task)
 		}
 		byTask[r.Task] = append(byTask[r.Task], r)
+		if r.Simulated {
+			continue // a simulation is not a delivery to rank
+		}
 		if _, ok := sums[r.Arm]; !ok {
 			arms = append(arms, r.Arm)
 		}
@@ -332,19 +374,30 @@ func Report(results []Result) string {
 		v := sums[a]
 		fmt.Fprintf(&b, "| %s | %.1f | %d |\n", a, v[0]/v[1], int(v[1]))
 	}
+	if len(arms) == 0 {
+		b.WriteString("\nNenhum braço ranqueado: só há resultados simulados, que não contam como entrega real.\n")
+	}
 
 	for _, t := range tasks {
 		fmt.Fprintf(&b, "\n## %s\n\n", t)
-		b.WriteString("| Braço | Pontuação | Resultado | Checagens ocultas | Testes rastreados | Achados | Correções | Chamadas | Duração |\n")
-		b.WriteString("|---|---:|---|---:|---:|---:|---:|---:|---:|\n")
+		b.WriteString("| Braço | Pontuação | Resultado | Validação | Checagens ocultas | Testes rastreados | Achados | Correções | Chamadas | Duração | Não avaliado |\n")
+		b.WriteString("|---|---:|---|---|---:|---:|---:|---:|---:|---:|---|\n")
 		for _, r := range byTask[t] {
 			outcome := r.Outcome
 			if r.Error != "" {
 				outcome += " (" + r.Error + ")"
 			}
-			fmt.Fprintf(&b, "| %s | %.1f | %s | %d/%d | %d/%d | %d | %d | %d | %s |\n",
-				r.Arm, r.Score, outcome, r.HiddenPassed, r.HiddenTotal, r.TestsFound, r.TestsTotal,
-				r.Findings, r.FixSteps, r.AgentCalls, (time.Duration(r.DurationS) * time.Second).String())
+			if r.Simulated {
+				outcome += " (simulado, fora do ranking)"
+			}
+			findings := "—"
+			if r.Verified {
+				findings = fmt.Sprint(r.Findings)
+			}
+			fmt.Fprintf(&b, "| %s | %.1f | %s | %s | %d/%d | %d/%d | %s | %d | %d | %s | %s |\n",
+				r.Arm, r.Score, outcome, cmp.Or(r.Validation, "—"), r.HiddenPassed, r.HiddenTotal, r.TestsFound, r.TestsTotal,
+				findings, r.FixSteps, r.AgentCalls, (time.Duration(r.DurationS) * time.Second).String(),
+				cmp.Or(strings.Join(r.NotEvaluated, ", "), "—"))
 		}
 	}
 	return b.String()

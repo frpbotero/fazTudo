@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -58,6 +59,15 @@ func (v Verdict) NeedsChanges() bool {
 	return v.Status == VerdictChangesRequested && len(v.Issues) > 0
 }
 
+// blockingSeverities are the severities that forbid an approval: a gate that
+// approves while reporting one of them contradicts itself.
+var blockingSeverities = []string{"alta", "alto", "crítica", "critica", "crítico", "critico", "high", "critical", "blocker", "bloqueante"}
+
+// Blocking reports whether the issue's severity forbids an approval.
+func (is Issue) Blocking() bool {
+	return slices.Contains(blockingSeverities, strings.ToLower(strings.TrimSpace(is.Severity)))
+}
+
 var reFence = regexp.MustCompile("(?s)```(?:json|JSON)?[ \\t]*\\n(.*?)```")
 
 // lastJSON decodes the last fenced JSON block in text that satisfies ok.
@@ -102,12 +112,26 @@ func parsePlan(output string, stages []Stage) (Plan, bool) {
 	return plan, true
 }
 
-// parseVerdict extracts a gate verdict. Issues are reassigned to a valid
-// implementer when the gate named an unknown or missing one.
+// parseVerdict extracts a gate verdict that honors the contract; see
+// readVerdict.
 func parseVerdict(output string, stages []Stage, plan Plan) (Verdict, bool) {
+	v, problem := readVerdict(output, stages, plan)
+	return v, problem == ""
+}
+
+// readVerdict extracts a gate verdict and checks it against the contract,
+// returning what is wrong with it (empty when valid). An unreadable or
+// contradictory verdict must never pass for an approval: an unknown status,
+// changes requested without any described issue, or an approval that reports
+// a blocking issue are all rejected. Issues are reassigned to a valid
+// implementer when the gate named an unknown or missing one.
+func readVerdict(output string, stages []Stage, plan Plan) (Verdict, string) {
 	v, ok := lastJSON(output, func(v Verdict) bool { return v.Status != "" })
 	if !ok {
-		return Verdict{}, false
+		if strings.TrimSpace(output) == "" {
+			return Verdict{}, "resposta vazia"
+		}
+		return Verdict{}, "nenhum bloco JSON válido com status"
 	}
 	v.Status = strings.ToLower(strings.TrimSpace(v.Status))
 	var issues []Issue
@@ -123,7 +147,19 @@ func parseVerdict(output string, stages []Stage, plan Plan) (Verdict, bool) {
 		issues = append(issues, is)
 	}
 	v.Issues = issues
-	return v, true
+	switch v.Status {
+	case VerdictApproved:
+		if slices.ContainsFunc(issues, Issue.Blocking) {
+			return Verdict{}, "status approved com problema de severidade bloqueante"
+		}
+	case VerdictChangesRequested:
+		if len(issues) == 0 {
+			return Verdict{}, "changes_requested sem nenhum problema descrito"
+		}
+	default:
+		return Verdict{}, fmt.Sprintf("status desconhecido %q", v.Status)
+	}
+	return v, ""
 }
 
 // fullPlan selects every delegable agent.

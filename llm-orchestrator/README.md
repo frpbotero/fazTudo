@@ -96,6 +96,12 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    falhas, o frontend e/ou backend recebem um prompt com exatamente o que corrigir e o mesmo portão
    roda de novo para verificar. Após 2 rodadas sem aprovação, a etapa fica *Com pendências* (listadas) e o pipeline segue para as
    próximas etapas e US, sem parar a execução.
+   O veredito é validado: status desconhecido, `changes_requested` sem problema descrito ou
+   `approved` com problema de severidade alta são rejeitados. Resposta sem veredito válido nunca
+   aprova: o portão é consultado de novo só pelo veredito (até 2 vezes, em leitura) e, persistindo,
+   a validação fica *inconclusiva*. Cada US e a execução mostram a **validação** (aprovada,
+   reprovada, inconclusiva ou não avaliada) separada do resultado: *concluída* diz que a execução
+   terminou, não que a entrega foi aprovada. Simulação nunca conta como aprovação.
 5. O **code review** roda com revisores em paralelo, cada um com um foco: aderência à especificação,
    simplicidade e legibilidade, testes e — quando o frontend participa — interface e acessibilidade.
    Os problemas são unificados em um único veredito.
