@@ -98,11 +98,11 @@ const (
 
 // OptionalStages are the stages a flow may turn off, in pipeline order. The
 // architect (it plans the work) and the implementers are not among them.
-var OptionalStages = []string{"context", "spec", "checks", "security", "review", "e2e", "docs"}
+var OptionalStages = []string{"context", "spec", "checks", "security", "review", "e2e", "acceptance", "docs"}
 
 var presetDisabled = map[string][]string{
 	FlowBalanced: {"security", "e2e", "docs"},
-	FlowFast:     {"security", "review", "e2e", "docs"},
+	FlowFast:     {"security", "review", "e2e", "acceptance", "docs"},
 	FlowAudit:    {"context", "spec", "arch", "frontend", "backend", "e2e", "docs"},
 }
 

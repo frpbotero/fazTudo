@@ -2,7 +2,7 @@
 
 Servidor Go com dashboard web que conduz uma User Story por um pipeline de agentes LLM
 (Passo 0 → especificação EDD/TDD → arquitetura → frontend/backend em frentes paralelas →
-verificação executável → segurança → code review → E2E → documentação),
+verificação executável → segurança → code review → E2E → QA funcional → documentação),
 usando os CLIs **Claude Code**, **Codex** e **Gemini CLI** com failover automático quando um deles atinge o limite de uso.
 
 ## Repositório e discovery
@@ -158,8 +158,24 @@ seguinte.
 
 **Fluxo de agentes** (campo *Fluxo de agentes*, por repositório): `full` (padrão), `balanced` (sem
 segurança, E2E e docs), `fast` (Passo 0, especificação, arquiteto, devs e verificação), `audit`
-(verificação, segurança e review do código já desenvolvido, sem arquiteto nem devs; os achados viram
-pendências) e `custom` (`disabled_stages`). Etapas desligadas aparecem como *omitidas*.
+(verificação, segurança, review e QA funcional do código já desenvolvido, sem arquiteto nem devs; os
+achados viram pendências) e `custom` (`disabled_stages`). Etapas desligadas aparecem como *omitidas*.
+
+**QA funcional** (`acceptance`, depois do E2E; desligado só no `fast`). Só leitura, julga cada critério
+e cenário do plano, inclusive os negativos, pelos critérios originais da US. Recebe do orquestrador a
+evidência executada (status de cada caso da especificação, casos do relatório, reprodução do bug) e a
+interpreta, sem substituí-la:
+
+- cenário **aceito** precisa citar o ID de um caso **comprovado** por execução; inspeção precisa de
+  `arquivo:linha`, e o QA fica como responsável;
+- caso citado que falhou torna o cenário **recusado**, que volta para o implementador mesmo que o QA
+  tenha aprovado;
+- aceito sem essa evidência, ou cenário do plano que o QA não avaliou, fica **sem evidência**: a
+  validação da US fica inconclusiva;
+- código alterado depois da aceitação (por uma etapa posterior) **invalida** os cenários aceitos.
+
+A evidência guardada passa por remoção de dados sensíveis (senhas, tokens, e-mails, CPF, números de
+cartão); screenshots e traces do Playwright aparecem ligados ao cenário pelo caso que o comprova.
 
 **Política de risco** (`risk_rules`, por repositório). Cada regra tem nome, caminhos (globs sobre os
 arquivos alterados, `**` atravessa pastas), palavras-chave (no texto da US), nível (`baixo`, `medio`,

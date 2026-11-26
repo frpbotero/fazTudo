@@ -75,6 +75,10 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 	}
 	if a.passed() {
 		st.verifiedAt = quality.FileClock(ss.repo)
+		if len(a.traces) > 0 {
+			// The gate after this fix judges with the cases that just ran.
+			o.updateStory(st.si, func(r *StoryRun) { r.Trace = a.traces })
+		}
 		return nil, true
 	}
 	report := verifierReport(a)
