@@ -339,3 +339,23 @@ func TestPolicyCheckReports(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyProfiles(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	p.Profiles = []string{" go ", "go", "angular-nestjs-postgres"}
+	got, err := m.SetPolicy(p)
+	if err != nil || !slices.Equal(got.Profiles, []string{"go", "angular-nestjs-postgres"}) {
+		t.Fatalf("profiles = %v, %v", got.Profiles, err)
+	}
+	p.Profiles = []string{"rails"}
+	if _, err := m.SetPolicy(p); err == nil {
+		t.Error("an unknown profile must be refused")
+	}
+	if got := SuggestProfiles([]Stack{{Name: "Go"}, {Name: "NestJS"}}); !slices.Equal(got, []string{"angular-nestjs-postgres", "go"}) {
+		t.Errorf("suggested = %v", got)
+	}
+	if got := SuggestProfiles([]Stack{{Name: "React"}}); len(got) != 0 {
+		t.Errorf("suggested = %v", got)
+	}
+}

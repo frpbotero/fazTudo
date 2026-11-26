@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/skills"
 )
 
 // Policy is the per-repository quality configuration: which commands prove
@@ -25,6 +26,10 @@ type Policy struct {
 	// BenchmarkChecks measure the workload a performance requirement is
 	// about; the performance specialist reads their output.
 	BenchmarkChecks []quality.Command `json:"benchmark_checks,omitempty"`
+	// Profiles are the stack profiles (internal/skills/bundle/profiles) the
+	// repository's agents follow. Detection only suggests them; they apply
+	// once chosen here.
+	Profiles []string `json:"profiles,omitempty"`
 	// Protected are glob patterns (base name or relative path) of input files
 	// agents must not modify.
 	Protected []string `json:"protected"`
@@ -175,6 +180,13 @@ func (p Policy) Normalize() Policy {
 		}
 	}
 	p.DisabledStages = disabled
+	var profiles []string
+	for _, name := range p.Profiles {
+		if name = strings.TrimSpace(name); name != "" && !slices.Contains(profiles, name) {
+			profiles = append(profiles, name)
+		}
+	}
+	p.Profiles = profiles
 	p.Checks = normalizeCommands(p.Checks)
 	p.MigrationChecks = normalizeCommands(p.MigrationChecks)
 	p.BenchmarkChecks = normalizeCommands(p.BenchmarkChecks)
@@ -274,6 +286,11 @@ func (p Policy) Validate() error {
 		// A pattern matching every name would remove the user's own stacks.
 		if _, err := path.Match(s, ""); err != nil || len(s) > 200 || strings.Trim(s, "*?") == "" {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
+		}
+	}
+	for _, name := range p.Profiles {
+		if !skills.HasProfile(name) {
+			return fmt.Errorf("perfil de stack desconhecido: %q (disponíveis: %s)", name, strings.Join(skills.Profiles(), ", "))
 		}
 	}
 	if len(p.MigrationChecks) > maxChecks || len(p.BenchmarkChecks) > maxChecks {

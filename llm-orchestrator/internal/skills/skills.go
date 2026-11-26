@@ -124,3 +124,78 @@ func writeIfChanged(fsys embed.FS, p, dst string) error {
 	}
 	return werr
 }
+
+// Version identifies the embedded bundle's content.
+func Version() string { return version }
+
+// Names lists the bundled skills, sorted.
+func Names() []string {
+	entries, _ := fs.ReadDir(bundle, path.Join(root, "skills"))
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() && Has(e.Name()) {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+// Hash is the SHA-256 of every file of a bundled skill, or "" when the skill
+// is not bundled: what a call followed, whatever the bundle's other content.
+func Hash(name string) string {
+	if !Has(name) {
+		return ""
+	}
+	return hashTree(path.Join(root, "skills", name))
+}
+
+// HasProfile reports whether a stack profile is bundled.
+func HasProfile(name string) bool {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return false
+	}
+	_, err := fs.Stat(bundle, path.Join(root, "profiles", name+".md"))
+	return err == nil
+}
+
+// Profiles lists the bundled stack profiles, sorted.
+func Profiles() []string {
+	entries, _ := fs.ReadDir(bundle, path.Join(root, "profiles"))
+	var names []string
+	for _, e := range entries {
+		if name, ok := strings.CutSuffix(e.Name(), ".md"); ok && !e.IsDir() {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// ProfileFile is where a bundled profile lives inside dir.
+func ProfileFile(dir, name string) string {
+	return filepath.Join(dir, "profiles", name+".md")
+}
+
+// ProfileHash is the SHA-256 of a bundled profile, or "".
+func ProfileHash(name string) string {
+	if !HasProfile(name) {
+		return ""
+	}
+	return hashTree(path.Join(root, "profiles", name+".md"))
+}
+
+func hashTree(p string) string {
+	h := sha256.New()
+	_ = fs.WalkDir(bundle, p, func(f string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := bundle.ReadFile(f)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(h, "%s\x00%d\x00", strings.TrimPrefix(f, p), len(data))
+		h.Write(data)
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))
+}

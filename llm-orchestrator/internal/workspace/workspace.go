@@ -84,6 +84,24 @@ type State struct {
 	Policy    Policy  `json:"policy"`
 	// Suggested are the check commands detected from the manifests.
 	Suggested []quality.Command `json:"suggested"`
+	// SuggestedProfiles are the stack profiles the discovery's stacks match;
+	// they apply only once the policy chooses them.
+	SuggestedProfiles []string `json:"suggested_profiles,omitempty"`
+}
+
+// SuggestProfiles matches the bundled stack profiles to the stacks found.
+func SuggestProfiles(stacks []Stack) []string {
+	has := func(name string) bool {
+		return slices.ContainsFunc(stacks, func(s Stack) bool { return s.Name == name })
+	}
+	var out []string
+	if has("Angular") || has("NestJS") {
+		out = append(out, "angular-nestjs-postgres")
+	}
+	if has("Go") {
+		out = append(out, "go")
+	}
+	return out
 }
 
 // Manager holds the configured repository, its cached discovery and the
@@ -295,6 +313,9 @@ func (m *Manager) State() State {
 	m.mu.RUnlock()
 	if st.Suggested == nil {
 		st.Suggested = []quality.Command{}
+	}
+	if st.Discovery != nil {
+		st.SuggestedProfiles = SuggestProfiles(st.Discovery.Stacks)
 	}
 	return st
 }

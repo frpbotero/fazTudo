@@ -33,16 +33,38 @@ antes de varrer arquivos. Sem graphify, o pipeline segue sem o grafo (aviso no l
 chamada: arquivo alterado volta à cópia embutida. O prompt indica o caminho de cada `SKILL.md` e o agente
 o lê como arquivo, então Claude (com `--safe-mode`, `--add-dir` e escrita negada na pasta), Codex e Gemini
 (`--include-directories`) usam as mesmas versões, sem depender do que o usuário instalou. Etapas:
-especificação → `spec-driven-development`; arquiteto → `planning-and-task-breakdown`, `api-and-interface-design`;
-frontend/backend → `incremental-implementation`, `test-driven-development` e `frontend-ui-engineering`/
-`api-and-interface-design`; segurança → `security-and-hardening`; code review → `code-review-and-quality`,
-`code-simplification`, `structural-health`; docs → `documentation-and-adrs`; rodadas de correção →
+Passo 0 → `story-readiness`; especificação → `spec-driven-development`; ameaças → `security-and-hardening`;
+arquiteto → `planning-and-task-breakdown`, `api-and-interface-design`, `change-impact`; dados →
+`safe-migrations`; frontend/backend → `incremental-implementation`, `test-driven-development` e
+`frontend-ui-engineering`/`api-and-interface-design`; segurança → `security-and-hardening`; code review →
+`code-review-and-quality`, `code-simplification`, `structural-health`, `test-quality`; QA funcional →
+`functional-acceptance`; docs → `documentation-and-adrs`; rodadas de correção →
 `debugging-and-error-recovery`, `test-driven-development`. Com revisores em paralelo, cada lente lê só a
-sua (a lente Estrutura usa `structural-health`).
+sua (a lente Estrutura usa `structural-health`; a de Testes, `test-quality`).
+
+**Rastreio por chamada.** Cada chamada de agente grava, no passo, a versão do bundle, o hash de cada
+skill e perfil que o prompt indicou, o hash do prompt e do papel e os parâmetros (nível, só leitura,
+diagnóstico, `strict_commands`, limite de turnos, provider e modelo). Um resultado ruim leva às
+instruções exatas que o produziram.
+
+**Perfis de stack** (`profiles` na política, campo *Perfis de stack*). `go` e `angular-nestjs-postgres`
+trazem as convenções da stack para implementadores e revisores. São opcionais: o discovery sugere os que
+casam com as stacks encontradas, mas só valem depois de escolhidos.
+
+**Complemento do projeto.** `.faztudo/skills/<skill>.md` no repositório é acrescentado à skill de mesmo
+nome, com caminho e hash no rastreio da chamada. Ele adiciona convenções; o prompt diz que não reduz o
+que a skill, a política ou as permissões exigem, e as permissões nem passam pelo texto. O arquivo é
+protegido como os documentos de entrada: agente que o alterar tem a mudança desfeita.
+
+**Atualizar um playbook.** `internal/skills/testdata/playbooks.sha256` fixa o hash de cada skill e
+perfil. Mudar um deles faz `make test` falhar até que o fixture seja atualizado
+(`UPDATE_GOLDEN=1 go test ./internal/skills`), depois de comparar os relatórios da avaliação antes e
+depois da mudança (`go run . -eval`, veja [evals/README.md](evals/README.md)).
 
 As de [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) (MIT) ficam fixadas no commit de
 `bundle/AGENT_SKILLS_COMMIT`; `make update-skills` (ou `scripts/update-skills.sh <commit>`) atualiza.
-`structural-health` é nossa, adaptada de `untangle-codebase` ([caldoai/skills](https://github.com/caldoai/skills),
+`structural-health`, `story-readiness`, `change-impact`, `safe-migrations`, `test-quality` e
+`functional-acceptance` são nossas; `structural-health` foi adaptada de `untangle-codebase` ([caldoai/skills](https://github.com/caldoai/skills),
 MIT): na revisão de cada US procura ligações escondidas, ligações desnecessárias, sobras e casos especiais
 no que a US mudou e em quem depende disso.
 

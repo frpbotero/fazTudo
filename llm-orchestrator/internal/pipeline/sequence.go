@@ -396,6 +396,8 @@ func (o *Orchestrator) newStoryContext(si int, opts StartOptions, ss *session) s
 		Rules: ss.rules(), Instructions: ss.instructions,
 		Audit:       ss.policy.StageDisabled("arch"),
 		AuditNotice: o.texts.auditNotice,
+		Profiles:    slices.Clone(ss.policy.Profiles),
+		Overrides:   o.overrides(),
 	}
 	o.mu.RLock()
 	defer o.mu.RUnlock()

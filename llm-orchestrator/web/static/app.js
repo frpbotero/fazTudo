@@ -78,6 +78,7 @@ Critérios de aceitação:
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
     qMigrationChecks: $('qMigrationChecks'), qBenchmarkChecks: $('qBenchmarkChecks'),
+    qProfiles: $('qProfiles'), qProfilesNote: $('qProfilesNote'),
     qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qPromoteUnverified: $('qPromoteUnverified'), qStrictCommands: $('qStrictCommands'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
     promptsError: $('promptsError'), promptList: $('promptList'), promptForm: $('promptForm'), promptTitle: $('promptTitle'),
     promptDescription: $('promptDescription'), promptParts: $('promptParts'), promptWarning: $('promptWarning'), promptValue: $('promptValue'),
@@ -625,6 +626,10 @@ Critérios de aceitação:
       : '<li class="note">Nenhum comando encontrado nos manifestos (package.json, go.mod, pyproject.toml…).</li>';
     el.qChecks.value = commandLines(p.checks?.length ? p.checks : suggested);
     el.qProtected.value = (p.protected || []).join('\n');
+    el.qProfiles.value = (p.profiles || []).join(', ');
+    const suggestedProfiles = (snapshot?.workspace?.suggested_profiles || []).filter((x) => !(p.profiles || []).includes(x));
+    el.qProfilesNote.textContent = 'Convenções da stack para implementadores e revisores. Opcionais: só valem os listados aqui.' +
+      (suggestedProfiles.length ? ` Detectado neste repositório: ${suggestedProfiles.join(', ')}.` : '');
     el.qMigrationChecks.value = commandLines(p.migration_checks);
     el.qBenchmarkChecks.value = commandLines(p.benchmark_checks);
     el.qMaxLine.value = p.max_line_length;
@@ -657,6 +662,7 @@ Critérios de aceitação:
     const policy = {
       auto_checks: el.qAuto.checked,
       checks: parseCommands(el.qChecks.value),
+      profiles: el.qProfiles.value.split(',').map((x) => x.trim()).filter(Boolean),
       migration_checks: parseCommands(el.qMigrationChecks.value),
       benchmark_checks: parseCommands(el.qBenchmarkChecks.value),
       protected: el.qProtected.value.split('\n').map((l) => l.trim()).filter(Boolean),
