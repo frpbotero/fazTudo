@@ -44,8 +44,11 @@ type Promotion struct {
 // A story not evaluated (no command ran, nothing to judge) is promoted only
 // when the policy says so explicitly.
 func promotable(st StoryRun, policy workspace.Policy) string {
-	if st.Status == StepSkipped {
+	switch st.Status {
+	case StepSkipped:
 		return "US não desenvolvida"
+	case StepWaiting:
+		return "US aguarda decisão de produto"
 	}
 	switch cmpValidation(st.Validation) {
 	case ValidationPassed:
@@ -121,6 +124,14 @@ func (o *Orchestrator) promoteStory(ctx context.Context, ss *session, st *storyS
 	}
 	from := ss.git.Branch(ctx)
 	if from == "" || from == ss.bases["."] {
+		return true
+	}
+	if st.waiting > 0 {
+		// Nothing was built: back to the base, the story waits for its answers.
+		if err := ss.git.SwitchBranches(ctx, ss.bases); err != nil {
+			o.failRun(fmt.Errorf("voltar para a branch base: %w", err))
+			return false
+		}
 		return true
 	}
 	label := storyLabel(st.sc.Story)
@@ -206,8 +217,11 @@ func (o *Orchestrator) unmetDependency(si int, list []stories.Story) string {
 	deps := o.dependenciesLocked(si, list)
 	for _, d := range deps {
 		dep := o.run.Stories[d]
-		if dep.Integration == IntegrationBlocked || dep.Status == StepSkipped {
-			return fmt.Sprintf("depende de %s, que não entrou na base", cmp.Or(dep.ID, dep.Title))
+		switch {
+		case dep.Status == StepWaiting:
+			return fmt.Sprintf("%s %s, que aguarda decisão de produto", dependsPrefix, cmp.Or(dep.ID, dep.Title))
+		case dep.Integration == IntegrationBlocked || dep.Status == StepSkipped:
+			return fmt.Sprintf("%s %s, que não entrou na base", dependsPrefix, cmp.Or(dep.ID, dep.Title))
 		}
 	}
 	return ""
@@ -225,6 +239,15 @@ func (o *Orchestrator) dependenciesLocked(si int, list []stories.Story) []int {
 		}
 	}
 	return deps
+}
+
+// dependsPrefix starts the note of a story skipped for an unmet dependency.
+const dependsPrefix = "depende de"
+
+// skippedByDependency reports whether a story was left out only because of a
+// dependency, so it runs again when the dependency is resumed.
+func skippedByDependency(r StoryRun) bool {
+	return r.Status == StepSkipped && strings.HasPrefix(r.IntegrationNote, dependsPrefix)
 }
 
 // skipStory leaves a story out of the run because of an unmet dependency.

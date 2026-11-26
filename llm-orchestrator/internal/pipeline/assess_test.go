@@ -37,8 +37,11 @@ func TestParseAssessmentDefaultsToImplement(t *testing.T) {
 	}
 }
 
-func TestPassoZeroReuseClosesStoryWithoutImplementing(t *testing.T) {
-	exec := &fakeExecutor{outputs: map[string][]string{"scout": {decision(DecisionReuse)}}}
+const reuseWithEvidence = "Relatório.\n```json\n{\"decision\": \"reuse\", \"reason\": \"src/cart.ts:10\", " +
+	"\"criteria\": [{\"criterion\": \"somar itens\", \"status\": \"existente\", \"evidence\": \"src/cart.ts:10\"}]}\n```"
+
+func TestPassoZeroReuseOnlyRunsTheExecutableGates(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{"scout": {reuseWithEvidence}}}
 	o, _ := newVerifierTest(t, exec, passing)
 	o.baseStages = assessStages
 	o.stages = o.baseStages
@@ -46,16 +49,34 @@ func TestPassoZeroReuseClosesStoryWithoutImplementing(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := waitDone(t, o)
-	if run.Result != ResultSucceeded || run.Stories[0].Status != StepDone {
-		t.Fatalf("result = %s, story = %s", run.Result, run.Stories[0].Status)
+	st := run.Stories[0]
+	if run.Result != ResultSucceeded || st.Status != StepDone {
+		t.Fatalf("result = %s, story = %s", run.Result, st.Status)
 	}
 	if exec.count("fe") != 0 || exec.count("rv") != 0 {
 		t.Errorf("no agent may run after reuse: %v", exec.roles)
 	}
-	for _, s := range run.Stories[0].Steps[1:] {
-		if s.Status != StepSkipped {
-			t.Errorf("step %s = %s, want skipped", s.ID, s.Status)
-		}
+	if got := stepIDs(st.Steps); got != "context:done frontend:skipped checks:done review:skipped" {
+		t.Errorf("steps = %s", got)
+	}
+	// The claim was checked by the project commands, not taken as is.
+	if st.Validation != ValidationPassed {
+		t.Errorf("validation = %s", st.Validation)
+	}
+}
+
+func TestReuseWithoutEvidenceForEveryCriterionIsImplemented(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{"scout": {decision(DecisionReuse)}}}
+	o, _ := newVerifierTest(t, exec, passing)
+	o.baseStages = assessStages
+	o.stages = o.baseStages
+	_ = o.Start(realStory("Carrinho"))
+	run := waitDone(t, o)
+	if exec.count("fe") != 1 {
+		t.Errorf("a reuse without criteria is an extend: fe calls %d", exec.count("fe"))
+	}
+	if r := run.Stories[0].Readiness; r == nil || r.Decision != DecisionExtend || len(r.Notes) == 0 {
+		t.Errorf("readiness = %+v", r)
 	}
 }
 

@@ -22,11 +22,12 @@ type fakeExecutor struct {
 	reqs    []provider.Request
 	roles   []string
 	dirs    []string
-	outputs map[string][]string             // scripted outputs per role, consumed in order
-	failAt  int                             // 1-based call index that fails; 0 = never
-	block   chan struct{}                   // when set, every call waits on it or ctx
-	onCall  func(req provider.Request)      // side effects in the repository, like a real agent
-	failIf  func(req provider.Request) bool // fails the call after its side effects
+	outputs map[string][]string               // scripted outputs per role, consumed in order
+	failAt  int                               // 1-based call index that fails; 0 = never
+	block   chan struct{}                     // when set, every call waits on it or ctx
+	onCall  func(req provider.Request)        // side effects in the repository, like a real agent
+	failIf  func(req provider.Request) bool   // fails the call after its side effects
+	answer  func(req provider.Request) string // when it returns text, that is the output
 }
 
 func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf provider.Logf) (*provider.Response, error) {
@@ -60,6 +61,11 @@ func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf p
 	out := "artifact-" + req.Role + "\n\n" + fence(approved)
 	if q := f.outputs[req.Role]; len(q) > 0 {
 		out, f.outputs[req.Role] = q[0], q[1:]
+	}
+	if f.answer != nil {
+		if a := f.answer(req); a != "" {
+			out = a
+		}
 	}
 	f.mu.Unlock()
 	return &provider.Response{Output: out, Name: "Fake", Model: "m1"}, nil

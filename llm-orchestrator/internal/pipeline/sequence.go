@@ -385,7 +385,7 @@ func (o *Orchestrator) storyFinished(si int) bool {
 }
 
 func isFinished(s StepStatus) bool {
-	return s == StepDone || s == StepWarning || s == StepSkipped
+	return s == StepDone || s == StepWarning || s == StepSkipped || s == StepWaiting
 }
 
 // newStoryContext places a story among the ones delivered in earlier waves
@@ -399,6 +399,7 @@ func (o *Orchestrator) newStoryContext(si int, opts StartOptions, ss *session) s
 	}
 	o.mu.RLock()
 	defer o.mu.RUnlock()
+	sc.Answers = slices.Clone(o.run.Stories[si].Answers)
 	wave := storyWave(o.run.Stories, si)
 	for i, s := range opts.Stories {
 		switch w := storyWave(o.run.Stories, i); {
@@ -592,8 +593,8 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 	var candidates []int
 	for _, si := range wave {
 		run := o.storyRun(si)
-		if run.Integration == IntegrationBlocked {
-			continue // already kept out, e.g. by an unmet dependency
+		if run.Integration == IntegrationBlocked || run.Status == StepWaiting {
+			continue // already kept out by an unmet dependency, or not developed yet
 		}
 		if reason := promotable(run, ss.policy); reason != "" {
 			o.markIntegration(si, IntegrationBlocked, reason)

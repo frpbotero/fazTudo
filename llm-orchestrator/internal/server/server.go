@@ -112,6 +112,7 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/pipeline/stop", s.handleStop)
 	mux.HandleFunc("POST /api/pipeline/retry", s.handleRetry)
 	mux.HandleFunc("POST /api/pipeline/resume", s.handleResume)
+	mux.HandleFunc("POST /api/pipeline/answer", s.handleAnswer)
 	mux.HandleFunc("GET /api/health/areas", s.handleHealthAreas)
 	mux.HandleFunc("POST /api/health/start", s.handleHealthStart)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
@@ -436,6 +437,27 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "retrying"})
+}
+
+// handleAnswer records the answers to the product decisions a story waits
+// on and develops it again from Passo 0.
+func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Story   int      `json:"story"`
+		Answers []string `json:"answers"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := s.orch.AnswerDecisions(body.Story, body.Answers); err != nil {
+		status := http.StatusUnprocessableEntity
+		if isConflict(err) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "answered"})
 }
 
 func (s *Server) handleGetWorkspace(w http.ResponseWriter, _ *http.Request) {
