@@ -32,6 +32,46 @@ type Report struct {
 	CreatedAt time.Time `json:"created_at"`
 	// Graph is the absolute path of the code graph (graphify), "" without one.
 	Graph string `json:"graph,omitempty"`
+	// Fingerprint identifies the files the report depends on; nil on a
+	// report from an older version, which is never taken as valid.
+	Fingerprint *Fingerprint `json:"fingerprint,omitempty"`
+	// Origin is how the report was made: OriginFull or OriginIncremental.
+	Origin string `json:"origin,omitempty"`
+	// Reason says why the report was (re)made: first run, files changed...
+	Reason string `json:"reason,omitempty"`
+	// ValidatedAt is when a run last confirmed the report still holds.
+	ValidatedAt *time.Time `json:"validated_at,omitempty"`
+}
+
+// Discovery origins.
+const (
+	OriginFull        = "full"        // the repository was mapped from scratch
+	OriginIncremental = "incremental" // the previous report was updated for the changed files
+)
+
+// Staleness tells why the report no longer describes the repository whose
+// current fingerprint is cur, with the relevant files that changed; "" while
+// it still does. A simulated report never serves a real run.
+func (r Report) Staleness(cur Fingerprint, real bool) (string, []FileChange) {
+	switch {
+	case r.Fingerprint == nil:
+		return "discovery sem impressão digital dos arquivos (feito por uma versão anterior)", nil
+	case real && r.Simulated:
+		return "o discovery anterior foi simulado", nil
+	}
+	changes := r.Fingerprint.Changes(cur)
+	if len(changes) == 0 {
+		return "", nil
+	}
+	var names []string
+	for _, c := range changes[:min(len(changes), 5)] {
+		names = append(names, c.Path+" ("+c.Change+")")
+	}
+	more := ""
+	if len(changes) > 5 {
+		more = fmt.Sprintf(" e mais %d", len(changes)-5)
+	}
+	return fmt.Sprintf("%d arquivo(s) relevante(s) mudaram: %s%s", len(changes), strings.Join(names, ", "), more), changes
 }
 
 // State is the public view of the workspace.

@@ -514,11 +514,20 @@ Critérios de aceitação:
           </div>`).join('')
       : '<p class="note">Nenhum manifesto reconhecido; veja o relatório na etapa de discovery.</p>';
     const via = [d.provider, d.model].filter(Boolean).join(' · ');
+    const origin = d.origin === 'incremental' ? 'Atualizado' : 'Feito';
+    const files = d.fingerprint ? Object.keys(d.fingerprint.files || {}).length : 0;
+    // Validity comes from the fingerprint: an old report without one is
+    // remade on the next run, so the panel says so instead of vouching for it.
+    const validity = !d.fingerprint
+      ? 'Sem impressão digital dos arquivos: será refeito na próxima execução.'
+      : `Válido enquanto ${files} arquivo(s) de manifesto, dependência, instrução e contrato não mudarem${d.validated_at ? `; conferido às ${esc(fmtTime(d.validated_at))}` : ''}.`;
     el.discovery.innerHTML = `
       <div class="discovery-meta">
-        <span>Feito às ${esc(fmtTime(d.created_at))}${via ? ` via ${esc(via)}` : ''}${d.simulated ? ' (simulado)' : ''}</span>
+        <span>${origin} às ${esc(fmtTime(d.created_at))}${via ? ` via ${esc(via)}` : ''}${d.simulated ? ' (simulado)' : ''}</span>
         <button class="btn btn-ghost btn-sm" type="button" data-action="rediscover">${icon('rotate')}Refazer</button>
       </div>
+      ${d.reason ? `<p class="note">Motivo: ${esc(d.reason)}.</p>` : ''}
+      <p class="note">${validity}</p>
       <div class="stack-groups">${stacks}</div>`;
   }
 

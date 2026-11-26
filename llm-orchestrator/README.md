@@ -14,7 +14,12 @@ diretório e um agente complementa com versões, comandos de build/teste, arquit
 
 O relatório é salvo em `~/.config/faztudo/discovery/` (um arquivo por repositório) e injetado como
 contexto em todos os agentes. As execuções seguintes, mesmo depois de reiniciar o servidor,
-**reutilizam o discovery** sem refazê-lo. Ele é refeito apenas ao clicar em **Refazer**.
+**reutilizam o discovery** enquanto ele vale: o relatório guarda o hash dos manifestos, lockfiles,
+instruções dos agentes (AGENTS.md, CLAUDE.md, constitution), contratos (OpenAPI, proto, GraphQL,
+Prisma) e documentos de arquitetura (ADR). Mudou só código, ele é reutilizado. Mudaram até 15 desses
+arquivos (sem remoção), o agente **atualiza** o discovery anterior lendo só eles. Mais que isso, arquivo
+removido, discovery simulado servindo execução real ou relatório de versão anterior sem hash: discovery
+**completo**. O painel mostra origem, motivo e validade; **Refazer** continua forçando um novo.
 
 **Grafo do código.** Com o [graphify](https://github.com/safishamsi/graphify) instalado
 (`uv tool install graphifyy`), cada execução roda `graphify update .` no repositório antes do discovery
