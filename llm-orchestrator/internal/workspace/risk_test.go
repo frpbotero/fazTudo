@@ -31,7 +31,7 @@ func TestAssessRiskFromStoryAndDiff(t *testing.T) {
 	}
 
 	r = AssessRisk(DefaultRiskRules, "Login com senha e MFA", nil)
-	if r.Level != RiskHigh || len(r.Required) != 2 || r.Rules[0] != "Autenticação e permissões" {
+	if r.Level != RiskHigh || len(r.Required) != 3 || r.Required[0] != "threat-model" || r.Rules[0] != "Autenticação e permissões" {
 		t.Errorf("auth story = %+v", r)
 	}
 

@@ -42,6 +42,18 @@ type Stage struct {
 	// Acceptor marks the functional QA gate: it reads the executed evidence
 	// and its scenarios are held to it.
 	Acceptor bool
+	// Conditional selectable stages run only when the plan names them or the
+	// risk requires them: neither the default nor the fallback plan does.
+	Conditional bool
+	// Specialist stages answer with the specialty contract (requirements and
+	// how each is verified), which the implementers and QA receive.
+	Specialist bool
+	// Measured gates get the benchmark commands' output first and must judge
+	// from it.
+	Measured bool
+	// Commands names the policy commands a verifier runs instead of the
+	// project checks: "migrations" for MigrationChecks.
+	Commands string
 	// Verifier stages call no model: the orchestrator runs the project's
 	// commands and static checks, and failures go back to the implementers.
 	Verifier bool
@@ -139,6 +151,8 @@ const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"\"reason\": \"motivo de cada escolha\"}\n```\n" +
 	"\"agents\": só o necessário. frontend = interface; backend = API, dados, regras; " +
 	"security = auth, dados sensíveis, pagamento, entrada externa; e2e = fluxo de tela; " +
+	"ux = jornada visual nova ou ambígua (protótipo antes da implementação); data = mudança de schema ou de dados; " +
+	"performance = requisito de desempenho com meta; " +
 	"docs = documentação para cliente final (uso mudou) ou mantenedor (fluxo, integração, configuração novos). " +
 	"Só interface: sem backend. Mudança simples: sem security, e2e nem docs. Code review sempre roda.\n" +
 	"\"streams\": frentes de implementação (agent frontend ou backend). Frentes sem depends_on entre si e com files disjuntos " +
@@ -242,8 +256,8 @@ var DiscoveryStage = Stage{
 // the earlier ones: implementers the findings and the plan; reviewers the plan
 // and what was implemented. Project check reports never go forward.
 var (
-	implementerInputs = []string{"context", "spec", "arch"}
-	reviewInputs      = []string{"spec", "arch", "frontend", "backend"}
+	implementerInputs = []string{"context", "spec", "threat-model", "arch", "ux", "data"}
+	reviewInputs      = []string{"spec", "threat-model", "arch", "frontend", "backend"}
 )
 
 // DefaultStages is the Passo 0 → EDD → architecture → implementation →
@@ -282,6 +296,22 @@ var DefaultStages = []Stage{
 		Inputs:    []string{"context"},
 	},
 	{
+		ID:          "threat-model",
+		Title:       "Modelagem de ameaças",
+		Role:        "Threat Modeler",
+		Tier:        provider.TierHeavy,
+		Selectable:  true,
+		Conditional: true,
+		Specialist:  true,
+		ReadOnly:    true,
+		Inputs:      []string{"context", "spec"},
+		System:      "Modelagem de ameaças (STRIDE) de mudança sensível, antes do plano. Só leitura; não implementa.",
+		Task: "Ativos, fronteiras de confiança e fluxos de dados que a US toca. Para cada ameaça relevante (falsificação, " +
+			"adulteração, repúdio, vazamento, negação de serviço, elevação de privilégio): o controle que a implementação precisa ter " +
+			"e o teste negativo que o comprova (ex.: acesso sem permissão recusado). Só o que esta US muda.",
+		Skills: []string{"security-and-hardening"},
+	},
+	{
 		ID:       "arch",
 		Title:    "Arquitetura e plano de delegação",
 		Role:     "Chief Architect",
@@ -298,6 +328,37 @@ var DefaultStages = []Stage{
 			"4. Documentação necessária (cliente final ou mantenedor)? Se sim, inclua docs.",
 		Skills: []string{"planning-and-task-breakdown", "api-and-interface-design"},
 		Inputs: []string{"context", "spec"},
+	},
+	{
+		ID:          "ux",
+		Title:       "UX e protótipo",
+		Role:        "UX Specialist",
+		Tier:        provider.TierStandard,
+		Selectable:  true,
+		Conditional: true,
+		Specialist:  true,
+		ReadOnly:    true,
+		Inputs:      []string{"context", "spec", "arch"},
+		System:      "Especialista de UX antes da implementação, quando a jornada visual é nova ou ambígua. Só leitura; não implementa.",
+		Task: "Protótipo em texto da jornada: telas, hierarquia, estados (carregando, vazio, erro, sucesso), mensagens e foco do teclado, " +
+			"no padrão visual do projeto. Cada requisito com a verificação (e2e, teste de componente ou inspeção visual). " +
+			"Ambiguidade que só o produto decide: diga, não invente.",
+		Skills: []string{"frontend-ui-engineering"},
+	},
+	{
+		ID:          "data",
+		Title:       "Dados e migrations",
+		Role:        "Data & Migrations Specialist",
+		Tier:        provider.TierHeavy,
+		Selectable:  true,
+		Conditional: true,
+		Specialist:  true,
+		ReadOnly:    true,
+		Inputs:      []string{"context", "spec", "arch"},
+		System:      "Especialista de dados. Planeja a mudança de schema ou de dados antes da implementação. Só leitura; não implementa.",
+		Task: "Para cada migration: compatibilidade com o código em produção durante o deploy (expandir e contrair), integridade " +
+			"(constraints, dados existentes, nulos), volume e bloqueio de tabela, e como reverter ou recuperar. " +
+			"Requisito com a verificação que o runner faz em banco descartável (aplicar, conferir, reverter, aplicar de novo).",
 	},
 	{
 		ID:          "frontend",
@@ -334,6 +395,16 @@ var DefaultStages = []Stage{
 		Task:     "Executa os comandos do projeto, checagens de sintaxe e legibilidade e a rastreabilidade dos testes.",
 	},
 	{
+		ID:          "migrations",
+		Title:       "Verificação das migrations",
+		Role:        "Portão automático",
+		Verifier:    true,
+		Selectable:  true,
+		Conditional: true,
+		Commands:    "migrations",
+		Task:        "Executa os comandos de migration da política em banco descartável: aplicar, conferir integridade, reverter ou recuperar.",
+	},
+	{
 		ID:         "security",
 		Title:      "Segurança (OWASP) e testes unitários",
 		Role:       "AppSec & QA Engineer",
@@ -345,6 +416,21 @@ var DefaultStages = []Stage{
 		Task:       "Procure: entrada sem validação/sanitização, XSS, injeção, auth/autorização falha, segredo exposto, header inseguro. Avalie também os testes unitários.",
 		Skills:     []string{"security-and-hardening"},
 		Inputs:     reviewInputs,
+	},
+	{
+		ID:          "performance",
+		Title:       "Desempenho",
+		Role:        "Performance Engineer",
+		Tier:        provider.TierHeavy,
+		Selectable:  true,
+		Conditional: true,
+		Gate:        true,
+		Measured:    true,
+		ReadOnly:    true,
+		Inputs:      []string{"spec", "arch", "frontend", "backend"},
+		System:      "Especialista de desempenho. Só leitura. Julga pela medição que o orquestrador executou, nunca por intuição.",
+		Task: "Compare cada medição com o requisito não funcional da US. Gargalo só com a medição que o mostra (consulta, " +
+			"concorrência, alocação, I/O) e a correção. Sem medição: não aprove.",
 	},
 	{
 		ID:       "review",
@@ -575,6 +661,10 @@ func stageInstructions(stage Stage) string {
 		return planInstructions
 	case stage.Acceptor:
 		return acceptanceInstructions
+	case stage.Specialist:
+		return specialistInstructions
+	case stage.Measured:
+		return performanceInstructions
 	case stage.Gate:
 		return verdictInstructions
 	}

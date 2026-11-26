@@ -471,6 +471,18 @@
       </fieldset>
 
       <div class="field">
+        <label for="qMigrationChecks">Comandos de migration</label>
+        <textarea id="qMigrationChecks" rows="2" spellcheck="false" placeholder="migrate: make db-reset db-up db-check db-down db-up"></textarea>
+        <p class="note">Rodam quando o plano tem migration ou a política de risco pede: num banco descartável, aplicar, conferir integridade, reverter ou recuperar e aplicar de novo. Sem eles, a verificação das migrations fica inconclusiva.</p>
+      </div>
+
+      <div class="field">
+        <label for="qBenchmarkChecks">Comandos de benchmark</label>
+        <textarea id="qBenchmarkChecks" rows="2" spellcheck="false" placeholder="bench: k6 run bench/pedidos.js"></textarea>
+        <p class="note">Medem a carga de um requisito de desempenho; o especialista de desempenho julga pela saída deles. Sem medição, não há aprovação.</p>
+      </div>
+
+      <div class="field">
         <label for="qProtected">Arquivos de entrada protegidos</label>
         <textarea id="qProtected" rows="3" spellcheck="false"></textarea>
         <p class="note">Padrões glob, um por linha (ex.: <code>EDD*.md</code>). O .md aberto na execução também é protegido. Se um agente alterar um deles, o arquivo é restaurado e a etapa falha.</p>

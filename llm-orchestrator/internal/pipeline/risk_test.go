@@ -3,6 +3,7 @@ package pipeline
 import (
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,6 +22,9 @@ func runRiskFlow(t *testing.T, exec *fakeExecutor, story string, mutate func(*wo
 	}
 	policy := ws.Policy()
 	policy.Git = false
+	// These tests are about the gates the risk turns on; flowStages has no
+	// specialty, which the specialties' own tests cover.
+	policy.RiskRules = gatesOnly(workspace.DefaultRiskRules)
 	mutate(&policy)
 	if _, err := ws.SetPolicy(policy); err != nil {
 		t.Fatal(err)
@@ -114,4 +118,17 @@ func TestStoriesWithoutRiskRunTheFlowAsConfigured(t *testing.T) {
 			t.Errorf("a story no rule matched logs its risk: %q", l.Message)
 		}
 	}
+}
+
+func gatesOnly(rules []workspace.RiskRule) []workspace.RiskRule {
+	out := make([]workspace.RiskRule, 0, len(rules))
+	for _, r := range rules {
+		r.Require = slices.DeleteFunc(slices.Clone(r.Require), func(id string) bool {
+			return slices.Contains([]string{"threat-model", "data", "migrations", "performance"}, id)
+		})
+		if len(r.Require) > 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }

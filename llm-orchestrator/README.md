@@ -184,9 +184,10 @@ padrão:
 
 | Regra | Dispara com | Nível | Exige |
 |---|---|---|---|
-| Autenticação e permissões | `**/auth/**`, `*auth*`, `*jwt*`…; “login”, “senha”, “permissão”, “MFA”… | alto | segurança, review |
-| Pagamento e dados pessoais | “pagamento”, “pix”, “cartão”, “LGPD”, “CPF”… | crítico | segurança, review |
-| Persistência e migrations | `**/migrations/**`, `**/*.sql`, `schema.prisma`; “migration”… | alto | review |
+| Autenticação e permissões | `**/auth/**`, `*auth*`, `*jwt*`…; “login”, “senha”, “permissão”, “MFA”… | alto | ameaças, segurança, review |
+| Pagamento e dados pessoais | “pagamento”, “pix”, “cartão”, “LGPD”, “CPF”… | crítico | ameaças, segurança, review |
+| Persistência e migrations | `**/migrations/**`, `**/*.sql`, `schema.prisma`; “migration”… | alto | dados, verificação das migrations, review |
+| Desempenho | “desempenho”, “latência”, “throughput”, “SLO”, “p95”… | médio | desempenho |
 | Infraestrutura e CI | `.github/workflows/**`, `Dockerfile`, `*.tf`, `k8s/`… | alto | segurança, review |
 | Contratos de API | `openapi*`, `*.proto`, `*.graphql`; “endpoint”… | médio | review |
 
@@ -195,6 +196,21 @@ correção que amplia o escopo pode exigir mais etapas, nunca menos. Nem o arqui
 (`fast`, `balanced`) retiram uma etapa obrigatória; ela aparece com o motivo. Etapa obrigatória que
 não chega a um resultado deixa a validação da US *inconclusiva*. Lista vazia (`"risk_rules": []`)
 desliga as regras.
+
+**Especialidades.** Rodam só quando a política de risco exige ou o plano pede; nunca no plano padrão
+nem quando o arquiteto não responde. Cada uma tem papel, escopo, contrato de saída e evidência exigida:
+
+| Etapa | Quando | O que entrega | Evidência |
+|---|---|---|---|
+| Modelagem de ameaças (`threat-model`) | antes do arquiteto, em mudança sensível | ameaças STRIDE, controles e o teste negativo de cada um | contrato JSON; requisitos vão aos implementadores, à segurança e ao QA |
+| UX e protótipo (`ux`) | arquiteto escolhe: jornada visual nova ou ambígua | protótipo em texto: telas, estados, mensagens, foco | contrato JSON; requisitos vão ao frontend e ao QA |
+| Dados e migrations (`data`) | plano com migration | compatibilidade durante o deploy, integridade, volume, reversão | contrato JSON |
+| Verificação das migrations (`migrations`) | plano com migration | roda `migration_checks` em banco descartável; falha volta ao backend | comandos; sem eles, inconclusiva |
+| Desempenho (`performance`) | requisito não funcional de desempenho com meta | julga pelas medições de `benchmark_checks` | medição; meta não atingida volta ao implementador; sem medição, inconclusiva |
+
+Especialidade de planejamento só pode planejar antes do código: se o diff a torna obrigatória depois da
+sua vez, o log avisa e as verificações seguintes continuam julgando. Contrato não atendido (requisito sem
+verificação, nada exigido sem justificativa, resposta sem JSON) deixa a etapa e a US *inconclusivas*.
 
 **Linha de base.** Antes de qualquer agente mudar o código, os comandos do projeto rodam no snapshot em
 que a US começa (US da mesma onda, no mesmo commit, compartilham a mesma). Na verificação, cada

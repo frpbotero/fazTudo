@@ -77,6 +77,7 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
+    qMigrationChecks: $('qMigrationChecks'), qBenchmarkChecks: $('qBenchmarkChecks'),
     qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qPromoteUnverified: $('qPromoteUnverified'), qStrictCommands: $('qStrictCommands'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
     promptsError: $('promptsError'), promptList: $('promptList'), promptForm: $('promptForm'), promptTitle: $('promptTitle'),
     promptDescription: $('promptDescription'), promptParts: $('promptParts'), promptWarning: $('promptWarning'), promptValue: $('promptValue'),
@@ -624,6 +625,8 @@ Critérios de aceitação:
       : '<li class="note">Nenhum comando encontrado nos manifestos (package.json, go.mod, pyproject.toml…).</li>';
     el.qChecks.value = commandLines(p.checks?.length ? p.checks : suggested);
     el.qProtected.value = (p.protected || []).join('\n');
+    el.qMigrationChecks.value = commandLines(p.migration_checks);
+    el.qBenchmarkChecks.value = commandLines(p.benchmark_checks);
     el.qMaxLine.value = p.max_line_length;
     el.qTimeout.value = p.check_timeout_s;
     el.qCandidates.value = String(p.candidates || 1);
@@ -654,6 +657,8 @@ Critérios de aceitação:
     const policy = {
       auto_checks: el.qAuto.checked,
       checks: parseCommands(el.qChecks.value),
+      migration_checks: parseCommands(el.qMigrationChecks.value),
+      benchmark_checks: parseCommands(el.qBenchmarkChecks.value),
       protected: el.qProtected.value.split('\n').map((l) => l.trim()).filter(Boolean),
       git: el.qGit.checked,
       max_line_length: Number(el.qMaxLine.value) || 0,
@@ -1171,6 +1176,24 @@ Critérios de aceitação:
       </details>`;
   }
 
+  // What the specialties required, and what the performance specialist measured.
+  function renderSpecialties(st) {
+    const reports = Object.entries(st.specialties || {});
+    const measures = st.measurements || [];
+    if (!reports.length && !measures.length) return '';
+    const items = reports.flatMap(([id, r]) => [
+      ...(r.requirements || []).map((q) => `<tr><td><code>${esc(q.id)}</code> <span class="note">${esc(id)}</span></td><td>${esc(q.text)}</td><td>${esc(q.verification)}</td></tr>`),
+      ...(r.problems || []).map((p) => `<tr><td><span class="note">${esc(id)}</span></td><td colspan="2"><span class="note" data-tone="warn">${esc(p)}</span></td></tr>`),
+      ...(!r.requirements?.length && r.none_reason ? [`<tr><td><span class="note">${esc(id)}</span></td><td colspan="2">${esc(r.none_reason)}</td></tr>`] : []),
+    ]);
+    const rows = measures.map((m) => `<tr><td>${esc(m.metric)}</td><td>${esc(m.value)}${m.slo ? ` (meta ${esc(m.slo)})` : ''}</td><td><span class="note" data-tone="${m.met ? 'success' : 'danger'}">${m.met ? 'atingida' : 'não atingida'}</span></td></tr>`);
+    return `
+      <details class="trace-all">
+        <summary>Especialidades: ${reports.length} relatório(s)${measures.length ? `, ${measures.length} medição(ões)` : ''}</summary>
+        <table>${items.join('')}${rows.join('')}</table>
+      </details>`;
+  }
+
   function renderReadiness(st, si, running) {
     const r = st.readiness;
     if (!r) return '';
@@ -1615,6 +1638,7 @@ Critérios de aceitação:
       <div class="story-meta">${meta}</div>
       ${renderReadiness(st, si, run.running)}
       ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
+      ${renderSpecialties(st)}
       ${renderAcceptance(st.acceptance)}
       ${renderCauses(st.causes)}`;
     if (el.storyHead.dataset.html !== head) {
