@@ -263,8 +263,10 @@ func normalize(ids []string) []string {
 
 // Assessment is the Passo 0 decision about what the repository already does.
 type Assessment struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason,omitempty"`
+	Decision  string            `json:"decision"`
+	Reason    string            `json:"reason,omitempty"`
+	Criteria  []Criterion       `json:"criteria,omitempty"`
+	Decisions []PendingDecision `json:"pending_decisions,omitempty"`
 }
 
 // Passo 0 decisions.

@@ -135,6 +135,15 @@ func notDelivered(st StoryRun) string {
 	switch st.Status {
 	case StepFailed, StepCanceled:
 		return "execução interrompida antes de concluir"
+	case StepWaiting:
+		if st.Readiness != nil {
+			var qs []string
+			for _, d := range st.Readiness.Decisions {
+				qs = append(qs, d.Question)
+			}
+			return "aguarda decisão de produto: " + strings.Join(qs, " · ")
+		}
+		return "aguarda decisão de produto"
 	case StepSkipped:
 		for _, s := range st.Steps {
 			if strings.Contains(s.Note, "bloqueada") {

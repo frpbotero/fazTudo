@@ -139,11 +139,14 @@ const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"Nada a paralelizar: omita streams."
 
 const assessInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
-	"```json\n{\"decision\": \"reuse\" | \"extend\" | \"refactor\" | \"implement\" | \"block\", \"reason\": \"evidência curta\"}\n```\n" +
+	"```json\n{\"decision\": \"reuse\" | \"extend\" | \"refactor\" | \"implement\" | \"block\", \"reason\": \"evidência curta\", " +
+	"\"criteria\": [{\"criterion\": \"critério de aceite\", \"status\": \"existente\" | \"parcial\" | \"ausente\" | \"ambiguo\", \"evidence\": \"arquivo:linha ou por que é ambíguo\"}], " +
+	"\"pending_decisions\": [{\"question\": \"decisão de produto que a US não define\", \"options\": [\"alternativa\"], \"impact\": \"o que muda conforme a resposta\"}]}\n```\n" +
 	"reuse = existe e atende todos os critérios de aceite (US encerrada sem implementar); " +
 	"extend = existe em parte (só o delta); refactor = existe com modelo incompatível; " +
-	"implement = não existe e dependências prontas; block = dependência ausente ou decisão de produto em aberto. " +
-	"reuse e block só com evidência no código (arquivo:linha)."
+	"implement = não existe e dependências prontas; block = dependência ausente. " +
+	"Um item em criteria por critério de aceite. pending_decisions só para decisão de negócio que o código e a US não respondem; " +
+	"não invente a resposta nem reescreva a US. reuse e block só com evidência no código (arquivo:linha)."
 
 const specInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"tests\": [{\"id\": \"UT-CART-01\", \"description\": \"o que verifica\", \"kind\": \"unit\" | \"integration\" | \"e2e\"}]}\n```\n" +
@@ -444,6 +447,9 @@ type storyContext struct {
 	AuditNotice string
 	// PortBase starts the port range of a story run beside others; 0 alone.
 	PortBase int
+	// Answers are the user's answers to the product decisions the story left
+	// open; they come after the story, which stays as written.
+	Answers []PendingDecision
 }
 
 // Parallel stories share the machine: each gets its own port range so their
@@ -551,6 +557,13 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 	b.WriteString("## User Story\n\n")
 	b.WriteString(strings.TrimSpace(sc.Story.Content))
 	b.WriteString("\n\n")
+	if len(sc.Answers) > 0 {
+		b.WriteString("## Decisões de produto respondidas pelo usuário\n\nValem junto com a US; não as reabra.\n\n")
+		for _, a := range sc.Answers {
+			fmt.Fprintf(b, "- %s → %s\n", a.Question, a.Answer)
+		}
+		b.WriteString("\n")
+	}
 	if sc.Audit {
 		b.WriteString(cmp.Or(sc.AuditNotice, auditNotice))
 	}

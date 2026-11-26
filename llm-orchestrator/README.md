@@ -89,8 +89,14 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    só encerram processos pelo PID ou pela porta, nunca por nome (`pkill`/`killall`). O prompt vai pelo
    stdin do CLI, fora da linha de comando, para que um `pkill -f` não derrube o agente de outra US.
 1. **Discovery** (uma vez por repositório) → **Passo 0** (verifica o que o repositório já implementa,
-   critério a critério, e decide: `reuse` encerra a US sem implementar; `block` pula a US apontando a
-   dependência ou decisão que falta; `extend`/`refactor`/`implement` seguem, implementando só o delta)
+   critério a critério, cada um *existente*, *parcial*, *ausente* ou *ambíguo* com evidência, e decide:
+   `reuse` encerra a US sem implementar, mas só com todo critério existente e com evidência, e os
+   comandos do projeto ainda conferem (sem isso vira `extend`); `block` pula a US apontando a
+   dependência que falta; `extend`/`refactor`/`implement` seguem, implementando só o delta). Decisão de
+   produto que a US não responde deixa a US *Aguardando decisão*: as independentes seguem, as que
+   dependem dela esperam. Responda no painel (`POST /api/pipeline/answer`): a resposta fica registrada
+   à parte (a US não é reescrita), segue para todos os agentes e a US recomeça do Passo 0, junto com as
+   que esperavam por ela.
    → **Especificação** → **Arquiteto**. Essas etapas, a segurança e o code review
    rodam **somente leitura** (`--permission-mode plan` / `--sandbox read-only`): planejadores e
    revisores não conseguem alterar arquivos, independentemente do prompt.

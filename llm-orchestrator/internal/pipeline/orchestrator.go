@@ -45,6 +45,9 @@ const (
 	StepFailed   StepStatus = "failed"
 	StepWarning  StepStatus = "warning" // finished with unresolved issues; the run goes on
 	StepCanceled StepStatus = "canceled"
+	// StepWaiting is a story stopped on a product decision only the user can
+	// make; answering it develops the story again from Passo 0.
+	StepWaiting StepStatus = "waiting_input"
 )
 
 // Result is the final outcome of a run.
@@ -131,6 +134,11 @@ type StoryRun struct {
 	// Baseline is how the project commands behaved on the story's starting
 	// snapshot.
 	Baseline *Baseline `json:"baseline,omitempty"`
+	// Readiness is what Passo 0 found: criteria with evidence and open
+	// product decisions. Answers are the user's answers to them, kept apart
+	// from the story text across attempts.
+	Readiness *Readiness        `json:"readiness,omitempty"`
+	Answers   []PendingDecision `json:"answers,omitempty"`
 	// Integration is whether the story entered the base branch; the note
 	// says why it was kept out.
 	Integration     Integration `json:"integration,omitempty"`
@@ -516,7 +524,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	o.run.Stories[story].StartedAt = &started
 	o.run.Stories[story].DurationMS = 0
 	for i := range o.run.Stories {
-		if i == story || isFinished(o.run.Stories[i].Status) {
+		if i == story || isFinished(o.run.Stories[i].Status) && !skippedByDependency(o.run.Stories[i]) {
 			continue // delivered stories of a parallel wave are kept
 		}
 		o.run.Stories[i].Status = StepPending
@@ -662,8 +670,12 @@ type storyState struct {
 	risk workspace.Risk
 	// baseline is how the commands behaved before the story changed anything.
 	baseline *Baseline
-	red      []string // commands that failed last, retried first
-	skipped  bool     // the last assessment left costlier commands out
+	// waiting counts the open product decisions Passo 0 found.
+	waiting int
+	// reused marks a story Passo 0 found done: only executable gates run.
+	reused  bool
+	red     []string // commands that failed last, retried first
+	skipped bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -697,6 +709,8 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 func (o *Orchestrator) closeStory(st *storyState, total int) {
 	status := StepDone
 	switch {
+	case st.waiting > 0:
+		status = StepWaiting
 	case st.blocked != "":
 		status = StepSkipped
 		o.logf(LevelWarn, "%s bloqueada no Passo 0: %s", st.sc.Story.Title, st.blocked)
@@ -714,11 +728,13 @@ func (o *Orchestrator) closeStory(st *storyState, total int) {
 		r.Status = status
 		r.DurationMS = time.Since(st.started).Milliseconds()
 		r.Validation = storyValidation(r.Steps)
-		if missing := o.missingRequired(st, r.Steps); len(missing) > 0 && st.blocked == "" {
+		// Nothing was built for a reused story: the risk's stages, which
+		// judge a change, do not apply; its executable gates still did.
+		if missing := o.missingRequired(st, r.Steps); len(missing) > 0 && st.blocked == "" && st.waiting == 0 && !st.reused {
 			r.Validation = worseValidation(r.Validation, ValidationInconclusive)
 			missingNote = strings.Join(missing, ", ")
 		}
-		if st.blocked != "" || o.run.DryRun {
+		if st.blocked != "" || st.waiting > 0 || o.run.DryRun {
 			// Nothing was checked for real: a blocked story was not built and
 			// a simulation runs no command nor model.
 			r.Validation = ValidationNotEvaluated
@@ -744,10 +760,19 @@ func (o *Orchestrator) finishSucceeded(msg string) {
 			pending = append(pending, cmp.Or(st.ID, st.Title))
 		}
 	}
+	var waiting []string
+	for _, st := range o.run.Stories {
+		if st.Status == StepWaiting {
+			waiting = append(waiting, cmp.Or(st.ID, st.Title))
+		}
+	}
 	validation := runValidation(o.run.Stories)
 	o.run.Validation = validation
 	dry := o.run.DryRun
 	o.mu.Unlock()
+	if len(waiting) > 0 {
+		msg += fmt.Sprintf(" Aguardando decisão de produto em: %s.", strings.Join(waiting, ", "))
+	}
 	switch {
 	case len(pending) > 0:
 		o.finish(ResultSucceeded, LevelWarn, fmt.Sprintf("Pipeline concluído com pendências em: %s. Validação %s.", strings.Join(pending, ", "), validation.Label()))
@@ -782,6 +807,9 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 	}
 	from := slices.IndexFunc(waves, func(w []int) bool { return slices.Contains(w, story) })
 	resume := &resumePoint{si: story, stageAt: stageAt, started: started}
+	if stageAt < 0 {
+		resume = nil // the story starts over, on a new branch
+	}
 	if !o.runWaves(ctx, ss, opts, waves[max(from, 0):], resume) {
 		return
 	}
@@ -996,6 +1024,9 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		if ss.policy.StageDisabled(stage.ID) && !st.requiredByRisk(stage.ID) {
 			continue // marked as omitted when the story's steps were created
 		}
+		if st.reused && !stage.Verifier {
+			continue // skipped when Passo 0 found the story done
+		}
 		ref := stepRef{st.si, stage.ID}
 		if waves := st.plan.parallelWaves(); stage.Implementer && waves != nil && !ss.policy.Sequential {
 			// The first implementer runs every front; the others are covered.
@@ -1098,25 +1129,40 @@ func (o *Orchestrator) planAudit(ss *session, st *storyState) {
 // applyAssessment records the Passo 0 decision. It returns true when the
 // story ends here: already implemented (reuse) or blocked.
 func (o *Orchestrator) applyAssessment(st *storyState, ref stepRef, resp *provider.Response) bool {
-	a := parseAssessment(resp.Output)
-	reason := a.Reason
-	if reason == "" {
-		reason = "sem motivo informado"
+	r := readiness(parseAssessment(resp.Output), o.storyRun(st.si).Answers)
+	o.updateStory(st.si, func(sr *StoryRun) { rr := r; sr.Readiness = &rr })
+	for _, n := range r.Notes {
+		o.logf(LevelWarn, "Passo 0 de %s: %s.", st.sc.Story.Title, n)
 	}
-	switch a.Decision {
+	reason := cmp.Or(r.Reason, "sem motivo informado")
+	if n := len(r.Decisions); n > 0 {
+		var questions []string
+		for _, d := range r.Decisions {
+			questions = append(questions, d.Question)
+		}
+		o.updateStep(ref, func(s *Step) { s.Note = fmt.Sprintf("Aguardando %d decisão(ões) de produto", n) })
+		o.skipRemaining(st.si, "Aguardando decisão de produto (Passo 0)")
+		st.waiting = n
+		o.logf(LevelWarn, "%s aguarda decisão de produto: %s. Responda para retomar; as US independentes seguem.",
+			st.sc.Story.Title, strings.Join(questions, " · "))
+		return true
+	}
+	switch r.Decision {
 	case DecisionReuse:
 		o.updateStep(ref, func(s *Step) { s.Note = "Já atendida: " + reason })
-		o.skipRemaining(st.si, "Já atendida pelo código existente (Passo 0)")
-		o.logf(LevelSuccess, "%s já está implementada; nada a desenvolver.", st.sc.Story.Title)
-		return true
+		// The claim is checked, not taken: the executable gates still run.
+		o.skipRemainingExcept(st.si, "Já atendida pelo código existente (Passo 0)", o.isVerifierStep)
+		st.reused = true
+		o.logf(LevelSuccess, "%s já está implementada segundo o Passo 0; só os comandos do projeto vão conferir.", st.sc.Story.Title)
+		return false
 	case DecisionBlock:
 		o.updateStep(ref, func(s *Step) { s.Note = "Bloqueada: " + reason })
 		o.skipRemaining(st.si, "US bloqueada no Passo 0")
 		st.blocked = reason
 		return true
 	}
-	o.updateStep(ref, func(s *Step) { s.Note = "Decisão: " + decisionLabel(a.Decision) })
-	o.logf(LevelInfo, "Passo 0: %s.", decisionLabel(a.Decision))
+	o.updateStep(ref, func(s *Step) { s.Note = "Decisão: " + decisionLabel(r.Decision) })
+	o.logf(LevelInfo, "Passo 0: %s.", decisionLabel(r.Decision))
 	return false
 }
 
@@ -1128,6 +1174,24 @@ func decisionLabel(d string) string {
 		return "refatorar"
 	}
 	return "implementar"
+}
+
+// skipRemainingExcept marks the story's pending steps as skipped, but for
+// those keep reports.
+func (o *Orchestrator) skipRemainingExcept(si int, note string, keep func(Step) bool) {
+	o.mu.Lock()
+	for j := range o.run.Stories[si].Steps {
+		if s := &o.run.Stories[si].Steps[j]; s.Status == StepPending && !keep(*s) {
+			s.Status, s.Note = StepSkipped, note
+		}
+	}
+	o.mu.Unlock()
+	o.notify()
+}
+
+func (o *Orchestrator) isVerifierStep(s Step) bool {
+	stage, ok := o.lookupStage(s.ID)
+	return ok && stage.Verifier
 }
 
 // skipRemaining marks the story's pending steps as skipped.

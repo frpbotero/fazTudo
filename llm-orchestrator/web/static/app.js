@@ -917,7 +917,9 @@ Critérios de aceitação:
     skipped: { label: 'Bloqueada', tone: 'warn' },
     failed: { label: 'Falhou', tone: 'danger' },
     canceled: { label: 'Cancelada', tone: 'neutral' },
+    waiting_input: { label: 'Aguardando decisão', tone: 'warn' },
   };
+  const CRITERION_LABEL = { existente: 'existente', parcial: 'parcial', ausente: 'ausente', ambiguo: 'ambíguo' };
   const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', investigate: 'Investigação', stream: 'Frente', merge: 'Integração' };
   const CAUSE_STATUS = {
     open: { label: 'Em correção', sev: 'média' },
@@ -1120,6 +1122,50 @@ Critérios de aceitação:
         ${details ? `<dl class="cause-details">${details}</dl>` : ''}
       </li>`;
   }
+
+  // Passo 0's readiness: each criterion with its evidence and, when the story
+  // waits on the user, the open decisions with a field for each answer.
+  function renderReadiness(st, si, running) {
+    const r = st.readiness;
+    if (!r) return '';
+    const criteria = (r.criteria || []).map((c) => `
+      <li>
+        <span class="sev" data-sev="${c.status === 'existente' ? 'baixa' : c.status === 'parcial' ? 'média' : 'alta'}">${esc(CRITERION_LABEL[c.status] || c.status)}</span>
+        <span>${esc(c.criterion)}</span>
+        <span class="issue-meta">${c.evidence ? `<code>${esc(c.evidence)}</code>` : ''}</span>
+      </li>`).join('');
+    const answered = (st.answers || []).map((a) => `<li><span></span><span>${esc(a.question)} → <strong>${esc(a.answer)}</strong></span><span></span></li>`).join('');
+    const open = r.decisions || [];
+    const form = st.status === 'waiting_input' && open.length ? `
+      <form class="decisions" data-story="${si}">
+        <h3>Decisões de produto em aberto <span class="muted">${open.length}</span></h3>
+        ${open.map((d, i) => `
+          <label class="field">
+            <span>${esc(d.question)}${d.impact ? ` <span class="muted">(${esc(d.impact)})</span>` : ''}</span>
+            <textarea name="answer" rows="2" maxlength="2000" required placeholder="${esc((d.options || []).join(' · '))}" data-index="${i}"></textarea>
+          </label>`).join('')}
+        <button class="btn btn-sm" type="submit"${running ? ' disabled title="Aguarde a execução terminar"' : ''}>Responder e retomar</button>
+      </form>` : '';
+    return `
+      ${criteria ? `<div class="issues"><h3>Critérios no Passo 0 <span class="muted">${(r.criteria || []).length}</span></h3><ul>${criteria}</ul></div>` : ''}
+      ${answered ? `<div class="issues"><h3>Decisões respondidas</h3><ul>${answered}</ul></div>` : ''}
+      ${form}`;
+  }
+
+  el.storyHead.addEventListener('submit', async (e) => {
+    const form = e.target.closest('form.decisions');
+    if (!form) return;
+    e.preventDefault();
+    const answers = [...form.querySelectorAll('textarea[name="answer"]')]
+      .sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index))
+      .map((t) => t.value.trim());
+    try {
+      await api('POST', '/api/pipeline/answer', { story: Number(form.dataset.story), answers });
+      toast('Respostas registradas; a US recomeça do Passo 0.', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
 
   function renderCauses(causes) {
     if (!causes?.length) return '';
@@ -1498,6 +1544,7 @@ Critérios de aceitação:
     const head = `
       <h2 id="storyTitle">${esc(st.title || 'User Story')}</h2>
       <div class="story-meta">${meta}</div>
+      ${renderReadiness(st, si, run.running)}
       ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
       ${renderCauses(st.causes)}`;
     if (el.storyHead.dataset.html !== head) {
