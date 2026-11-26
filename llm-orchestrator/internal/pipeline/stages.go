@@ -128,7 +128,12 @@ const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"agents\": [\"frontend\", \"backend\", \"security\", \"e2e\", \"docs\"], " +
 	"\"pattern\": \"padrão de projeto e por quê\", " +
 	"\"streams\": [{\"id\": \"api-carrinho\", \"agent\": \"backend\", \"title\": \"API do carrinho\", \"scope\": \"o que entrega\", " +
-	"\"files\": [\"src/cart/\"], \"depends_on\": []}], \"reason\": \"motivo de cada escolha\"}\n```\n" +
+	"\"files\": [\"src/cart/\"], \"depends_on\": [], \"resources\": [\"contrato POST /cart\"]}], " +
+	"\"impact\": {\"contracts\": [\"API, evento ou schema alterado ou usado\"], \"consumers\": [\"quem usa o que muda\"], " +
+	"\"migrations\": [\"mudança de schema ou dados\"], \"shared_resources\": [\"banco, fila, serviço, porta\"], \"rollback\": \"como desfazer ou recuperar\"}, " +
+	"\"acceptance\": [{\"criterion\": \"critério da US\", \"scenario\": \"dado/quando/então\", \"method\": \"teste unitário | integração | e2e | inspeção\", \"negative\": false}], " +
+	"\"non_functional\": [{\"kind\": \"desempenho\", \"requirement\": \"o que a US exige\", \"slo\": \"meta mensurável ou vazio se a US não define\"}], " +
+	"\"reason\": \"motivo de cada escolha\"}\n```\n" +
 	"\"agents\": só o necessário. frontend = interface; backend = API, dados, regras; " +
 	"security = auth, dados sensíveis, pagamento, entrada externa; e2e = fluxo de tela; " +
 	"docs = documentação para cliente final (uso mudou) ou mantenedor (fluxo, integração, configuração novos). " +
@@ -136,6 +141,10 @@ const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"\"streams\": frentes de implementação (agent frontend ou backend). Frentes sem depends_on entre si e com files disjuntos " +
 	"rodam em paralelo, cada uma em cópia isolada do repositório, e são integradas no fim. " +
 	"depends_on só se a frente precisa do código pronto de outra; contrato do EDD basta para frontend e backend andarem juntos. " +
+	"resources: contrato, migration, banco ou serviço que a frente altera; frentes com o mesmo recurso não rodam juntas. " +
+	"impact: consumidores e contratos além dos arquivos editados; com migration, diga como reverter. " +
+	"acceptance: um cenário por critério, inclusive negativos, com o método de comprovação. " +
+	"non_functional: só o que a US pede; sem meta na US, slo vazio (não invente número). " +
 	"Nada a paralelizar: omita streams."
 
 const assessInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +

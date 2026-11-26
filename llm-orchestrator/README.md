@@ -108,10 +108,15 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    Implementadores e revisores seguem esse padrão e regras de clean code (nomes que revelam intenção,
    funções de uma responsabilidade com até ~20 linhas e 3 argumentos, guard clauses).
 3. **Frentes paralelas** — o arquiteto mapeia as atividades em `streams` (agente, arquivos,
-   dependências). Frentes sem dependência entre si e com arquivos disjuntos formam uma onda e rodam
-   em paralelo, cada uma em uma worktree git própria; no fim da onda são integradas por merge na
+   dependências). Frentes sem dependência entre si, com arquivos disjuntos e sem recurso compartilhado
+   (`resources`: contrato, migration, banco, serviço; com migration no plano, todas as frentes
+   compartilham o schema) formam uma onda e rodam em paralelo, cada uma em uma worktree git própria; no fim da onda são integradas por merge na
    branch da US. Frente que conflita com outra é refeita sobre o código integrado. Sem git as
-   frentes rodam em sequência. Sem nada a paralelizar, o fluxo segue
+   frentes rodam em sequência. O plano também registra o **impacto** (contratos, consumidores,
+   migrations, recursos compartilhados e como reverter), os **cenários de aceitação** com o método de
+   comprovação, definidos antes de implementar, e os **requisitos não funcionais** com SLO. O que
+   falta (nenhum cenário, migration sem reversão, desempenho sem SLO mensurável) aparece como
+   *lacuna* no plano e no log. Sem nada a paralelizar, o fluxo segue
    com frontend e backend como etapas comuns.
 4. **Segurança**, **code review** e **E2E** são portões de qualidade: devolvem um veredito JSON
    (`approved` / `changes_requested`) com os problemas e o agente responsável por cada um. Havendo

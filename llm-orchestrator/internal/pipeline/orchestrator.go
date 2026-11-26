@@ -1337,6 +1337,9 @@ func (o *Orchestrator) applyPlan(si int, sc storyContext, resp *provider.Respons
 		names = append(names, "nenhum agente opcional")
 	}
 	o.logf(LevelInfo, "Plano do arquiteto: %s.", strings.Join(names, ", "))
+	for _, gap := range plan.Gaps {
+		o.logf(LevelWarn, "Plano de %s: %s.", sc.Story.Title, gap)
+	}
 	return plan
 }
 

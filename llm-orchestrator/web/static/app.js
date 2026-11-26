@@ -1064,6 +1064,16 @@ Critérios de aceitação:
   }
 
   // ----- step rows -----
+  function impactRows(impact) {
+    if (!impact) return '';
+    const rows = [
+      ['Contratos', impact.contracts], ['Consumidores', impact.consumers],
+      ['Migrations', impact.migrations], ['Recursos compartilhados', impact.shared_resources],
+    ].filter(([, items]) => items?.length)
+      .map(([label, items]) => `<dt>${label}</dt><dd>${items.map(esc).join(', ')}</dd>`).join('');
+    return rows + (impact.rollback ? `<dt>Reversão</dt><dd>${esc(impact.rollback)}</dd>` : '');
+  }
+
   function renderPlan(plan, steps, key) {
     if (!plan) return '';
     const titles = new Map(steps.map((s) => [s.id, s.title]));
@@ -1084,6 +1094,10 @@ Critérios de aceitação:
             ${plan.pattern ? `<dt>Padrão de projeto</dt><dd>${esc(plan.pattern)}</dd>` : ''}
             ${streams.length ? `<dt>Frentes</dt><dd><ul>${streamList}</ul></dd>` : ''}
             ${plan.reason ? `<dt>Motivo</dt><dd>${esc(plan.reason)}</dd>` : ''}
+            ${impactRows(plan.impact)}
+            ${plan.acceptance?.length ? `<dt>Aceitação</dt><dd><ul>${plan.acceptance.map((a) => `<li>${esc(a.scenario)}${a.method ? ` <span class="muted">(${esc(a.method)}${a.negative ? ', negativo' : ''})</span>` : ''}</li>`).join('')}</ul></dd>` : ''}
+            ${plan.non_functional?.length ? `<dt>Não funcionais</dt><dd><ul>${plan.non_functional.map((n) => `<li>${esc(n.kind)}: ${esc(n.requirement)}${n.slo ? ` <span class="muted">(SLO ${esc(n.slo)})</span>` : ' <span class="muted">(sem SLO)</span>'}</li>`).join('')}</ul></dd>` : ''}
+            ${plan.gaps?.length ? `<dt>Lacunas</dt><dd><ul>${plan.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul></dd>` : ''}
           </dl>
           ${note ? `<p class="note">${esc(note)}</p>` : ''}
         </div>
