@@ -62,6 +62,11 @@ type Policy struct {
 	// removes the ones left behind. Nil uses DefaultEphemeralStacks; an empty
 	// list turns the cleanup off.
 	EphemeralStacks []string `json:"ephemeral_stacks"`
+	// PromoteUnverified lets a story whose delivery was not evaluated (no
+	// project command ran) enter the base branch. Off by default: without
+	// executed evidence the story's branch is kept for review instead.
+	// Rejected or inconclusive deliveries are never promoted.
+	PromoteUnverified bool `json:"promote_unverified,omitempty"`
 }
 
 // DefaultEphemeralStacks match the usual name of an isolated E2E stack.

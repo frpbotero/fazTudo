@@ -36,6 +36,10 @@ Critérios de aceitação:
     inconclusive: { label: 'Validação inconclusiva', short: 'inconclusiva', tone: 'warn' },
     not_evaluated: { label: 'Não avaliada', short: 'não avaliada', tone: 'neutral' },
   };
+  const INTEGRATION = {
+    integrated: { label: 'Na branch base', tone: 'success' },
+    blocked: { label: 'Fora da base', tone: 'danger' },
+  };
   const PROVIDER_STATUS = {
     available: { label: 'Disponível', tone: 'success' },
     cooldown: { label: 'Em cooldown', tone: 'warn' },
@@ -73,7 +77,7 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qPromoteUnverified: $('qPromoteUnverified'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
     promptsError: $('promptsError'), promptList: $('promptList'), promptForm: $('promptForm'), promptTitle: $('promptTitle'),
     promptDescription: $('promptDescription'), promptParts: $('promptParts'), promptWarning: $('promptWarning'), promptValue: $('promptValue'),
     promptDefault: $('promptDefault'), promptContractBox: $('promptContractBox'), promptContract: $('promptContract'), promptDiscard: $('promptDiscard'),
@@ -608,6 +612,7 @@ Critérios de aceitação:
     el.qGit.checked = p.git;
     el.qMaxTurns.value = p.max_turns || '';
     el.qStopOnTurnLimit.checked = !!p.stop_on_turn_limit;
+    el.qPromoteUnverified.checked = !!p.promote_unverified;
     el.qAgentCommands.value = (p.agent_commands || []).join('\n');
     el.qEphemeralStacks.value = (p.ephemeral_stacks || []).join('\n');
     el.qFlow.value = p.flow || 'full';
@@ -644,6 +649,7 @@ Critérios de aceitação:
       agent_commands: el.qAgentCommands.value.split('\n').map((l) => l.trim()).filter(Boolean),
       ephemeral_stacks: el.qEphemeralStacks.value.split('\n').map((l) => l.trim()).filter(Boolean),
       base_branches: snapshot?.workspace?.policy?.base_branches,
+      promote_unverified: el.qPromoteUnverified.checked,
     };
     try {
       await api('PUT', '/api/workspace/policy', policy);
@@ -1296,9 +1302,11 @@ Critérios de aceitação:
     const delivered = list.filter((s) => s.status === 'done' || s.status === 'warning').length;
     const pending = list.filter((s) => s.status === 'warning' || s.status === 'skipped').length;
     const took = run.finished_at ? ` em ${fmtDuration(Date.parse(run.finished_at) - Date.parse(run.started_at))}` : '';
+    const out = list.filter((s) => s.integration === 'blocked').length;
+    const kept = out ? ` ${out} fora da branch base.` : '';
     const v = VALIDATION[run.validation];
     const validation = v ? ` Validação ${v.short}${run.dry_run ? ' (simulação)' : ''}.` : '';
-    return `Concluída${esc(took)}: ${delivered} de ${list.length} US entregue${list.length === 1 ? '' : 's'}${pending ? `, ${pending} com pendências` : ''}.${validation}`;
+    return `Concluída${esc(took)}: ${delivered} de ${list.length} US entregue${list.length === 1 ? '' : 's'}${pending ? `, ${pending} com pendências` : ''}.${validation}${kept}`;
   }
 
   function cleanupFinding(run) {
@@ -1451,6 +1459,7 @@ Critérios de aceitação:
     const meta = [
       pill(status),
       VALIDATION[st.validation] ? pill(VALIDATION[st.validation]) : '',
+      INTEGRATION[st.integration] ? `<span title="${esc(st.integration_note || '')}">${pill(INTEGRATION[st.integration])}</span>` : '',
       st.branch ? `<code>${esc(st.branch)}</code>` : '',
       st.depends_on?.length ? `<span>Depende de ${esc(st.depends_on.join(', '))}</span>` : '',
       time,

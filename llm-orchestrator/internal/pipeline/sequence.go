@@ -315,12 +315,16 @@ func (o *Orchestrator) runStoriesInPlace(ctx context.Context, ss *session, opts 
 		if o.storyFinished(si) {
 			continue
 		}
+		if reason := o.unmetDependency(si, opts.Stories); reason != "" {
+			o.skipStory(si, reason)
+			continue
+		}
 		st, startAt, fresh := o.storyTask(ss, opts, si, resume)
 		if !o.developStoryFrom(ctx, ss, st, startAt, fresh) {
 			return false
 		}
 		o.closeStory(st, len(opts.Stories))
-		if !o.mergeIntoBase(ctx, ss, opts.Stories[si].Title) {
+		if !o.promoteStory(ctx, ss, st) {
 			return false
 		}
 	}
@@ -491,6 +495,10 @@ func (o *Orchestrator) openLanes(ctx context.Context, ss *session, opts StartOpt
 		if o.storyFinished(si) {
 			continue
 		}
+		if reason := o.unmetDependency(si, opts.Stories); reason != "" {
+			o.skipStory(si, reason)
+			continue
+		}
 		lane := &storyLane{ss: ss}
 		if tmp != "" {
 			setup := laneSetup{si: si, story: opts.Stories[si], dir: filepath.Join(tmp, fmt.Sprint(si)), prefix: prefix,
@@ -572,14 +580,33 @@ func (ss *session) inWorktree(work string) *session {
 	return &c
 }
 
-// integrateWave merges the wave's story branches into a new integration
-// branch, which the next wave builds on.
+// integrateWave merges the wave's approved story branches into a new
+// integration branch and promotes it to the base only after the project
+// commands pass on the combination: stories that pass alone may still break
+// together. Stories that may not be promoted are left out of the candidate;
+// a candidate that fails keeps the base as it was.
 func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts StartOptions, wave []int) bool {
 	if ss.git == nil {
 		return true
 	}
-	var labels []string
+	var candidates []int
 	for _, si := range wave {
+		run := o.storyRun(si)
+		if run.Integration == IntegrationBlocked {
+			continue // already kept out, e.g. by an unmet dependency
+		}
+		if reason := promotable(run, ss.policy); reason != "" {
+			o.markIntegration(si, IntegrationBlocked, reason)
+			o.logf(LevelWarn, "%s fica fora da integração: %s. A branch %s fica para revisão.", run.Title, reason, run.Branch)
+			continue
+		}
+		candidates = append(candidates, si)
+	}
+	if len(candidates) == 0 {
+		return true
+	}
+	var labels []string
+	for _, si := range candidates {
 		labels = append(labels, storyLabel(opts.Stories[si]))
 	}
 	branch := vcs.BranchName("integra "+strings.Join(labels, " "), time.Now())
@@ -591,14 +618,40 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 	o.run.Integrations = append(o.run.Integrations, branch)
 	o.mu.Unlock()
 	o.logf(LevelInfo, "Branch %s criada para integrar %s.", branch, strings.Join(labels, ", "))
-	for _, si := range wave {
+	tried := labels
+	var merged []int
+	labels = nil
+	for _, si := range candidates {
 		if !o.mergeStory(ctx, ss, opts, si) {
 			return false
 		}
+		if o.storyRun(si).Integration != IntegrationBlocked {
+			merged = append(merged, si)
+			labels = append(labels, storyLabel(opts.Stories[si]))
+		}
+	}
+	p := Promotion{Stories: labels, Branch: branch}
+	if len(merged) == 0 {
+		p.Stories = tried
+		return o.blockPromotion(ctx, ss, nil, p, "nenhuma US da onda pôde ser integrada")
+	}
+	checks, reason, alive := o.verifyCandidate(ctx, ss, strings.Join(labels, ", "))
+	if !alive {
+		return false
+	}
+	p.Checks = checks
+	if reason == "" {
+		reason = o.baseMoved(ctx, ss, branch)
+	}
+	p.Commit, _ = ss.git.Head(ctx)
+	if reason != "" {
+		return o.blockPromotion(ctx, ss, merged, p, "conjunto integrado: "+reason)
 	}
 	if !o.mergeIntoBase(ctx, ss, strings.Join(labels, ", ")) {
 		return false
 	}
+	p.Status = IntegrationIntegrated
+	o.recordPromotion(p, merged)
 	o.updateGraph(ctx, ss) // the next wave sees the code just integrated
 	return true
 }
@@ -710,7 +763,7 @@ func buildIntegrationPrompt(sc storyContext, discovery *workspace.Report, confli
 
 // leaveUnintegrated marks a story whose branch could not be merged.
 func (o *Orchestrator) leaveUnintegrated(si int, reason string) {
-	o.updateStory(si, func(r *StoryRun) { r.Status = StepWarning })
+	o.markIntegration(si, IntegrationBlocked, reason)
 	o.logf(LevelWarn, "%s não integrada (%s); a branch %s fica para merge manual.", o.storyTitle(si), reason, o.storyBranch(si))
 }
 

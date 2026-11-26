@@ -347,6 +347,36 @@ func (r *Repo) MergeIntoBases(ctx context.Context, rev, msg string, bases map[st
 	return nil, err
 }
 
+// MovedBases lists the repositories (keyed as in AllBranches) whose base
+// branch holds commits rev does not: merging rev there would produce a tree
+// no one verified. Nested repositories compare against the commit rev
+// records for them; a repository without a base is not checked.
+func (r *Repo) MovedBases(ctx context.Context, rev string, bases map[string]string) ([]string, error) {
+	var moved []string
+	check := func(repo *Repo, path, target string) error {
+		base := bases[path]
+		if base == "" || target == "" {
+			return nil
+		}
+		if _, err := repo.git(ctx, "rev-parse", "-q", "--verify", base+"^{commit}"); err != nil {
+			return fmt.Errorf("%s: branch base %q não encontrada", path, base)
+		}
+		if _, err := repo.git(ctx, "merge-base", "--is-ancestor", base, target); err != nil {
+			moved = append(moved, path)
+		}
+		return nil
+	}
+	if err := check(r, ".", rev); err != nil {
+		return nil, err
+	}
+	for _, n := range r.nested {
+		if err := check(r.sub(n), n, r.gitlinkAt(ctx, rev, n)); err != nil {
+			return nil, err
+		}
+	}
+	return moved, nil
+}
+
 // CommitAll stages every change under the directory and commits it. It
 // returns nil when there was nothing to commit. Paths in exclude (relative
 // to the directory) are left out. Nested repositories commit their own

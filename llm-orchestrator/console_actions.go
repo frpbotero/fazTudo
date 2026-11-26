@@ -335,7 +335,11 @@ func printStoryLine(out io.Writer, story pipeline.StoryRun) {
 		fmt.Fprintf(out, "%s: %s (%s)\n", story.ID, story.Title, story.Status)
 		return
 	}
-	fmt.Fprintf(out, "%s: %s (%s, validação %s)\n", story.ID, story.Title, story.Status, story.Validation.Label())
+	line := fmt.Sprintf("%s: %s (%s, validação %s", story.ID, story.Title, story.Status, story.Validation.Label())
+	if story.Integration == pipeline.IntegrationBlocked {
+		line += ", fora da base: " + story.IntegrationNote
+	}
+	fmt.Fprintln(out, line+")")
 }
 
 func printRunStatus(out io.Writer, run pipeline.Run) {

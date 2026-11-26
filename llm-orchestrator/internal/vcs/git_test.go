@@ -554,3 +554,42 @@ func TestMergeIntoBasesFastForwardsAndKeepsBaseOnConflict(t *testing.T) {
 		t.Error("a failed merge must leave a clean tree")
 	}
 }
+
+func TestMovedBasesTellsWhenTheBaseGotCommitsTheCandidateLacks(t *testing.T) {
+	requireGit(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	repo, _, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "a.txt", "base\n")
+	if _, err := repo.CommitAll(ctx, "base"); err != nil {
+		t.Fatal(err)
+	}
+	bases := repo.CurrentBranches(ctx)
+	if err := repo.CreateBranch(ctx, "faztudo/us-1"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "b.txt", "us\n")
+	if _, err := repo.CommitAll(ctx, "us"); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := repo.MovedBases(ctx, "faztudo/us-1", bases); err != nil || len(moved) != 0 {
+		t.Fatalf("a candidate built on the base: moved %v, err %v", moved, err)
+	}
+
+	if err := repo.SwitchBranches(ctx, bases); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "c.txt", "alguém mexeu na base\n")
+	if _, err := repo.CommitAll(ctx, "base mudou"); err != nil {
+		t.Fatal(err)
+	}
+	if moved, err := repo.MovedBases(ctx, "faztudo/us-1", bases); err != nil || len(moved) != 1 || moved[0] != "." {
+		t.Errorf("the base moved after the candidate was built: moved %v, err %v", moved, err)
+	}
+	if _, err := repo.MovedBases(ctx, "faztudo/us-1", map[string]string{".": "nao-existe"}); err == nil {
+		t.Error("a missing base must be an error, not a pass")
+	}
+}

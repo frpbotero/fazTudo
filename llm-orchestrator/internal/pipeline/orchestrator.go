@@ -125,10 +125,14 @@ type StoryRun struct {
 	// Validation is whether the delivery was approved, apart from Status,
 	// which only says the story finished. Empty until the story closes.
 	Validation Validation `json:"validation,omitempty"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	DurationMS int64      `json:"duration_ms,omitempty"`
-	Plan       *Plan      `json:"plan,omitempty"`
-	Branch     string     `json:"branch,omitempty"`
+	// Integration is whether the story entered the base branch; the note
+	// says why it was kept out.
+	Integration     Integration `json:"integration,omitempty"`
+	IntegrationNote string      `json:"integration_note,omitempty"`
+	StartedAt       *time.Time  `json:"started_at,omitempty"`
+	DurationMS      int64       `json:"duration_ms,omitempty"`
+	Plan            *Plan       `json:"plan,omitempty"`
+	Branch          string      `json:"branch,omitempty"`
 	// Wave is the 1-based group of stories developed in parallel; DependsOn
 	// lists the stories it waits for, as the dependency analysis found them.
 	Wave      int      `json:"wave,omitempty"`
@@ -164,10 +168,12 @@ type Run struct {
 	// Waves group the story indexes developed in parallel, in order.
 	Waves [][]int `json:"waves,omitempty"`
 	// Integrations are the branches that merged the stories of each wave.
-	Integrations []string   `json:"integrations,omitempty"`
-	Stories      []StoryRun `json:"stories"`
-	Current      int        `json:"current"` // index into Stories; -1 while discovering
-	Logs         []LogEntry `json:"logs"`
+	Integrations []string `json:"integrations,omitempty"`
+	// Promotions are the decisions on merging candidates into the base.
+	Promotions []Promotion `json:"promotions,omitempty"`
+	Stories    []StoryRun  `json:"stories"`
+	Current    int         `json:"current"` // index into Stories; -1 while discovering
+	Logs       []LogEntry  `json:"logs"`
 	// Bases are the branches each repository started from (keyed "." and by
 	// nested path); every wave is merged into them before the next begins.
 	Bases map[string]string `json:"bases,omitempty"`
@@ -458,6 +464,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	o.run.Stories[story].Steps = fresh
 	o.run.Stories[story].Status = StepRunning
 	o.run.Stories[story].Validation = ""
+	o.run.Stories[story].Integration, o.run.Stories[story].IntegrationNote = "", ""
 	started := time.Now()
 	o.run.Stories[story].StartedAt = &started
 	o.run.Stories[story].DurationMS = 0
@@ -467,6 +474,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 		}
 		o.run.Stories[i].Status = StepPending
 		o.run.Stories[i].Validation = ""
+		o.run.Stories[i].Integration, o.run.Stories[i].IntegrationNote = "", ""
 		o.run.Stories[i].StartedAt = nil
 		o.run.Stories[i].DurationMS = 0
 		o.run.Stories[i].Plan = nil
@@ -896,7 +904,9 @@ func dirtyLabels(paths []string) []string {
 // changes.
 func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *storyState, startAt int, createBranch bool) bool {
 	if createBranch {
-		o.startBranch(ctx, ss, st)
+		if !o.startBranch(ctx, ss, st) {
+			return false
+		}
 	}
 
 	o.planAudit(ss, st)
@@ -1058,17 +1068,32 @@ func (o *Orchestrator) skipRemaining(si int, note string) {
 
 // startBranch creates the story's branch from the current HEAD, so stories of
 // a sequence build on each other.
-func (o *Orchestrator) startBranch(ctx context.Context, ss *session, st *storyState) {
+// maxBranchAttempts bounds the suffixes tried when a story's branch name is
+// taken (two runs of the same story in the same second).
+const maxBranchAttempts = 5
+
+// startBranch puts the story on a branch of its own. Without one the run
+// stops: developing on the base would put unverified work where only an
+// approved candidate may go.
+func (o *Orchestrator) startBranch(ctx context.Context, ss *session, st *storyState) bool {
 	if ss.git == nil {
-		return
+		return true
 	}
-	branch := vcs.BranchName(storyLabel(st.sc.Story), time.Now())
-	if err := ss.git.CreateBranch(ctx, branch); err != nil {
-		o.logf(LevelWarn, "Não foi possível criar a branch %s: %v.", branch, err)
-		return
+	name := vcs.BranchName(storyLabel(st.sc.Story), time.Now())
+	var err error
+	for i := 1; i <= maxBranchAttempts; i++ {
+		branch := name
+		if i > 1 {
+			branch = fmt.Sprintf("%s-%d", name, i)
+		}
+		if err = ss.git.CreateBranch(ctx, branch); err == nil {
+			o.updateStory(st.si, func(r *StoryRun) { r.Branch = branch })
+			o.logf(LevelInfo, "Branch %s criada para %s.", branch, st.sc.Story.Title)
+			return true
+		}
 	}
-	o.updateStory(st.si, func(r *StoryRun) { r.Branch = branch })
-	o.logf(LevelInfo, "Branch %s criada para %s.", branch, st.sc.Story.Title)
+	o.failRun(fmt.Errorf("não foi possível criar a branch de %s (%v); a US não é desenvolvida na branch base", st.sc.Story.Title, err))
+	return false
 }
 
 func storyLabel(s stories.Story) string {

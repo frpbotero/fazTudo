@@ -117,6 +117,7 @@ func newStreamTest(t *testing.T, exec *fakeExecutor, git bool) (*Orchestrator, s
 	o.stages = o.baseStages
 	policy := o.ws.Policy()
 	policy.Git = git
+	policy.PromoteUnverified = true // these stages judge nothing; the tests are about the fronts
 	if _, err := o.ws.SetPolicy(policy); err != nil {
 		t.Fatal(err)
 	}
