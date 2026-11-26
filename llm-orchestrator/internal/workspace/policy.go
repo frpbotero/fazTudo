@@ -177,6 +177,13 @@ func (p Policy) Normalize() Policy {
 		if c.Name == "" {
 			c.Name = c.Run
 		}
+		if c.Report != nil {
+			r := quality.ReportSpec{Format: strings.TrimSpace(c.Report.Format), Path: strings.TrimSpace(c.Report.Path)}
+			c.Report = nil
+			if r.Format != "" {
+				c.Report = &r
+			}
+		}
 		checks = append(checks, c)
 	}
 	p.Checks = checks
@@ -279,6 +286,29 @@ func (p Policy) Validate() error {
 		if strings.ContainsAny(c.Run, "\n\r") {
 			return fmt.Errorf("o comando %q deve ocupar uma linha", c.Name)
 		}
+		if err := validateReport(c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateReport accepts a report the orchestrator can read: a known format,
+// and a path inside the repository where the format needs a file.
+func validateReport(c quality.Command) error {
+	r := c.Report
+	if r == nil {
+		return nil
+	}
+	if !slices.Contains(quality.ReportFormats, r.Format) {
+		return fmt.Errorf("relatório de %q: formato %q desconhecido (use %s)", c.Name, r.Format, strings.Join(quality.ReportFormats, ", "))
+	}
+	if r.Path == "" && r.Format != quality.ReportGoJSON {
+		return fmt.Errorf("relatório de %q: informe o arquivo gerado pelo formato %s", c.Name, r.Format)
+	}
+	clean := path.Clean(r.Path)
+	if len(r.Path) > 300 || path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+		return fmt.Errorf("relatório de %q: o arquivo deve ficar dentro do repositório", c.Name)
 	}
 	return nil
 }

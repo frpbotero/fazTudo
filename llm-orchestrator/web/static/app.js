@@ -532,12 +532,22 @@ Critérios de aceitação:
   }
 
   // ---------- quality gates ----------
-  const commandLines = (checks) => (checks || []).map((c) => `${c.name}: ${c.run}`).join('\n');
+  // A command line is "name: run", or "name [format:path]: run" when the
+  // command writes a per-test report.
+  const reportTag = (r) => (r?.format ? ` [${r.format}${r.path ? `:${r.path}` : ''}]` : '');
+  const commandLines = (checks) => (checks || []).map((c) => `${c.name}${reportTag(c.report)}: ${c.run}`).join('\n');
 
   function parseCommands(text) {
     return text.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
       const i = line.indexOf(': ');
-      return i > 0 ? { name: line.slice(0, i).trim(), run: line.slice(i + 2).trim() } : { name: line, run: line };
+      if (i <= 0) return { name: line, run: line };
+      const cmd = { name: line.slice(0, i).trim(), run: line.slice(i + 2).trim() };
+      const m = cmd.name.match(/^(.*?)\s*\[([\w-]+)(?::([^\]]+))?\]$/);
+      if (m) {
+        cmd.name = m[1].trim() || cmd.run;
+        cmd.report = { format: m[2], ...(m[3] ? { path: m[3].trim() } : {}) };
+      }
+      return cmd;
     });
   }
 
@@ -1214,6 +1224,7 @@ Critérios de aceitação:
           <span class="check-name">${esc(c.name)}</span>
           <code title="${esc(c.command)}">${esc(c.command)}</code>
           <span class="time">${esc(fmtDuration(c.duration_ms))}</span>
+          ${c.report ? `<span class="note" data-tone="${c.report.status === 'lido' ? '' : 'warn'}" title="${esc(c.report.detail || c.report.path || '')}">relatório ${esc(c.report.format)}: ${c.report.status === 'lido' ? `${c.report.passed || 0} ok, ${c.report.failed || 0} falha(s), ${c.report.skipped || 0} ignorado(s)` : esc(c.report.status)}</span>` : ''}
           ${!c.passed && c.output ? `<details class="check-out"><summary>Saída (${c.timed_out ? 'tempo esgotado' : `código ${esc(c.exit_code)}`})</summary><pre>${esc(c.output)}</pre></details>` : ''}
         </li>`).join('')}
       </ul>`;
@@ -1251,21 +1262,36 @@ Critérios de aceitação:
       </div>`;
   }
 
+  // What each trace status proves; only "comprovado" is a pass.
+  const TRACE_TONE = {
+    'comprovado': 'ok', 'falhou': 'bad', 'ignorado': 'warn', 'sem teste': 'warn',
+    'sem relatório': 'warn', 'não executado': 'warn', 'só código de saída': '',
+  };
+  const traceStatus = (t) => t.status || (t.files?.length ? 'só código de saída' : 'sem teste');
+
   function renderTrace(trace) {
     if (!trace?.length) return '';
+    const proven = trace.filter((t) => traceStatus(t) === 'comprovado').length;
     const found = trace.filter((t) => t.files?.length).length;
     const missing = trace.filter((t) => !t.files?.length);
-    const pct = Math.round((found / trace.length) * 100);
+    const reported = trace.some((t) => t.status && t.status !== 'só código de saída' && t.status !== 'sem teste');
+    const shown = reported ? proven : found;
+    const pct = Math.round((shown / trace.length) * 100);
+    const label = reported ? 'comprovados por execução' : 'encontrados nos arquivos de teste';
+    const cases = (t) => (t.cases || []).map((c) => `<code title="${esc(c.command)}">${esc(c.name)} (${esc(c.status)})</code>`).join(' ');
     return `
-      <div class="trace" data-complete="${missing.length === 0}">
-        <div class="trace-head"><span>Rastreabilidade dos testes</span><span class="num">${found} de ${trace.length}</span></div>
-        <div class="trace-bar" role="img" aria-label="${pct}% dos casos de teste encontrados"><span data-pct="${pct}"></span></div>
+      <div class="trace" data-complete="${shown === trace.length}">
+        <div class="trace-head"><span>Rastreabilidade dos testes</span><span class="num">${shown} de ${trace.length} ${label}</span></div>
+        <div class="trace-bar" role="img" aria-label="${pct}% dos casos de teste ${label}"><span data-pct="${pct}"></span></div>
         ${missing.length ? `<div class="chips">${missing.map((t) => `<span class="chip" data-missing title="${esc(t.description || '')}">${esc(t.id)}</span>`).join('')}</div>` : ''}
+        ${reported ? '' : '<p class="note">Nenhum comando com relatório por caso: o resultado comprova só os comandos, não cada critério.</p>'}
         <details class="trace-all"><summary>Ver todos</summary>
           <table>${trace.map((t) => `
             <tr><td><code>${esc(t.id)}</code></td><td>${esc(t.description || '')}</td>
-            <td>${t.files?.length ? t.files.map((f) => `<code>${esc(f)}</code>`).join(' ') : '<span class="note" data-tone="warn">sem teste</span>'}</td></tr>`).join('')}
+            <td><span class="note" data-tone="${TRACE_TONE[traceStatus(t)] ?? ''}">${esc(traceStatus(t))}</span></td>
+            <td>${cases(t) || (t.files || []).map((f) => `<code>${esc(f)}</code>`).join(' ')}</td></tr>`).join('')}
           </table>
+          ${trace[0]?.commit ? `<p class="note">Commit ${esc(trace[0].commit.slice(0, 10))}.</p>` : ''}
         </details>
       </div>`;
   }

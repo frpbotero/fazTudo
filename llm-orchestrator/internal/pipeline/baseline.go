@@ -117,6 +117,7 @@ func (o *Orchestrator) takeBaseline(ctx context.Context, ss *session, st *storyS
 			b.Failing[c.Name] = quality.Fingerprints(failures)
 		}
 		r.Output = tail(r.Output, maxBaselineOutput)
+		r.Cases = nil // the baseline keeps the counts, not every case
 		b.Results = append(b.Results, r)
 	}
 	if commit != "" {

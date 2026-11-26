@@ -220,7 +220,19 @@ pendente). Veja o [README da raiz](../README.md).
   `ng serve` esquecido) são encerrados juntos. Chamada que falha ou expira é refeita até 3 vezes, com
   espera crescente e aviso para o agente retomar de onde parou.
 - **Rastreabilidade** — IDs de casos de teste das tabelas de testes do documento (ex.: `UT-CART-01`,
-  `IT-08`) e os listados pela especificação precisam aparecer nos arquivos de teste.
+  `IT-08`) e os listados pela especificação precisam aparecer nos arquivos de teste. Só aparecer não
+  comprova: o critério fica **comprovado** quando um caso executado com o ID no nome passou e nenhum falhou.
+  Para isso o comando declara seu relatório, no formato `nome [formato:arquivo]: comando` em Portões de
+  qualidade (ou `report` na política):
+  - `go [go-json]: go test -json ./...` — a própria saída é o relatório;
+  - `web [junit:reports/junit.xml]: npm test` — JUnit XML gravado pelo comando;
+  - `e2e [playwright-json:reports/e2e.json]: npx playwright test` — reporter JSON do Playwright, com
+    screenshots e traces anexados ao caso.
+
+  Caso ignorado (`skip`) volta para o implementador. Relatório ausente, anterior ao comando ou ilegível
+  aparece como **sem relatório**; ID citado no arquivo sem caso executado, como **não executado**; sem
+  nenhum relatório configurado, como **só código de saída**: o comando passou, mas nenhum caso foi
+  vinculado ao critério. O painel mostra o status, os casos e o commit de cada critério.
 - **Arquivos protegidos** — `US*.md`, `EDD*.md` e o `.md` aberto; se um agente alterar um deles, o
   conteúdo é restaurado e a etapa falha.
 - **Git** — uma branch `faztudo/<us>-<data>` por US e um commit por etapa, com diff no painel.
