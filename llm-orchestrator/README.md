@@ -150,6 +150,25 @@ segurança, E2E e docs), `fast` (Passo 0, especificação, arquiteto, devs e ver
 (verificação, segurança e review do código já desenvolvido, sem arquiteto nem devs; os achados viram
 pendências) e `custom` (`disabled_stages`). Etapas desligadas aparecem como *omitidas*.
 
+**Política de risco** (`risk_rules`, por repositório). Cada regra tem nome, caminhos (globs sobre os
+arquivos alterados, `**` atravessa pastas), palavras-chave (no texto da US), nível (`baixo`, `medio`,
+`alto`, `critico`) e as etapas que passam a ser **obrigatórias**. Sem regras configuradas valem as
+padrão:
+
+| Regra | Dispara com | Nível | Exige |
+|---|---|---|---|
+| Autenticação e permissões | `**/auth/**`, `*auth*`, `*jwt*`…; “login”, “senha”, “permissão”, “MFA”… | alto | segurança, review |
+| Pagamento e dados pessoais | “pagamento”, “pix”, “cartão”, “LGPD”, “CPF”… | crítico | segurança, review |
+| Persistência e migrations | `**/migrations/**`, `**/*.sql`, `schema.prisma`; “migration”… | alto | review |
+| Infraestrutura e CI | `.github/workflows/**`, `Dockerfile`, `*.tf`, `k8s/`… | alto | segurança, review |
+| Contratos de API | `openapi*`, `*.proto`, `*.graphql`; “endpoint”… | médio | review |
+
+O risco é avaliado pelo texto da US e de novo pelo diff real antes de cada portão. Ele só sobe: uma
+correção que amplia o escopo pode exigir mais etapas, nunca menos. Nem o arquiteto nem o fluxo
+(`fast`, `balanced`) retiram uma etapa obrigatória; ela aparece com o motivo. Etapa obrigatória que
+não chega a um resultado deixa a validação da US *inconclusiva*. Lista vazia (`"risk_rules": []`)
+desliga as regras.
+
 **Pendências.** Ao fim de toda execução real, o que ficou sem solução é gravado em
 `~/.config/faztudo/pendencias/<repo>-<hash>.md` (fora do repositório, para não contar como alteração
 pendente). Veja o [README da raiz](../README.md).
