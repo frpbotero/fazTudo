@@ -102,7 +102,9 @@ var reviewLenses = []Lens{
 			"import faltando, trecho apagado sem motivo, estilo diferente do projeto, código minificado. " +
 			"Padrão de projeto do plano ignorado; componente acoplado. Nome que não revela intenção ou abreviado; " +
 			"boolean sem forma de pergunta (is/has), lista no singular, função sem verbo. " +
-			"Função com mais de uma responsabilidade, > 20 linhas, > 3 argumentos, if/else aninhado sem guard clause.",
+			"Função com mais de uma responsabilidade, if/else aninhado sem guard clause. Tamanho de função e número de argumentos: " +
+			"a convenção do projeto manda; sem convenção, ~20 linhas e 3 argumentos são referência, não regra. " +
+			"Estilo e nomes vão com category \"estilo\".",
 		Skills: []string{"code-simplification"},
 	},
 	{
@@ -183,8 +185,10 @@ const specInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 
 const verdictInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"status\": \"approved\" | \"changes_requested\", \"issues\": [{\"agent\": \"frontend\" | \"backend\", \"severity\": \"alta\" | \"média\" | \"baixa\", " +
+	"\"category\": \"comportamento\" | \"segurança\" | \"teste\" | \"estrutura\" | \"estilo\", " +
 	"\"description\": \"problema e correção\", \"location\": \"arquivo:linha\"}]}\n```\n" +
-	"changes_requested só para o que bloqueia entrega. Cada issue com o agente que corrige. Sugestão opcional fora de issues."
+	"changes_requested só para o que bloqueia entrega. Cada issue com o agente que corrige. Sugestão opcional fora de issues. " +
+	"estilo (nome, formatação, tamanho sem convenção do projeto) é registrado como recomendação, não bloqueia."
 
 // engineeringRules are the implementers' working rules, adapted from the
 // Codebuff/Freebuff orchestrator guidelines.

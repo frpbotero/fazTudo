@@ -82,6 +82,10 @@ type Issue struct {
 	Fingerprints []string `json:"fingerprints,omitempty"`
 	Titles       []string `json:"titles,omitempty"`
 	Files        []string `json:"files,omitempty"`
+	// Category is the reviewer's kind of problem ("estilo" is advice unless
+	// the project makes it binding); Sources are the reviewers that raised it.
+	Category string   `json:"category,omitempty"`
+	Sources  []string `json:"sources,omitempty"`
 }
 
 // Verdict is a quality gate's structured outcome.
@@ -262,6 +266,7 @@ func readVerdict(output string, stages []Stage, plan Plan) (Verdict, string) {
 			continue
 		}
 		is.Infra, is.Class, is.Fingerprints, is.Titles, is.Files, is.Origin = false, "", nil, nil, nil, "" // not a model's to claim
+		is.Sources = nil
 		is.Agent = strings.ToLower(strings.TrimSpace(is.Agent))
 		if !isImplementer(stages, is.Agent) {
 			is.Agent = defaultImplementer(stages, plan)

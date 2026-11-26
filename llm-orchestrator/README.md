@@ -158,7 +158,20 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    CI e proteção de branch em [docs/ci.md](../docs/ci.md).
 5. O **code review** roda com revisores em paralelo, cada um com um foco: aderência à especificação,
    simplicidade e legibilidade, testes e — quando o frontend participa — interface e acessibilidade.
-   Os problemas são unificados em um único veredito.
+   Os problemas são unificados em um único veredito, proporcional ao que bloqueia:
+   - achados de revisores diferentes sobre a mesma causa (mesmo implementador e arquivo com linhas
+     próximas, ou mesma descrição) viram um só, com a maior severidade, todas as localizações e quem
+     apontou;
+   - achado de **estilo** (nomes, formatação, tamanho de função sem convenção do projeto) vira
+     *recomendação*, mostrada no passo sem rodada de correção, a menos que `style_blocking` esteja
+     ligado; severidade alta continua bloqueando;
+   - no máximo `max_parallel_reviews` revisores rodam juntos (padrão 3);
+   - `review_provider` (`claude`, `codex` ou `gemini`) tenta outro provider para as revisões, com o
+     failover de sempre. Fica desligado até a avaliação mostrar que ajuda.
+
+   Revisores não editam: além do modo só leitura do CLI, o que um revisor alterar é desfeito antes do
+   commit da etapa e registrado no passo. Correções vão sempre a um implementador e passam de novo pelos
+   comandos e pelo revisor.
 6. **Documentação do fluxo** (`docs`, quando o arquiteto julga necessária) roda por último:
    guia de uso para o cliente final e/ou fluxo, contratos e pontos de extensão para quem fará
    manutenção, no lugar onde o projeto já documenta (README, `docs/`, ADR) ou em `docs/<us>.md`.

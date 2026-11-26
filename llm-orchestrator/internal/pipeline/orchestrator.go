@@ -109,10 +109,12 @@ type Step struct {
 	// Commit records the changes the step made, when git is enabled.
 	Commit *vcs.Commit `json:"commit,omitempty"`
 	// Calls record what each agent call of the step ran with.
-	Calls      []CallRecord `json:"calls,omitempty"`
-	Error      string       `json:"error,omitempty"`
-	StartedAt  *time.Time   `json:"started_at,omitempty"`
-	DurationMS int64        `json:"duration_ms,omitempty"`
+	Calls []CallRecord `json:"calls,omitempty"`
+	// Advisory are a review's style remarks: reported, not demanded.
+	Advisory   []Issue    `json:"advisory,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	DurationMS int64      `json:"duration_ms,omitempty"`
 }
 
 // LogEntry is a structured event shown in the UI console.
@@ -1145,6 +1147,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
+				Prefer:   reviewProvider(ss, stage),
 			})
 		}
 		if !ok || !o.afterAgent(ctx, ss, st, ref) {
@@ -1179,6 +1182,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 					Tier:     stage.Tier,
 					WorkDir:  ss.repo,
 					ReadOnly: stage.ReadOnly,
+					Prefer:   reviewProvider(ss, stage),
 				})
 				if !ok || !o.afterAgent(ctx, ss, st, ref) {
 					return evaluation{}, false
@@ -1357,6 +1361,7 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 	if !o.guardInputs(ss, ref) {
 		return false
 	}
+	o.undoReviewerEdits(ctx, ss, ref)
 	if ss.git == nil {
 		return true
 	}
@@ -1467,6 +1472,8 @@ type evaluation struct {
 	// inconclusive marks an approval whose evidence does not cover what it
 	// approves, such as an accepted scenario with no proven case.
 	inconclusive bool
+	// advice are the issues proportional moved out of the demands.
+	advice []Issue
 }
 
 // maxFormatRecoveries bounds how many times a gate is asked again, only for
@@ -1485,6 +1492,9 @@ func (o *Orchestrator) gateEvaluation(ss *session, st *storyState, stage Stage, 
 		ev = o.judgeAcceptance(ss, st, ev)
 	case stage.Measured:
 		ev = o.judgePerformance(st, ev)
+	}
+	if ev.parsed {
+		ev.verdict, ev.advice = proportional(ev.verdict, ss.policy)
 	}
 	return ev
 }
@@ -1524,6 +1534,7 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 		verdict := ev.verdict
 		o.updateStep(stepRef{st.si, stepID}, func(s *Step) {
 			s.Issues = verdict.Issues
+			s.Advisory = ev.advice
 			if verdict.NeedsChanges() {
 				s.Note = fmt.Sprintf("%d problema(s) encontrado(s)", len(verdict.Issues))
 			} else {

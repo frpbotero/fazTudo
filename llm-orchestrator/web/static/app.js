@@ -684,6 +684,9 @@ Critérios de aceitação:
       strict_commands: el.qStrictCommands.checked,
       risk_rules: snapshot?.workspace?.policy?.risk_rules,
       skip_baseline: snapshot?.workspace?.policy?.skip_baseline,
+      style_blocking: snapshot?.workspace?.policy?.style_blocking,
+      max_parallel_reviews: snapshot?.workspace?.policy?.max_parallel_reviews,
+      review_provider: snapshot?.workspace?.policy?.review_provider,
     };
     try {
       await api('PUT', '/api/workspace/policy', policy);
@@ -1260,7 +1263,7 @@ Critérios de aceitação:
           <li>
             ${is.severity ? `<span class="sev" data-sev="${esc(is.severity)}">${esc(is.severity)}</span>` : '<span></span>'}
             <span>${issueDescription(is.description)}</span>
-            <span class="issue-meta"><span>${esc(is.agent)}</span>${is.location ? `<code>${esc(is.location)}</code>` : ''}</span>
+            <span class="issue-meta"><span>${esc(is.agent)}</span>${is.location ? `<code>${esc(is.location)}</code>` : ''}${is.sources?.length ? `<span title="Revisores que apontaram">${esc(is.sources.join(', '))}</span>` : ''}</span>
           </li>`).join('')}
         </ul>
       </div>`;
@@ -1390,6 +1393,7 @@ Critérios de aceitação:
     if (s === ctx.run.analysis) blocks.push(renderWaves(ctx.run));
     if (s.kind === 'fix') blocks.push(renderIssues(s.issues, 'Correções solicitadas'));
     else if (s.issues?.length) blocks.push(renderIssues(s.issues, ['failed', 'warning'].includes(s.status) ? 'Problemas não resolvidos' : 'Problemas encontrados'));
+    if (s.advisory?.length) blocks.push(renderIssues(s.advisory, 'Recomendações de estilo (não bloqueiam)'));
     blocks.push(renderChecks(s.checks), renderCandidates(s.candidates));
     if (ctx.withTrace) blocks.push(renderTrace(ctx.story?.trace));
     blocks.push(renderCommit(s));

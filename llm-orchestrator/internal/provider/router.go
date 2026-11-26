@@ -59,6 +59,9 @@ type Request struct {
 	// StrictCommands demands a provider that restricts a writing agent to
 	// Commands; providers that cannot are skipped, even on failover.
 	StrictCommands bool
+	// Prefer tries this provider first, such as a different one for review;
+	// the others stay as failover.
+	Prefer ID
 }
 
 // Response is the result of a successful task.
@@ -523,6 +526,10 @@ func (r *Router) pick(req Request) (*managed, Settings, time.Time, string) {
 	now := r.now()
 	dry := r.DryRun()
 	candidates := r.ordered()
+	if i := slices.IndexFunc(candidates, func(p *managed) bool { return p.cli.ID == req.Prefer }); req.Prefer != "" && i > 0 {
+		preferred := candidates[i]
+		candidates = append([]*managed{preferred}, slices.Delete(slices.Clone(candidates), i, i+1)...)
+	}
 	if !r.failover {
 		candidates = candidates[:min(1, len(candidates))]
 	}

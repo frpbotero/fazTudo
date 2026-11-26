@@ -12,6 +12,11 @@ import (
 
 func runWithFlow(t *testing.T, policy workspace.Policy) (Run, *fakeExecutor) {
 	t.Helper()
+	return runWithFlowExec(t, policy, &fakeExecutor{})
+}
+
+func runWithFlowExec(t *testing.T, policy workspace.Policy, exec *fakeExecutor) (Run, *fakeExecutor) {
+	t.Helper()
 	repo := t.TempDir()
 	ws, err := workspace.NewManager(repo)
 	if err != nil {
@@ -21,7 +26,6 @@ func runWithFlow(t *testing.T, policy workspace.Policy) (Run, *fakeExecutor) {
 	if _, err := ws.SetPolicy(policy); err != nil {
 		t.Fatal(err)
 	}
-	exec := &fakeExecutor{}
 	o := New(exec, ws, DefaultStages, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	o.attempts = 1
 	if err := o.Start(one(true)); err != nil {
