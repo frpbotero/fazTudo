@@ -896,3 +896,114 @@ func (r *Repo) Subjects(ctx context.Context, from, to string) ([]string, error) 
 	}
 	return strings.FieldsFunc(out, func(c rune) bool { return c == '\n' }), nil
 }
+
+// BaseHeads returns the commit each base branch points to, keyed as bases.
+func (r *Repo) BaseHeads(ctx context.Context, bases map[string]string) map[string]string {
+	out := map[string]string{}
+	for path, branch := range bases {
+		repo := r
+		if path != "." {
+			repo = r.sub(path)
+		}
+		if sha, err := repo.Rev(ctx, branch); err == nil {
+			out[path] = sha
+		}
+	}
+	return out
+}
+
+// CandidateHeads returns the commit rev is in the repository and the commit
+// it records for each nested repository, keyed as bases.
+func (r *Repo) CandidateHeads(ctx context.Context, rev string) map[string]string {
+	out := map[string]string{}
+	if sha, err := r.Rev(ctx, rev); err == nil {
+		out["."] = sha
+	}
+	for _, n := range r.nested {
+		if sha := r.gitlinkAt(ctx, rev, n); sha != "" {
+			out[n] = sha
+		}
+	}
+	return out
+}
+
+// PartialMergeError says a merge into the bases reached some repositories
+// and not others. Git has no transaction across independent repositories:
+// nothing is reset, the merged ones keep the merge, and Merged and Failed say
+// where each one stands.
+type PartialMergeError struct {
+	Merged []string
+	Failed string
+	Err    error
+}
+
+func (e *PartialMergeError) Error() string {
+	return fmt.Sprintf("integração parcial: %s integrado(s), %s falhou: %v", strings.Join(e.Merged, ", "), e.Failed, e.Err)
+}
+
+func (e *PartialMergeError) Unwrap() error { return e.Err }
+
+// MergeIntoBasesKeeping merges rev into the bases like MergeIntoBases, but a
+// failure after a nested repository took its merge leaves that merge in
+// place and returns a PartialMergeError instead of resetting it: the base
+// branches are the user's, and the decision to undo is theirs.
+func (r *Repo) MergeIntoBasesKeeping(ctx context.Context, rev, msg string, bases map[string]string) ([]string, error) {
+	if len(r.nested) == 0 {
+		return r.MergeIntoBases(ctx, rev, msg, bases)
+	}
+	if err := r.SwitchBranches(ctx, bases); err != nil {
+		return nil, err
+	}
+	var merged []string
+	for _, n := range r.nested {
+		target := r.gitlinkAt(ctx, rev, n)
+		if target == "" {
+			continue
+		}
+		sub := r.sub(n)
+		if sub.IsAncestor(ctx, target, "HEAD") {
+			continue // already there, from an earlier attempt
+		}
+		if conflicts, err := sub.startMerge(ctx, target, msg); err != nil {
+			_, _ = sub.git(context.WithoutCancel(ctx), "merge", "--abort")
+			if len(merged) == 0 {
+				return conflicts, fmt.Errorf("%s: %w", n, err)
+			}
+			return conflicts, &PartialMergeError{Merged: merged, Failed: n, Err: err}
+		}
+		merged = append(merged, n)
+	}
+	// As in startNestedMerge: the parent records the nested repositories'
+	// merged commits.
+	_, err := r.startMerge(ctx, rev, msg, "--no-ff", "--no-commit")
+	if _, addErr := r.git(ctx, append([]string{"add", "--"}, r.nested...)...); addErr != nil && err == nil {
+		err = addErr
+	}
+	if conflicts := r.conflicts(ctx); len(conflicts) > 0 {
+		err = fmt.Errorf("git merge: conflito em %s", strings.Join(conflicts, ", "))
+	}
+	switch {
+	case err == nil && !r.merging(ctx):
+		return nil, nil // the parent already had rev
+	case err == nil:
+		if _, err = r.finishParentMerge(ctx, nil); err == nil {
+			return nil, nil
+		}
+	}
+	_, _ = r.git(context.WithoutCancel(ctx), "merge", "--abort")
+	if len(merged) == 0 {
+		return nil, err
+	}
+	return nil, &PartialMergeError{Merged: merged, Failed: ".", Err: err}
+}
+
+// finishParentMerge concludes the parent's merge unless it already failed.
+func (r *Repo) finishParentMerge(ctx context.Context, failed error) (*Commit, error) {
+	if failed != nil {
+		return nil, failed
+	}
+	if _, err := r.git(ctx, r.withIdentity(ctx, "commit", "-q", "--no-edit")...); err != nil {
+		return nil, err
+	}
+	return r.headCommit(ctx)
+}

@@ -593,3 +593,76 @@ func TestMovedBasesTellsWhenTheBaseGotCommitsTheCandidateLacks(t *testing.T) {
 		t.Error("a missing base must be an error, not a pass")
 	}
 }
+
+func TestPartialMergeIntoBasesKeepsWhatWasMergedAndSaysSo(t *testing.T) {
+	requireGit(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"}, args...)...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	front := filepath.Join(root, "front")
+	write(t, front, "app.js", "v1\n")
+	run(front, "init", "-q")
+	run(front, "add", "-A")
+	run(front, "commit", "-q", "-m", "front v1")
+	write(t, root, "README.md", "pai\n")
+	run(root, "init", "-q")
+	run(root, "add", "-A")
+	run(root, "commit", "-q", "-m", "pai")
+
+	r, _, err := Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bases := r.CurrentBranches(ctx)
+	if err := r.CreateBranch(ctx, "faztudo/us-1"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, front, "app.js", "v2\n")
+	write(t, root, "README.md", "pai da US\n")
+	if _, err := r.CommitAll(ctx, "faztudo(US-1): muda os dois"); err != nil {
+		t.Fatal(err)
+	}
+	cands := r.CandidateHeads(ctx, "faztudo/us-1")
+	if cands["."] == "" || cands["front"] == "" {
+		t.Fatalf("candidate heads = %v", cands)
+	}
+	// The parent's base moves on the same line: only the parent conflicts.
+	if err := r.SwitchBranches(ctx, bases); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "README.md", "outra mudança na base\n")
+	run(root, "commit", "-q", "-am", "base mudou")
+	before := r.BaseHeads(ctx, bases)
+
+	_, err = r.MergeIntoBasesKeeping(ctx, "faztudo/us-1", "integra", bases)
+	var partial *PartialMergeError
+	if !errors.As(err, &partial) || len(partial.Merged) != 1 || partial.Merged[0] != "front" || partial.Failed != "." {
+		t.Fatalf("err = %v", err)
+	}
+	after := r.BaseHeads(ctx, bases)
+	if after["front"] != cands["front"] {
+		t.Errorf("the nested merge was undone: front at %s, candidate %s", after["front"], cands["front"])
+	}
+	if after["."] != before["."] {
+		t.Error("the parent's base must stay where it was")
+	}
+	if dirty, _ := r.Dirty(ctx); dirty {
+		t.Error("the failed parent merge must leave a clean tree")
+	}
+	// Trying again does not merge the nested repository twice.
+	if _, err := r.MergeIntoBasesKeeping(ctx, "faztudo/us-1", "integra", bases); err == nil || errors.As(err, &partial) {
+		t.Errorf("second attempt = %v; only the parent is left to merge", err)
+	}
+	if got := r.BaseHeads(ctx, bases)["front"]; got != after["front"] {
+		t.Error("the nested repository moved again")
+	}
+}
