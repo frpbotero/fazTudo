@@ -18,6 +18,7 @@ import (
 
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/scm"
 	"llm-orchestrator/internal/stories"
 	"llm-orchestrator/internal/vcs"
 	"llm-orchestrator/internal/workspace"
@@ -293,6 +294,8 @@ type Orchestrator struct {
 	skillOverrides map[string]SkillOverride
 	// appVersion goes into every run's manifest.
 	appVersion string
+	// scmFor finds the source host of a repository, for review mode.
+	scmFor func(ctx context.Context, dir string) (scm.Provider, error)
 	// lanes are the stories running side by side: a failure of one of them
 	// stops that story, not the run, unless it is global.
 	lanes    map[int]bool
@@ -348,7 +351,10 @@ func New(exec Executor, ws *workspace.Manager, stages []Stage, onChange func(), 
 	o := &Orchestrator{exec: exec, ws: ws, baseStages: stages, stages: resolveStages(stages, nil), texts: resolveTexts(nil),
 		onChange: onChange, logger: logger, runCheck: quality.Run,
 		sweepStacks: defaultSweepStacks, lockStackSlot: defaultLockStackSlot,
-		attempts: agentAttempts, retryDelay: agentRetryDelay}
+		attempts: agentAttempts, retryDelay: agentRetryDelay,
+		scmFor: func(ctx context.Context, dir string) (scm.Provider, error) {
+			return scm.Detect(ctx, dir, scm.ExecRunner)
+		}}
 	o.run.Discovery = newStep(DiscoveryStage)
 	o.run.Stories = []StoryRun{{Status: StepPending, Steps: o.freshSteps()}}
 	o.run.Current = -1

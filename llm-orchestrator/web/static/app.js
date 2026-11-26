@@ -40,6 +40,7 @@ Critérios de aceitação:
     integrated: { label: 'Na branch base', tone: 'success' },
     blocked: { label: 'Fora da base', tone: 'danger' },
     partial: { label: 'Integração parcial', tone: 'warn' },
+    awaiting_review: { label: 'Aguardando revisão no PR', tone: 'neutral' },
   };
   const PROVIDER_STATUS = {
     available: { label: 'Disponível', tone: 'success' },
@@ -80,6 +81,7 @@ Critérios de aceitação:
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
     qMigrationChecks: $('qMigrationChecks'), qBenchmarkChecks: $('qBenchmarkChecks'),
     qProfiles: $('qProfiles'), qProfilesNote: $('qProfilesNote'),
+    qScmMode: $('qScmMode'), qScmReviewFrom: $('qScmReviewFrom'), qScmDraft: $('qScmDraft'),
     qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qPromoteUnverified: $('qPromoteUnverified'), qStrictCommands: $('qStrictCommands'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
     promptsError: $('promptsError'), promptList: $('promptList'), promptForm: $('promptForm'), promptTitle: $('promptTitle'),
     promptDescription: $('promptDescription'), promptParts: $('promptParts'), promptWarning: $('promptWarning'), promptValue: $('promptValue'),
@@ -641,6 +643,9 @@ Critérios de aceitação:
     el.qChecks.value = commandLines(p.checks?.length ? p.checks : suggested);
     el.qProtected.value = (p.protected || []).join('\n');
     el.qProfiles.value = (p.profiles || []).join(', ');
+    el.qScmMode.value = p.scm?.mode === 'pr' ? 'pr' : '';
+    el.qScmReviewFrom.value = p.scm?.review_from || '';
+    el.qScmDraft.checked = Boolean(p.scm?.draft);
     const suggestedProfiles = (snapshot?.workspace?.suggested_profiles || []).filter((x) => !(p.profiles || []).includes(x));
     el.qProfilesNote.textContent = 'Convenções da stack para implementadores e revisores. Opcionais: só valem os listados aqui.' +
       (suggestedProfiles.length ? ` Detectado neste repositório: ${suggestedProfiles.join(', ')}.` : '');
@@ -677,6 +682,8 @@ Critérios de aceitação:
       auto_checks: el.qAuto.checked,
       checks: parseCommands(el.qChecks.value),
       profiles: el.qProfiles.value.split(',').map((x) => x.trim()).filter(Boolean),
+      scm: { mode: el.qScmMode.value, review_from: el.qScmReviewFrom.value, draft: el.qScmDraft.checked },
+      delivery_retention: snapshot?.workspace?.policy?.delivery_retention,
       migration_checks: parseCommands(el.qMigrationChecks.value),
       benchmark_checks: parseCommands(el.qBenchmarkChecks.value),
       protected: el.qProtected.value.split('\n').map((l) => l.trim()).filter(Boolean),
@@ -1629,6 +1636,15 @@ Critérios de aceitação:
     paintSteps(stepsHtml(runSteps.map((step) => ({ step, isRunStep: true })), { run, si: -1 }));
   }
 
+  // The pull request a story went to, from its promotion.
+  function prLink(st) {
+    if (st.integration !== 'awaiting_review') return '';
+    const label = st.id || st.title;
+    const p = [...(snapshot?.run.promotions || [])].reverse().find((x) => x.pr && (x.stories || []).some((s) => s.startsWith(label)));
+    const url = p?.pr?.url || '';
+    return /^https:\/\//.test(url) ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Abrir PR</a>` : '';
+  }
+
   // What proves each kind of change: see the pipeline's change.go.
   const CHANGE_LABEL = { bug: 'Correção de bug', feature: 'Funcionalidade', refactor: 'Refatoração', trivial: 'Edição trivial' };
 
@@ -1646,6 +1662,7 @@ Critérios de aceitação:
         ? `<span title="${esc((st.risk.reasons || []).join('\n'))}">${pill({ label: `Risco ${st.risk.level.replace('medio', 'médio').replace('critico', 'crítico')}`, tone: st.risk.level === 'medio' ? 'neutral' : 'warn' })}</span>`
         : '',
       INTEGRATION[st.integration] ? `<span title="${esc(st.integration_note || '')}">${pill(INTEGRATION[st.integration])}</span>` : '',
+      prLink(st),
       st.baseline && Object.keys(st.baseline.failing || {}).length
         ? `<span title="${esc(`Já falhavam antes da US: ${Object.keys(st.baseline.failing).join(', ')}`)}">${pill({ label: 'Falhas preexistentes', tone: 'warn' })}</span>`
         : '',

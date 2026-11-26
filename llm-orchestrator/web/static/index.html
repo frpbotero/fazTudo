@@ -559,6 +559,22 @@
         </div>
         <p class="note">0 usa o padrão: 60 turnos para quem escreve, 30 para as etapas de leitura (sempre a metade, no mínimo 10). Vale para o Claude; Codex e Gemini não têm esse limite.</p>
         <label class="check"><input type="checkbox" id="qStrictCommands"> Exigir provider que restrinja os agentes que escrevem aos comandos listados (o Codex não restringe: com esta opção ele não escreve código, nem em failover)</label>
+        <div class="field">
+          <label for="qScmMode">Revisão externa</label>
+          <select id="qScmMode">
+            <option value="">Local: integra na branch base e grava o pacote de entrega</option>
+            <option value="pr">Pull request: publica a branch e abre o PR com a evidência; não integra</option>
+          </select>
+          <label for="qScmReviewFrom" class="sr-only">Risco mínimo para PR</label>
+          <select id="qScmReviewFrom">
+            <option value="">Toda US vai para PR</option>
+            <option value="medio">Só US de risco médio ou maior</option>
+            <option value="alto">Só US de risco alto ou maior</option>
+            <option value="critico">Só US de risco crítico</option>
+          </select>
+          <label class="check"><input type="checkbox" id="qScmDraft"> Abrir como rascunho</label>
+          <p class="note">O modo PR usa o <code>gh</code> autenticado na máquina (GitHub; Bitbucket ainda não). O merge fica com quem revisa e com os checks do repositório.</p>
+        </div>
         <label class="check"><input type="checkbox" id="qPromoteUnverified"> Integrar na branch base US sem validação executada (por padrão, sem comando de verificação aprovado a branch da US fica para revisão)</label>
         <label class="check"><input type="checkbox" id="qStopOnTurnLimit"> Parar a execução quando um agente esgotar os turnos (por padrão o trabalho parcial segue como pendência)</label>
         <div class="field">

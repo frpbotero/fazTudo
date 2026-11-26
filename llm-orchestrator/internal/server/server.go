@@ -114,6 +114,7 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/pipeline/resume", s.handleResume)
 	mux.HandleFunc("POST /api/pipeline/answer", s.handleAnswer)
 	mux.HandleFunc("POST /api/pipeline/reconcile", s.handleReconcile)
+	mux.HandleFunc("GET /api/pipeline/reviews", s.handleReviews)
 	mux.HandleFunc("GET /api/health/areas", s.handleHealthAreas)
 	mux.HandleFunc("POST /api/health/start", s.handleHealthStart)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
@@ -475,6 +476,22 @@ func (s *Server) handleReconcile(w http.ResponseWriter, _ *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, p)
 	}
+}
+
+// handleReviews reads, from the source host, the checks and review of the
+// pull requests the last run opened. It changes nothing.
+func (s *Server) handleReviews(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	list, err := s.orch.ReviewStatuses(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if list == nil {
+		list = []pipeline.ReviewStatus{}
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (s *Server) handleGetWorkspace(w http.ResponseWriter, _ *http.Request) {
