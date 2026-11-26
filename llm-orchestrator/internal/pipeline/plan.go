@@ -18,10 +18,48 @@ type Plan struct {
 	// without dependencies between them run in parallel.
 	Streams []Stream `json:"streams,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
+	// Impact is what the change reaches beyond the files it edits.
+	Impact *Impact `json:"impact,omitempty"`
+	// Acceptance are the business scenarios and how each criterion will be
+	// proven, set before anything is built.
+	Acceptance []AcceptanceScenario `json:"acceptance,omitempty"`
+	// NonFunctional are requirements such as performance, with their SLO.
+	NonFunctional []NonFunctional `json:"non_functional,omitempty"`
+	// Gaps are what the orchestrator found missing in the plan: a migration
+	// without a way back, a performance requirement without SLO...
+	Gaps []string `json:"gaps,omitempty"`
 	// Source tells how the plan was obtained: "architect", "heuristic"
 	// (simulation) or "fallback" (architect output could not be parsed).
 	Source string `json:"source"`
 }
+
+// Impact is what a change reaches beyond the files it edits.
+type Impact struct {
+	Contracts       []string `json:"contracts,omitempty"`        // APIs, events, schemas changed or relied on
+	Consumers       []string `json:"consumers,omitempty"`        // who uses what changes
+	Migrations      []string `json:"migrations,omitempty"`       // schema or data changes
+	SharedResources []string `json:"shared_resources,omitempty"` // databases, queues, services, ports
+	Rollback        string   `json:"rollback,omitempty"`         // how to undo or recover
+}
+
+// AcceptanceScenario ties a criterion to a scenario and how it is proven.
+type AcceptanceScenario struct {
+	Criterion string `json:"criterion"`
+	Scenario  string `json:"scenario"`
+	Method    string `json:"method,omitempty"` // e.g. "teste unitário", "e2e", "inspeção"
+	Negative  bool   `json:"negative,omitempty"`
+}
+
+// NonFunctional is a requirement such as performance, with its target.
+type NonFunctional struct {
+	Kind        string `json:"kind"` // "desempenho", "segurança", "disponibilidade"…
+	Requirement string `json:"requirement"`
+	SLO         string `json:"slo,omitempty"` // measurable target, e.g. "p95 < 200 ms com 50 req/s"
+}
+
+// migrationsResource is shared by every front of a plan that changes the
+// schema: migrations are state no isolated copy of the repository separates.
+const migrationsResource = "migrations"
 
 // Includes reports whether the plan selected the stage.
 func (p Plan) Includes(id string) bool { return slices.Contains(p.Agents, id) }
@@ -100,6 +138,7 @@ func parsePlan(output string, stages []Stage) (Plan, bool) {
 		return Plan{}, false
 	}
 	plan := Plan{Reason: strings.TrimSpace(raw.Reason), Pattern: strings.TrimSpace(raw.Pattern), Source: "architect"}
+	plan.Impact, plan.Acceptance, plan.NonFunctional = cleanImpact(raw.Impact), cleanAcceptance(raw.Acceptance), cleanNonFunctional(raw.NonFunctional)
 	plan.Streams = validStreams(raw.Streams, stages)
 	requested := normalize(raw.Agents)
 	for _, st := range plan.Streams {
@@ -112,7 +151,87 @@ func parsePlan(output string, stages []Stage) (Plan, bool) {
 	}
 	plan = ensureImplementer(plan, stages)
 	plan.Streams = coverAgents(plan.Streams, plan, stages)
+	if plan.Impact != nil && len(plan.Impact.Migrations) > 0 {
+		for i := range plan.Streams {
+			plan.Streams[i].Resources = appendNew(plan.Streams[i].Resources, migrationsResource)
+		}
+	}
+	plan.Gaps = planGaps(plan)
 	return plan, true
+}
+
+// planGaps lists what a plan leaves undefined that the delivery depends on.
+func planGaps(p Plan) []string {
+	var gaps []string
+	if len(p.Acceptance) == 0 {
+		gaps = append(gaps, "nenhum cenário de aceitação definido antes da implementação")
+	}
+	if p.Impact != nil && len(p.Impact.Migrations) > 0 && p.Impact.Rollback == "" {
+		gaps = append(gaps, "migration sem estratégia de reversão ou recuperação")
+	}
+	for _, n := range p.NonFunctional {
+		if isPerformance(n.Kind) && n.SLO == "" {
+			gaps = append(gaps, fmt.Sprintf("requisito de desempenho sem SLO mensurável (%s): defina a meta na US ou na política", n.Requirement))
+		}
+	}
+	return gaps
+}
+
+func isPerformance(kind string) bool {
+	k := strings.ToLower(kind)
+	return strings.Contains(k, "desempenho") || strings.Contains(k, "performance") || strings.Contains(k, "latência") || strings.Contains(k, "latencia")
+}
+
+func cleanImpact(in *Impact) *Impact {
+	if in == nil {
+		return nil
+	}
+	out := &Impact{
+		Contracts: trimmedList(in.Contracts), Consumers: trimmedList(in.Consumers),
+		Migrations: trimmedList(in.Migrations), SharedResources: trimmedList(in.SharedResources),
+		Rollback: strings.TrimSpace(in.Rollback),
+	}
+	if len(out.Contracts)+len(out.Consumers)+len(out.Migrations)+len(out.SharedResources) == 0 && out.Rollback == "" {
+		return nil
+	}
+	return out
+}
+
+func cleanAcceptance(in []AcceptanceScenario) []AcceptanceScenario {
+	var out []AcceptanceScenario
+	for _, a := range in {
+		a.Criterion, a.Scenario, a.Method = strings.TrimSpace(a.Criterion), strings.TrimSpace(a.Scenario), strings.TrimSpace(a.Method)
+		if a.Scenario != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func cleanNonFunctional(in []NonFunctional) []NonFunctional {
+	var out []NonFunctional
+	for _, n := range in {
+		n.Kind, n.Requirement, n.SLO = strings.TrimSpace(n.Kind), strings.TrimSpace(n.Requirement), strings.TrimSpace(n.SLO)
+		if n.Requirement != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func trimmedList(items []string) []string {
+	var out []string
+	for _, s := range items {
+		out = appendNew(out, strings.TrimSpace(s))
+	}
+	return out
+}
+
+func appendNew(list []string, s string) []string {
+	if s == "" || slices.Contains(list, s) {
+		return list
+	}
+	return append(list, s)
 }
 
 // parseVerdict extracts a gate verdict that honors the contract; see
