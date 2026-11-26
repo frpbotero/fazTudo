@@ -139,6 +139,15 @@ type StoryRun struct {
 	// from the story text across attempts.
 	Readiness *Readiness        `json:"readiness,omitempty"`
 	Answers   []PendingDecision `json:"answers,omitempty"`
+	// Change is the story's kind (ChangeBug, ChangeFeature, ChangeRefactor or
+	// ChangeTrivial), which decides what proves it; ChangeReason justifies a
+	// trivial one.
+	Change       string `json:"change,omitempty"`
+	ChangeReason string `json:"change_reason,omitempty"`
+	// StartCommit is the snapshot the story started from.
+	StartCommit string `json:"start_commit,omitempty"`
+	// Reproduction is a bug fix's proof that its tests fail before the fix.
+	Reproduction *Reproduction `json:"reproduction,omitempty"`
 	// Integration is whether the story entered the base branch; the note
 	// says why it was kept out.
 	Integration     Integration `json:"integration,omitempty"`
@@ -673,9 +682,15 @@ type storyState struct {
 	// waiting counts the open product decisions Passo 0 found.
 	waiting int
 	// reused marks a story Passo 0 found done: only executable gates run.
-	reused  bool
-	red     []string // commands that failed last, retried first
-	skipped bool     // the last assessment left costlier commands out
+	reused bool
+	// change is the story's kind; changeReason justifies a trivial one.
+	change, changeReason string
+	// startCommit is the snapshot the story started from, where a bug's tests
+	// must fail; repro is the last reproduction made.
+	startCommit string
+	repro       *Reproduction
+	red         []string // commands that failed last, retried first
+	skipped     bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -730,6 +745,13 @@ func (o *Orchestrator) closeStory(st *storyState, total int) {
 		r.Validation = storyValidation(r.Steps)
 		// Nothing was built for a reused story: the risk's stages, which
 		// judge a change, do not apply; its executable gates still did.
+		if st.change == ChangeBug && st.repro != nil && (st.repro.Status == ReproUnclear || st.repro.Status == ReproUnverified) {
+			// The fix passes, but nothing showed the bug it fixes.
+			r.Validation = worseValidation(r.Validation, ValidationInconclusive)
+			if r.Status == StepDone {
+				r.Status = StepWarning
+			}
+		}
 		if missing := o.missingRequired(st, r.Steps); len(missing) > 0 && st.blocked == "" && st.waiting == 0 && !st.reused {
 			r.Validation = worseValidation(r.Validation, ValidationInconclusive)
 			missingNote = strings.Join(missing, ", ")
@@ -888,6 +910,8 @@ func (o *Orchestrator) restoreStoryState(si int, started time.Time, opts StartOp
 		st.risk = *runStory.Risk
 	}
 	st.baseline = runStory.Baseline
+	st.change, st.changeReason = runStory.Change, runStory.ChangeReason
+	st.startCommit, st.repro = runStory.StartCommit, runStory.Reproduction
 	if runStory.Plan != nil {
 		st.plan = *runStory.Plan
 	}
@@ -1004,8 +1028,16 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		}
 	}
 
-	if startAt == 0 && !o.takeBaseline(ctx, ss, st) {
-		return false
+	if startAt == 0 {
+		if ss.git != nil {
+			st.startCommit, _ = ss.git.Head(ctx)
+			o.updateStory(st.si, func(r *StoryRun) { r.StartCommit = st.startCommit })
+		}
+		kind, _ := changeKind("", "", st.sc.Story.Title+"\n"+st.sc.Story.Content)
+		o.setChange(st, kind, "")
+		if !o.takeBaseline(ctx, ss, st) {
+			return false
+		}
 	}
 	o.planAudit(ss, st)
 	o.assessStoryRisk(ss, st, nil)
@@ -1129,7 +1161,13 @@ func (o *Orchestrator) planAudit(ss *session, st *storyState) {
 // applyAssessment records the Passo 0 decision. It returns true when the
 // story ends here: already implemented (reuse) or blocked.
 func (o *Orchestrator) applyAssessment(st *storyState, ref stepRef, resp *provider.Response) bool {
-	r := readiness(parseAssessment(resp.Output), o.storyRun(st.si).Answers)
+	a := parseAssessment(resp.Output)
+	r := readiness(a, o.storyRun(st.si).Answers)
+	kind, note := changeKind(a.Change, a.ChangeReason, st.sc.Story.Title+"\n"+st.sc.Story.Content)
+	if note != "" {
+		r.Notes = append(r.Notes, note)
+	}
+	o.setChange(st, kind, strings.TrimSpace(a.ChangeReason))
 	o.updateStory(st.si, func(sr *StoryRun) { rr := r; sr.Readiness = &rr })
 	for _, n := range r.Notes {
 		o.logf(LevelWarn, "Passo 0 de %s: %s.", st.sc.Story.Title, n)
@@ -1161,8 +1199,8 @@ func (o *Orchestrator) applyAssessment(st *storyState, ref stepRef, resp *provid
 		st.blocked = reason
 		return true
 	}
-	o.updateStep(ref, func(s *Step) { s.Note = "Decisão: " + decisionLabel(r.Decision) })
-	o.logf(LevelInfo, "Passo 0: %s.", decisionLabel(r.Decision))
+	o.updateStep(ref, func(s *Step) { s.Note = "Decisão: " + decisionLabel(r.Decision) + "; " + changeLabel(kind) })
+	o.logf(LevelInfo, "Passo 0: %s; %s.", decisionLabel(r.Decision), changeLabel(kind))
 	return false
 }
 

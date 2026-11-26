@@ -150,12 +150,15 @@ const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 const assessInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"decision\": \"reuse\" | \"extend\" | \"refactor\" | \"implement\" | \"block\", \"reason\": \"evidência curta\", " +
 	"\"criteria\": [{\"criterion\": \"critério de aceite\", \"status\": \"existente\" | \"parcial\" | \"ausente\" | \"ambiguo\", \"evidence\": \"arquivo:linha ou por que é ambíguo\"}], " +
-	"\"pending_decisions\": [{\"question\": \"decisão de produto que a US não define\", \"options\": [\"alternativa\"], \"impact\": \"o que muda conforme a resposta\"}]}\n```\n" +
+	"\"pending_decisions\": [{\"question\": \"decisão de produto que a US não define\", \"options\": [\"alternativa\"], \"impact\": \"o que muda conforme a resposta\"}], " +
+	"\"change_type\": \"bug\" | \"feature\" | \"refactor\" | \"trivial\", \"change_reason\": \"obrigatório para trivial: por que não muda comportamento\"}\n```\n" +
 	"reuse = existe e atende todos os critérios de aceite (US encerrada sem implementar); " +
 	"extend = existe em parte (só o delta); refactor = existe com modelo incompatível; " +
 	"implement = não existe e dependências prontas; block = dependência ausente. " +
 	"Um item em criteria por critério de aceite. pending_decisions só para decisão de negócio que o código e a US não respondem; " +
-	"não invente a resposta nem reescreva a US. reuse e block só com evidência no código (arquivo:linha)."
+	"não invente a resposta nem reescreva a US. reuse e block só com evidência no código (arquivo:linha). " +
+	"change_type: bug = comportamento errado a corrigir; refactor = mesma conduta, outra estrutura; " +
+	"trivial = texto, configuração ou ajuste sem mudança de comportamento; feature = o resto."
 
 const specInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"tests\": [{\"id\": \"UT-CART-01\", \"description\": \"o que verifica\", \"kind\": \"unit\" | \"integration\" | \"e2e\"}]}\n```\n" +
@@ -175,6 +178,9 @@ const engineeringRules = "Regras:\n" +
 	"- Mudança mínima, solução simples.\n" +
 	"- Reutilize helpers e componentes existentes. Não reimplemente.\n" +
 	"- Passo 0 diz o que já existe: implemente só o que falta, não reescreva o que já atende.\n" +
+	"- Bug: primeiro um teste que falhe pelo comportamento errado, depois a correção; o orquestrador roda esse teste " +
+	"no código anterior à correção e exige que falhe lá. Funcionalidade: cenários relevantes, inclusive negativos. " +
+	"Refatoração: testes existentes continuam e passam. Edição trivial sem mudança de comportamento: sem teste novo.\n" +
 	"- Não faça varreduras cegas ou recursivas com grep/find no repositório inteiro. Use o grafo graphify e inspecione apenas arquivos relevantes.\n" +
 	"- Mudou símbolo exportado: atualize todas as referências.\n" +
 	"- Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.\n" +

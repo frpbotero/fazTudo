@@ -32,6 +32,7 @@ Regras:
 - Mudança mínima, solução simples.
 - Reutilize helpers e componentes existentes. Não reimplemente.
 - Passo 0 diz o que já existe: implemente só o que falta, não reescreva o que já atende.
+- Bug: primeiro um teste que falhe pelo comportamento errado, depois a correção; o orquestrador roda esse teste no código anterior à correção e exige que falhe lá. Funcionalidade: cenários relevantes, inclusive negativos. Refatoração: testes existentes continuam e passam. Edição trivial sem mudança de comportamento: sem teste novo.
 - Não faça varreduras cegas ou recursivas com grep/find no repositório inteiro. Use o grafo graphify e inspecione apenas arquivos relevantes.
 - Mudou símbolo exportado: atualize todas as referências.
 - Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.
@@ -55,6 +56,7 @@ Regras:
 - Mudança mínima, solução simples.
 - Reutilize helpers e componentes existentes. Não reimplemente.
 - Passo 0 diz o que já existe: implemente só o que falta, não reescreva o que já atende.
+- Bug: primeiro um teste que falhe pelo comportamento errado, depois a correção; o orquestrador roda esse teste no código anterior à correção e exige que falhe lá. Funcionalidade: cenários relevantes, inclusive negativos. Refatoração: testes existentes continuam e passam. Edição trivial sem mudança de comportamento: sem teste novo.
 - Não faça varreduras cegas ou recursivas com grep/find no repositório inteiro. Use o grafo graphify e inspecione apenas arquivos relevantes.
 - Mudou símbolo exportado: atualize todas as referências.
 - Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.
@@ -140,6 +142,7 @@ Regras:
 - Mudança mínima, solução simples.
 - Reutilize helpers e componentes existentes. Não reimplemente.
 - Passo 0 diz o que já existe: implemente só o que falta, não reescreva o que já atende.
+- Bug: primeiro um teste que falhe pelo comportamento errado, depois a correção; o orquestrador roda esse teste no código anterior à correção e exige que falhe lá. Funcionalidade: cenários relevantes, inclusive negativos. Refatoração: testes existentes continuam e passam. Edição trivial sem mudança de comportamento: sem teste novo.
 - Não faça varreduras cegas ou recursivas com grep/find no repositório inteiro. Use o grafo graphify e inspecione apenas arquivos relevantes.
 - Mudou símbolo exportado: atualize todas as referências.
 - Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.
