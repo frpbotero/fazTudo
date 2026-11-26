@@ -15,8 +15,12 @@ pipeline completo em execução real e pontua o resultado de 0 a 100:
 |---|---:|---|
 | Checagens ocultas | 40 | `hidden_checks` rodam só depois do pipeline; os agentes nunca as veem |
 | Rastreabilidade | 25 | IDs de teste da especificação encontrados nos arquivos de teste |
-| Pipeline concluído | 20 | todas as etapas e portões aprovados |
-| Legibilidade | 15 | −1,5 por achado de sintaxe/formatação/linha longa na última verificação |
+| Entrega validada | 20 | execução concluída **e** validação `passed` (todos os portões aprovaram com evidência) |
+| Legibilidade | 15 | −1,5 por achado de sintaxe/formatação/linha longa na última verificação executada |
+
+Critério sem observação (sem `hidden_checks`, sem IDs de teste, sem verificação executada, validação
+não avaliada) vale **0** e aparece na coluna *Não avaliado*: ausência de evidência nunca dá nota máxima.
+Resultados simulados (`dry_run`) aparecem no relatório, mas ficam **fora do ranking**.
 
 O relatório (`report.md`) traz a média por braço e, por tarefa, as correções necessárias, o número de
 chamadas de agentes e a duração. Cada pasta de trabalho guarda o código entregue, o histórico git
