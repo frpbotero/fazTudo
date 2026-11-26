@@ -151,7 +151,7 @@ func TestRefactoringKeepsTheCharacterizationTests(t *testing.T) {
 	if _, err := o.ws.SetPolicy(policy); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, repo, "tests/cart.test.mjs", "test('UT-CART-01 total', () => {})\n")
+	writeOld(t, repo, "tests/cart.test.mjs", "test('UT-CART-01 total', () => {})\n")
 	edits := 0
 	exec.onCall = func(req provider.Request) {
 		if req.Role != "fe" {
@@ -184,7 +184,7 @@ func TestRefactoringKeepsTheCharacterizationTests(t *testing.T) {
 func TestFeatureThatChangesCodeNeedsATest(t *testing.T) {
 	exec := &fakeExecutor{}
 	o, repo := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
-	writeFile(t, repo, "tests/a.test.mjs", "test('a', () => {})\n")
+	writeOld(t, repo, "tests/a.test.mjs", "test('a', () => {})\n")
 	edits := 0
 	exec.onCall = func(req provider.Request) {
 		if req.Role != "fe" {
@@ -215,7 +215,7 @@ func TestTrivialChangeWithReasonNeedsNoNewTest(t *testing.T) {
 	o, repo := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
 	o.baseStages = append([]Stage{{ID: "context", Title: "Passo 0", Role: "ctx", Assessor: true}}, verifierStages...)
 	o.stages = o.baseStages
-	writeFile(t, repo, "tests/a.test.mjs", "test('a', () => {})\n")
+	writeOld(t, repo, "tests/a.test.mjs", "test('a', () => {})\n")
 	exec.onCall = func(req provider.Request) {
 		if req.Role == "fe" {
 			writeFile(t, repo, "src/botao.js", "export const label = 'Pagar'\n")
@@ -261,5 +261,17 @@ func TestFinalApprovalRunsEveryCommandAfterAFastRound(t *testing.T) {
 	// approval still rests on every command.
 	if got := strings.Join(ran[2], ","); got != "unit,lint" {
 		t.Errorf("after the fix ran %q, want unit then lint", got)
+	}
+}
+
+// writeOld writes a file the repository had before the story: dated an hour
+// back, since a coarse file clock may stamp a file written just before the
+// run with the story's own start time.
+func writeOld(t *testing.T, root, rel, content string) {
+	t.Helper()
+	writeFile(t, root, rel, content)
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(root, rel), old, old); err != nil {
+		t.Fatal(err)
 	}
 }
