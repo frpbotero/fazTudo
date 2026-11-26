@@ -875,3 +875,24 @@ func (r *Repo) RestoreFiles(ctx context.Context, paths []string) error {
 	}
 	return nil
 }
+
+// Rev resolves a revision (a branch, a tag, a commit) to its full hash.
+func (r *Repo) Rev(ctx context.Context, rev string) (string, error) {
+	out, err := r.git(ctx, "rev-parse", "-q", "--verify", rev+"^{commit}")
+	return strings.TrimSpace(out), err
+}
+
+// IsAncestor reports whether rev is already contained in target.
+func (r *Repo) IsAncestor(ctx context.Context, rev, target string) bool {
+	_, err := r.git(ctx, "merge-base", "--is-ancestor", rev, target)
+	return err == nil
+}
+
+// Subjects lists the subjects of the commits in from..to, newest first.
+func (r *Repo) Subjects(ctx context.Context, from, to string) ([]string, error) {
+	out, err := r.git(ctx, "log", "--format=%s", from+".."+to)
+	if err != nil {
+		return nil, err
+	}
+	return strings.FieldsFunc(out, func(c rune) bool { return c == '\n' }), nil
+}

@@ -101,6 +101,7 @@ func run() error {
 	}
 	hub := server.NewHub()
 	orch := pipeline.New(router, ws, pipeline.DefaultStages, hub.Notify, logger)
+	orch.SetAppVersion(version)
 	for _, e := range orch.LoadPrompts(file.Prompts) {
 		logger.Warn("parte da configuração salva ignorada", "err", e)
 	}

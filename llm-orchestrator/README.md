@@ -395,6 +395,25 @@ volta à tela. Se ela parou (falha, **Parar**, app fechado ou travado no meio), 
 etapas concluídas (`POST /api/pipeline/resume`). Só a janela que executou grava o arquivo, para uma
 janela ociosa no mesmo repositório não sobrescrever uma execução mais nova.
 
+**Manifesto e retomada segura.** Cada execução grava um manifesto: hash do documento e de cada US, dos
+arquivos protegidos e de cada etapa (texto, contrato e skills), partes da política (comandos, fluxo,
+regras de risco, demais opções), versão do bundle de skills, perfis e complementos, versões dos CLIs, do
+app e o commit de partida. Nada de segredo: só hashes, nomes e versões. Ao continuar, o FazTudo compara
+com o presente e refaz só o que depende do que mudou:
+
+| Mudou | Refaz a partir de |
+|---|---|
+| documento de entrada, arquivo protegido, fluxo, regras de risco ou outra opção da política | início da US |
+| perfis de stack ou complementos do projeto | início da US |
+| comandos de verificação | verificação executável |
+| instruções de uma etapa (prompt, contrato ou skill) | essa etapa |
+| branch da US com commit feito fora da execução, ou reescrita | verificação executável |
+
+Os motivos aparecem no log e em `resume_checks`. Execução salva por uma versão anterior, sem manifesto,
+volta a rodar as verificações antes de qualquer promoção; o arquivo antigo fica como `.v0.bak`. Merge na
+base tem chave estável de operação: uma retomada que encontra a branch já integrada não repete o merge.
+O arquivo da execução é gravado com permissão só do usuário; arquivo ilegível é ignorado.
+
 ## Requisitos
 
 - Go 1.22+ (app desktop: CLI do Wails; Linux: libgtk-3-dev e libwebkit2gtk-4.1-dev)
