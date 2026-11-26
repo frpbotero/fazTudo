@@ -25,7 +25,13 @@ defaults:
     working-directory: llm-orchestrator
 
 jobs:
+  # The same verification every pull request goes through (ci.yml), on the
+  # tagged commit itself: nothing is built from code that did not pass it.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -54,9 +60,6 @@ jobs:
 
       - name: Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
-
-      - name: Testes
-        run: go test ./...
 
       - name: Dependências Linux
         if: matrix.target == 'linux'

@@ -30,13 +30,14 @@ type agentLimits struct {
 	readTurns  int
 	stop       bool     // a turn limit ends the run instead of leaving a pendency
 	commands   []string // shell commands writing agents may run
+	strict     bool     // writing agents need a provider that enforces commands
 }
 
 // useLimits derives the agent limits of a run from its policy: the project
 // checks, the tools to reproduce a failure and the policy's extra commands are
 // the only shell writers may run.
 func (o *Orchestrator) useLimits(policy workspace.Policy, checks []quality.Command) {
-	l := agentLimits{writeTurns: defaultWriteTurns, readTurns: defaultReadTurns, stop: policy.StopOnTurnLimit}
+	l := agentLimits{writeTurns: defaultWriteTurns, readTurns: defaultReadTurns, stop: policy.StopOnTurnLimit, strict: policy.StrictCommands}
 	if policy.MaxTurns > 0 {
 		l.writeTurns, l.readTurns = policy.MaxTurns, max(policy.MaxTurns/2, minReadTurns)
 	}
@@ -62,7 +63,7 @@ func (o *Orchestrator) limited(req provider.Request) provider.Request {
 		}
 		return req
 	}
-	req.MaxTurns, req.Commands = l.writeTurns, l.commands
+	req.MaxTurns, req.Commands, req.StrictCommands = l.writeTurns, l.commands, l.strict
 	return req
 }
 

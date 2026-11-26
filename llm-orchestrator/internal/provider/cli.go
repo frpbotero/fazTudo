@@ -85,6 +85,8 @@ type CLI struct {
 	// Parse reads the CLI's structured output (final text and token usage);
 	// false means the output was not structured and is used as is.
 	Parse func(out string) (parsed, bool)
+	// Caps are what this adapter enforces and reports; see Capabilities.
+	Caps Capabilities
 }
 
 // agentSystem is the system prompt of every call. It never changes, so the
@@ -207,6 +209,10 @@ var ClaudeCLI = CLI{
 	},
 	Stdin: withRole,
 	Parse: parseClaude,
+	// Permission rules: --tools and --allowedTools under dontAsk deny any
+	// command off the list; plan mode for read-only calls.
+	Caps: Capabilities{ReadOnly: true, Write: true, CommandAllowlist: true, Diagnose: true,
+		StructuredOutput: true, TokenUsage: true, MaxTurns: true, Cancel: killsProcessGroup, Isolation: IsolationPermissionRules},
 }
 
 // CodexCLI runs OpenAI's Codex CLI through `codex exec`. Its models come from
@@ -244,6 +250,10 @@ var CodexCLI = CLI{
 	// Codex has no system-prompt flag; prepend the instructions instead.
 	Stdin: instructionsFirst,
 	Parse: parseCodex,
+	// The OS sandbox limits what may be written, not which commands run:
+	// workspace-write runs any command inside the working directory.
+	Caps: Capabilities{ReadOnly: true, Write: true, Diagnose: true,
+		StructuredOutput: true, TokenUsage: true, Cancel: killsProcessGroup, Isolation: IsolationOSSandbox},
 }
 
 // GeminiCLI runs Google's Gemini CLI in headless mode. The prompt comes on
@@ -286,6 +296,10 @@ var GeminiCLI = CLI{
 	},
 	Stdin: instructionsFirst,
 	Parse: parseGemini,
+	// auto_edit approves edits and --allowed-tools only the listed commands;
+	// plan mode is read-only and runs no command, so diagnosis stays read-only.
+	Caps: Capabilities{ReadOnly: true, Write: true, CommandAllowlist: true,
+		StructuredOutput: true, TokenUsage: true, Cancel: killsProcessGroup, Isolation: IsolationApprovalMode},
 }
 
 // Invocation is a single resolved call to a provider.

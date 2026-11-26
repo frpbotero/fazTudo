@@ -533,6 +533,7 @@
           </div>
         </div>
         <p class="note">0 usa o padrão: 60 turnos para quem escreve, 30 para as etapas de leitura (sempre a metade, no mínimo 10). Vale para o Claude; Codex e Gemini não têm esse limite.</p>
+        <label class="check"><input type="checkbox" id="qStrictCommands"> Exigir provider que restrinja os agentes que escrevem aos comandos listados (o Codex não restringe: com esta opção ele não escreve código, nem em failover)</label>
         <label class="check"><input type="checkbox" id="qPromoteUnverified"> Integrar na branch base US sem validação executada (por padrão, sem comando de verificação aprovado a branch da US fica para revisão)</label>
         <label class="check"><input type="checkbox" id="qStopOnTurnLimit"> Parar a execução quando um agente esgotar os turnos (por padrão o trabalho parcial segue como pendência)</label>
         <div class="field">

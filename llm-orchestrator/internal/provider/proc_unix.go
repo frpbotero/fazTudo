@@ -7,6 +7,9 @@ import (
 	"syscall"
 )
 
+// killsProcessGroup: canceling a call kills the CLI and its children.
+const killsProcessGroup = true
+
 // isolate starts the CLI in its own process group and makes cancellation
 // kill the whole group, so servers the agent left running die with it.
 func isolate(cmd *exec.Cmd) {

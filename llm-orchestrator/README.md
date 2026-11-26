@@ -113,6 +113,11 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    a validação fica *inconclusiva*. Cada US e a execução mostram a **validação** (aprovada,
    reprovada, inconclusiva ou não avaliada) separada do resultado: *concluída* diz que a execução
    terminou, não que a entrega foi aprovada. Simulação nunca conta como aprovação.
+   Antes de uma execução real, os providers são conferidos contra a política (capacidades, versão
+   do CLI). Execução que nenhum provider instalado consegue atender não começa. Com
+   `strict_commands`, agentes que escrevem só rodam em CLI que restringe os comandos à lista (o
+   Codex não restringe), nem em failover. Detalhes em [docs/provedores.md](../docs/provedores.md);
+   CI e proteção de branch em [docs/ci.md](../docs/ci.md).
 5. O **code review** roda com revisores em paralelo, cada um com um foco: aderência à especificação,
    simplicidade e legibilidade, testes e — quando o frontend participa — interface e acessibilidade.
    Os problemas são unificados em um único veredito.

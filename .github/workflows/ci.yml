@@ -1,0 +1,59 @@
+# Verifies every change to FazTudo before it is merged or released: format,
+# vet, tests with the race detector and the build, on the platforms the
+# releases target. The tests drive fake CLIs and simulated providers: no
+# agent CLI is installed here and no LLM quota is spent. desktop-release
+# calls this same workflow before building the installers.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: llm-orchestrator
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: llm-orchestrator/go.mod
+          cache-dependency-path: llm-orchestrator/go.sum
+
+      - name: Sem CLIs de agente no PATH
+        shell: bash
+        run: |
+          for b in claude codex gemini; do
+            if command -v "$b" >/dev/null 2>&1; then
+              echo "::error::$b está no PATH: os testes não podem depender de um CLI real"
+              exit 1
+            fi
+          done
+
+      - name: Formatação e análise estática
+        run: make lint
+
+      - name: Testes (race)
+        run: make test
+
+      - name: Build
+        run: make build

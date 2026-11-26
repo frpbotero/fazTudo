@@ -67,6 +67,11 @@ type Policy struct {
 	// executed evidence the story's branch is kept for review instead.
 	// Rejected or inconclusive deliveries are never promoted.
 	PromoteUnverified bool `json:"promote_unverified,omitempty"`
+	// StrictCommands demands providers that restrict writing agents to the
+	// listed commands: a CLI that cannot (Codex runs any command inside its
+	// sandbox) is never used to write, not even on failover, and a run no
+	// installed provider can serve does not start.
+	StrictCommands bool `json:"strict_commands,omitempty"`
 }
 
 // DefaultEphemeralStacks match the usual name of an isolated E2E stack.
