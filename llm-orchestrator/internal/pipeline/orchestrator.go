@@ -212,6 +212,29 @@ type Executor interface {
 	SetDryRun(bool)
 }
 
+// Preflighter is an Executor that can tell, before a run starts, whether
+// its providers can serve the run's policy (provider.Router does).
+type Preflighter interface {
+	Preflight(ctx context.Context, need provider.Requirements) ([]string, error)
+}
+
+// preflight refuses a real run no provider can serve and returns what will
+// work in a weaker way, to be logged once the run starts.
+func (o *Orchestrator) preflight(opts StartOptions) ([]string, error) {
+	p, ok := o.exec.(Preflighter)
+	if !ok || opts.DryRun {
+		return nil, nil
+	}
+	policy := o.ws.Policy()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	warnings, err := p.Preflight(ctx, provider.Requirements{StrictCommands: policy.StrictCommands, MaxTurns: policy.MaxTurns > 0})
+	if err != nil {
+		return nil, fmt.Errorf("verificação dos providers: %w", err)
+	}
+	return warnings, nil
+}
+
 // Orchestrator runs one pipeline at a time and notifies observers on change.
 type Orchestrator struct {
 	exec     Executor
@@ -337,6 +360,17 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 	if len(opts.Stories) == 0 {
 		return ErrNoStories
 	}
+	o.mu.RLock()
+	busy := o.busyLocked()
+	o.mu.RUnlock()
+	if busy {
+		return ErrAlreadyRunning
+	}
+	// Outside the lock: detecting CLI versions runs them.
+	warnings, err := o.preflight(opts)
+	if err != nil {
+		return err
+	}
 	o.mu.Lock()
 	if o.busyLocked() {
 		o.mu.Unlock()
@@ -391,6 +425,9 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 	o.logf(LevelInfo, "Execução iniciada em %s: %d US (origem: %s, modo: %s).", repo, len(opts.Stories), opts.Source, mode)
 	o.logger.Info("pipeline started", "repository", repo, "stories", len(opts.Stories), "source", opts.Source, "dry_run", opts.DryRun)
 	o.logCustomPrompts(customized)
+	for _, w := range warnings {
+		o.logf(LevelWarn, "%s", w)
+	}
 
 	go func() {
 		defer close(done)

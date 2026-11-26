@@ -1,8 +1,12 @@
 package pipeline
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
@@ -156,5 +160,75 @@ func TestValidationAggregatesTheWorstOutcome(t *testing.T) {
 	// an approval.
 	if got := runValidation([]StoryRun{{Validation: ValidationPassed}, {}}); got != ValidationNotEvaluated {
 		t.Errorf("runValidation = %s", got)
+	}
+}
+
+// preflightExecutor is a fake whose providers answer a preflight.
+type preflightExecutor struct {
+	fakeExecutor
+	warnings []string
+	err      error
+	need     *provider.Requirements
+}
+
+func (p *preflightExecutor) Preflight(_ context.Context, need provider.Requirements) ([]string, error) {
+	p.need = &need
+	return p.warnings, p.err
+}
+
+func TestRunDoesNotStartWhenNoProviderCanServeThePolicy(t *testing.T) {
+	exec := &preflightExecutor{err: fmt.Errorf("%w: Codex CLI sem restrição de comandos", provider.ErrNoCapableProvider)}
+	ws, err := workspace.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := ws.Policy()
+	policy.StrictCommands = true
+	if _, err := ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	o := New(exec, ws, testStages, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	err = o.Start(one(false))
+	if !errors.Is(err, provider.ErrNoCapableProvider) {
+		t.Fatalf("err = %v", err)
+	}
+	if exec.need == nil || !exec.need.StrictCommands {
+		t.Errorf("the policy's requirements must reach the preflight: %+v", exec.need)
+	}
+	if o.Snapshot().Running || len(exec.prompts) != 0 {
+		t.Error("a refused run must not start any agent")
+	}
+
+	// A simulation calls no CLI: no preflight.
+	exec.need = nil
+	if err := o.Start(one(true)); err != nil || exec.need != nil {
+		t.Fatalf("dry run: err %v, preflight %+v", err, exec.need)
+	}
+	waitDone(t, o)
+
+	// Warnings do not stop the run; they are logged.
+	exec.err, exec.warnings = nil, []string{"Codex CLI não aplica limite de turnos"}
+	if err := o.Start(one(false)); err != nil {
+		t.Fatal(err)
+	}
+	run := waitDone(t, o)
+	if !slices.ContainsFunc(run.Logs, func(l LogEntry) bool { return l.Level == LevelWarn && strings.Contains(l.Message, "limite de turnos") }) {
+		t.Error("preflight warnings must be logged")
+	}
+}
+
+func TestWritingRequestsCarryStrictCommands(t *testing.T) {
+	ws, err := workspace.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := New(&fakeExecutor{}, ws, testStages, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	o.useLimits(workspace.Policy{StrictCommands: true}, nil)
+	if !o.limited(provider.Request{}).StrictCommands {
+		t.Error("writing request must demand an allowlist")
+	}
+	if o.limited(provider.Request{ReadOnly: true}).StrictCommands {
+		t.Error("read-only requests run no command to restrict")
 	}
 }

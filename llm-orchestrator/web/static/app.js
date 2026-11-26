@@ -77,7 +77,7 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qPromoteUnverified: $('qPromoteUnverified'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qPromoteUnverified: $('qPromoteUnverified'), qStrictCommands: $('qStrictCommands'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
     promptsError: $('promptsError'), promptList: $('promptList'), promptForm: $('promptForm'), promptTitle: $('promptTitle'),
     promptDescription: $('promptDescription'), promptParts: $('promptParts'), promptWarning: $('promptWarning'), promptValue: $('promptValue'),
     promptDefault: $('promptDefault'), promptContractBox: $('promptContractBox'), promptContract: $('promptContract'), promptDiscard: $('promptDiscard'),
@@ -613,6 +613,7 @@ Critérios de aceitação:
     el.qMaxTurns.value = p.max_turns || '';
     el.qStopOnTurnLimit.checked = !!p.stop_on_turn_limit;
     el.qPromoteUnverified.checked = !!p.promote_unverified;
+    el.qStrictCommands.checked = !!p.strict_commands;
     el.qAgentCommands.value = (p.agent_commands || []).join('\n');
     el.qEphemeralStacks.value = (p.ephemeral_stacks || []).join('\n');
     el.qFlow.value = p.flow || 'full';
@@ -650,6 +651,7 @@ Critérios de aceitação:
       ephemeral_stacks: el.qEphemeralStacks.value.split('\n').map((l) => l.trim()).filter(Boolean),
       base_branches: snapshot?.workspace?.policy?.base_branches,
       promote_unverified: el.qPromoteUnverified.checked,
+      strict_commands: el.qStrictCommands.checked,
     };
     try {
       await api('PUT', '/api/workspace/policy', policy);
@@ -778,6 +780,16 @@ Critérios de aceitação:
     }
   });
 
+  // What the adapter enforces, in one line: users choose a provider knowing
+  // which restrictions hold for it.
+  function capabilitySummary(c) {
+    if (!c) return '';
+    const parts = [c.command_allowlist ? 'comandos restritos à lista' : 'comandos não restritos à lista'];
+    if (!c.max_turns) parts.push('sem limite de turnos');
+    if (!c.diagnose) parts.push('diagnóstico só leitura');
+    return `${parts.join(' · ')} · isolamento: ${c.isolation}`;
+  }
+
   function renderProviders(providers) {
     el.providers.innerHTML = providers.map((p) => {
       const status = PROVIDER_STATUS[p.status] || PROVIDER_STATUS.available;
@@ -803,6 +815,8 @@ Critérios de aceitação:
             <dt>Heavy</dt><dd title="${esc(p.heavy_model)}">${esc(p.heavy_model)}</dd>
             <dt>Standard</dt><dd title="${esc(p.std_model)}">${esc(p.std_model)}</dd>
             <dt>Esforço</dt><dd>${esc(p.effort || 'padrão')}</dd>
+            ${p.version ? `<dt>Versão</dt><dd title="${esc(p.version)}">${esc(p.version)}</dd>` : ''}
+            <dt>Garantias</dt><dd title="${esc(capabilitySummary(p.capabilities))}">${esc(capabilitySummary(p.capabilities))}</dd>
           </dl>
           <div class="provider-foot">${foot}</div>
         </div>`;
