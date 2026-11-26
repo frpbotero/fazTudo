@@ -28,6 +28,14 @@ Critérios de aceitação:
     failed: { label: 'Falhou', tone: 'danger' },
     canceled: { label: 'Cancelado', tone: 'warn' },
   };
+  // Validation is apart from the result: a run that finished may still have
+  // delivered nothing approved.
+  const VALIDATION = {
+    passed: { label: 'Validação aprovada', short: 'aprovada', tone: 'success' },
+    failed: { label: 'Validação reprovada', short: 'reprovada', tone: 'danger' },
+    inconclusive: { label: 'Validação inconclusiva', short: 'inconclusiva', tone: 'warn' },
+    not_evaluated: { label: 'Não avaliada', short: 'não avaliada', tone: 'neutral' },
+  };
   const PROVIDER_STATUS = {
     available: { label: 'Disponível', tone: 'success' },
     cooldown: { label: 'Em cooldown', tone: 'warn' },
@@ -1288,7 +1296,9 @@ Critérios de aceitação:
     const delivered = list.filter((s) => s.status === 'done' || s.status === 'warning').length;
     const pending = list.filter((s) => s.status === 'warning' || s.status === 'skipped').length;
     const took = run.finished_at ? ` em ${fmtDuration(Date.parse(run.finished_at) - Date.parse(run.started_at))}` : '';
-    return `Concluída${esc(took)}: ${delivered} de ${list.length} US entregue${list.length === 1 ? '' : 's'}${pending ? `, ${pending} com pendências` : ''}.`;
+    const v = VALIDATION[run.validation];
+    const validation = v ? ` Validação ${v.short}${run.dry_run ? ' (simulação)' : ''}.` : '';
+    return `Concluída${esc(took)}: ${delivered} de ${list.length} US entregue${list.length === 1 ? '' : 's'}${pending ? `, ${pending} com pendências` : ''}.${validation}`;
   }
 
   function cleanupFinding(run) {
@@ -1345,6 +1355,9 @@ Critérios de aceitação:
     let state = { label: 'Ocioso', tone: 'neutral' };
     if (run.running) state = { label: 'Em execução', tone: 'accent' };
     else if (run.result) state = RUN_RESULT[run.result];
+    if (!run.running && run.result === 'succeeded' && VALIDATION[run.validation] && run.validation !== 'passed') {
+      state = { label: `Concluído · ${VALIDATION[run.validation].short}`, tone: 'warn' };
+    }
     el.runBadge.dataset.tone = state.tone;
     el.runBadge.textContent = state.label;
     if (!started) return;
@@ -1437,6 +1450,7 @@ Critérios de aceitação:
       : st.duration_ms ? `<span class="num">${esc(fmtDuration(st.duration_ms))}</span>` : '';
     const meta = [
       pill(status),
+      VALIDATION[st.validation] ? pill(VALIDATION[st.validation]) : '',
       st.branch ? `<code>${esc(st.branch)}</code>` : '',
       st.depends_on?.length ? `<span>Depende de ${esc(st.depends_on.join(', '))}</span>` : '',
       time,

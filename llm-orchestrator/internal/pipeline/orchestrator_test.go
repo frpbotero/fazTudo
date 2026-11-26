@@ -55,7 +55,9 @@ func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf p
 		return nil, errors.New("boom")
 	}
 	f.mu.Lock()
-	out := "artifact-" + req.Role
+	// Unscripted calls answer like an agent that approves: gates need a
+	// valid verdict, and other stages ignore a block that is not theirs.
+	out := "artifact-" + req.Role + "\n\n" + fence(approved)
 	if q := f.outputs[req.Role]; len(q) > 0 {
 		out, f.outputs[req.Role] = q[0], q[1:]
 	}

@@ -60,6 +60,8 @@ Pontos que valem saber:
 - **Portões de qualidade.** Segurança, review e E2E devolvem um veredito. Se houver problemas, o dev
   recebe exatamente o que corrigir e o portão roda de novo. Depois de algumas rodadas sem aprovação, a
   US segue como *Com pendências* e a execução continua. Nunca trava por um problema teimoso.
+  Resposta sem veredito válido não aprova: a US fica com validação *inconclusiva*, mostrada à parte
+  do resultado da execução.
 - **Git por US.** Cada US ganha uma branch `faztudo/<us>-<data>` e cada etapa vira um commit, com o
   diff visível no painel. O trabalho só entra na sua branch base por merge ao fim da onda.
 - **Paralelo ou sequencial.** US independentes e frentes independentes de uma US podem rodar juntas,

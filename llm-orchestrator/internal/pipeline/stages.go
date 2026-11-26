@@ -680,6 +680,18 @@ func buildVerifyPrompt(task string, gate Stage, sc storyContext, discovery *work
 	return b.String()
 }
 
+// buildFormatPrompt asks a gate only for the verdict its previous answer
+// lacked: the report is quoted back and nothing is reviewed or changed again.
+func buildFormatPrompt(problem, report string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Sua resposta anterior não trouxe um veredito válido (%s).\n"+
+		"Não revise o código de novo e não altere arquivos. Com base só no relatório abaixo, "+
+		"responda apenas com o bloco JSON do veredito. Problema de severidade alta exige changes_requested.\n\n", problem)
+	fmt.Fprintf(&b, "## Relatório anterior\n\n%s\n", clip(strings.TrimSpace(report), maxArtifactBytes))
+	b.WriteString(verdictInstructions)
+	return b.String()
+}
+
 func clip(s string, n int) string {
 	if len(s) <= n {
 		return s

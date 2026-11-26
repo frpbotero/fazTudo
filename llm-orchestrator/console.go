@@ -304,7 +304,7 @@ func (c *consoleRuntime) waitRun(out, errOut io.Writer) int {
 			run := c.orch.Snapshot()
 			printNewLogs(out, run, seen)
 			for _, story := range run.Stories {
-				fmt.Fprintf(out, "%s: %s (%s)\n", story.ID, story.Title, story.Status)
+				printStoryLine(out, story)
 			}
 			if run.Kind == pipeline.RunCleanup {
 				printCleanup(out, run)
@@ -316,7 +316,7 @@ func (c *consoleRuntime) waitRun(out, errOut io.Writer) int {
 			switch run.Result {
 			case pipeline.ResultSucceeded:
 				if run.Kind != pipeline.RunCleanup {
-					fmt.Fprintf(out, "Execução concluída: %d User Story(s).\n", len(run.Stories))
+					fmt.Fprintf(out, "Execução concluída: %d User Story(s). Validação: %s.\n", len(run.Stories), run.Validation.Label())
 				}
 				return 0
 			case pipeline.ResultCanceled:

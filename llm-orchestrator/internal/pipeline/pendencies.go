@@ -76,6 +76,9 @@ func renderPendencies(run Run) string {
 	var head strings.Builder
 	fmt.Fprintf(&head, "# Pendências da execução\n\n")
 	fmt.Fprintf(&head, "Resultado: **%s**", cmp.Or(string(run.Result), "indefinido"))
+	if run.Validation != "" {
+		fmt.Fprintf(&head, " · validação **%s**", run.Validation.Label())
+	}
 	if run.FinishedAt != nil {
 		fmt.Fprintf(&head, " · encerrada em %s", run.FinishedAt.Format("02/01/2006 15:04"))
 	}

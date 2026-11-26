@@ -328,14 +328,27 @@ func writeJSON(out, errOut io.Writer, value any) int {
 	return 0
 }
 
+// printStoryLine shows a story's execution status and, once it closed, its
+// validation, so a finished story is not read as an approved one.
+func printStoryLine(out io.Writer, story pipeline.StoryRun) {
+	if story.Validation == "" {
+		fmt.Fprintf(out, "%s: %s (%s)\n", story.ID, story.Title, story.Status)
+		return
+	}
+	fmt.Fprintf(out, "%s: %s (%s, validação %s)\n", story.ID, story.Title, story.Status, story.Validation.Label())
+}
+
 func printRunStatus(out io.Writer, run pipeline.Run) {
 	if run.Repository == "" {
 		fmt.Fprintln(out, "Nenhuma execução registrada.")
 		return
 	}
 	fmt.Fprintf(out, "Repositório: %s\nResultado: %s\nEm execução: %t\n", run.Repository, run.Result, run.Running)
+	if run.Validation != "" {
+		fmt.Fprintf(out, "Validação: %s\n", run.Validation.Label())
+	}
 	for _, story := range run.Stories {
-		fmt.Fprintf(out, "%s: %s (%s)\n", story.ID, story.Title, story.Status)
+		printStoryLine(out, story)
 		for _, step := range story.Steps {
 			if step.Status != pipeline.StepPending {
 				fmt.Fprintf(out, "  %s: %s\n", step.Title, step.Status)
