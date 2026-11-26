@@ -404,6 +404,26 @@ volta à tela. Se ela parou (falha, **Parar**, app fechado ou travado no meio), 
 etapas concluídas (`POST /api/pipeline/resume`). Só a janela que executou grava o arquivo, para uma
 janela ociosa no mesmo repositório não sobrescrever uma execução mais nova.
 
+**Pacote de entrega.** Ao fim de toda execução, o FazTudo grava em `entregas/<repo>/<data>/` (ao lado da
+configuração, fora do repositório) um pacote para quem revisa:
+
+- `README.md` lista as US e os conjuntos integrados;
+- `<US>.md` traz critérios do Passo 0, casos da especificação com os casos executados, aceitação
+  funcional, reprodução do bug, comandos da última verificação, pendências, commits (partida, último,
+  base de cada dependência), branch, integração e a configuração efetiva de cada etapa (status,
+  validação, provider e modelo), com o resumo do manifesto;
+- `<US>.json` traz a mesma evidência para leitura por máquina, com o registro de cada chamada;
+- `<US>.diff` traz o diff da US (até 2 MB);
+- `conjunto-NN.md` traz cada promoção, com o commit avaliado, o resultado por repositório e os comandos
+  do conjunto integrado.
+
+Tokens (GitHub, AWS, chaves `sk-`, Slack), chaves privadas, senha em URL e os dados pessoais da
+aceitação funcional são removidos. Pastas e arquivos ficam com permissão só do usuário. Ficam os
+`delivery_retention` pacotes mais novos por repositório (padrão 10). O pacote complementa os checks do
+CI; não é garantia por si só. A branch de cada US continua no repositório para revisão, com ou sem
+integração externa, e a documentação gerada pela US entra no candidato que é verificado antes da
+promoção.
+
 **Manifesto e retomada segura.** Cada execução grava um manifesto: hash do documento e de cada US, dos
 arquivos protegidos e de cada etapa (texto, contrato e skills), partes da política (comandos, fluxo,
 regras de risco, demais opções), versão do bundle de skills, perfis e complementos, versões dos CLIs, do
