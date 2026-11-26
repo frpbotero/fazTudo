@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,5 +88,36 @@ func TestChangesAndStaleness(t *testing.T) {
 	}
 	if reason, _ := sim.Staleness(before, false); reason != "" {
 		t.Errorf("it serves another simulation: %q", reason)
+	}
+}
+
+func TestTruncatedFingerprintNeverKeepsTheDiscovery(t *testing.T) {
+	full := Fingerprint{Files: map[string]string{"go.mod": "1"}}
+	cut := Fingerprint{Files: map[string]string{"go.mod": "1"}, Truncated: true}
+	cases := map[string]struct{ cached, cur Fingerprint }{
+		"cached report truncated":    {cut, full},
+		"current walk truncated":     {full, cut},
+		"both truncated, same files": {cut, cut},
+	}
+	for name, c := range cases {
+		report := Report{Fingerprint: &c.cached}
+		reason, changes := report.Staleness(c.cur, true)
+		if reason == "" {
+			t.Errorf("%s: a truncated fingerprint kept the discovery", name)
+		}
+		if changes != nil {
+			t.Errorf("%s: changes %+v; a partial list must not drive an incremental update", name, changes)
+		}
+	}
+}
+
+func TestTakeFingerprintMarksATruncatedWalk(t *testing.T) {
+	root := t.TempDir()
+	for i := range maxFingerprintFiles + 1 {
+		put(t, root, fmt.Sprintf("adr/%04d.md", i), "x")
+	}
+	fp := TakeFingerprint(root)
+	if !fp.Truncated || len(fp.Files) != maxFingerprintFiles {
+		t.Fatalf("truncated %v with %d files, want true with %d", fp.Truncated, len(fp.Files), maxFingerprintFiles)
 	}
 }

@@ -51,13 +51,16 @@ const (
 
 // Staleness tells why the report no longer describes the repository whose
 // current fingerprint is cur, with the relevant files that changed; "" while
-// it still does. A simulated report never serves a real run.
+// it still does. A simulated report never serves a real run, and neither does
+// a truncated fingerprint, which cannot vouch for the files it left out.
 func (r Report) Staleness(cur Fingerprint, real bool) (string, []FileChange) {
 	switch {
 	case r.Fingerprint == nil:
 		return "discovery sem impressão digital dos arquivos (feito por uma versão anterior)", nil
 	case real && r.Simulated:
 		return "o discovery anterior foi simulado", nil
+	case r.Fingerprint.Truncated || cur.Truncated:
+		return fmt.Sprintf("mais de %d arquivos relevantes: a impressão digital não cobre todos", maxFingerprintFiles), nil
 	}
 	changes := r.Fingerprint.Changes(cur)
 	if len(changes) == 0 {
