@@ -30,6 +30,12 @@ type Baseline struct {
 	// Unknown are commands with no result: out of time, or not run because
 	// an earlier layer failed.
 	Unknown []string `json:"unknown,omitempty"`
+	// Tests, TestIDs and PassedCases are what characterizes the behavior
+	// before the story: its test files, the criterion IDs they name and the
+	// cases that passed ("command › case"). A refactoring keeps them all.
+	Tests       []string `json:"tests,omitempty"`
+	TestIDs     []string `json:"test_ids,omitempty"`
+	PassedCases []string `json:"passed_cases,omitempty"`
 }
 
 // maxBaselineOutput keeps a baseline small in the journal.
@@ -93,7 +99,10 @@ func (o *Orchestrator) takeBaseline(ctx context.Context, ss *session, st *storyS
 		}
 	}
 	o.logf(LevelInfo, "Linha de base de %s: rodando os comandos do projeto antes de qualquer mudança.", st.sc.Story.Title)
-	b := &Baseline{Commit: commit, At: time.Now(), Env: runtime.GOOS + "/" + runtime.GOARCH, Failing: map[string][]string{}}
+	b := &Baseline{
+		Commit: commit, At: time.Now(), Env: runtime.GOOS + "/" + runtime.GOARCH, Failing: map[string][]string{},
+		Tests: quality.TestFiles(ss.repo), TestIDs: quality.TestIDs(ss.repo),
+	}
 	timeout := time.Duration(ss.policy.CheckTimeoutS) * time.Second
 	failedLayer := -1
 	for _, c := range quality.InLayers(ss.checks) {
@@ -117,7 +126,12 @@ func (o *Orchestrator) takeBaseline(ctx context.Context, ss *session, st *storyS
 			b.Failing[c.Name] = quality.Fingerprints(failures)
 		}
 		r.Output = tail(r.Output, maxBaselineOutput)
-		r.Cases = nil // the baseline keeps the counts, not every case
+		for _, c := range r.Cases {
+			if c.Status == quality.CasePassed && len(b.PassedCases) < maxBaselineCases {
+				b.PassedCases = append(b.PassedCases, caseKey(r.Name, c.Name))
+			}
+		}
+		r.Cases = nil // the passing cases are kept above; the counts stay
 		b.Results = append(b.Results, r)
 	}
 	if commit != "" {

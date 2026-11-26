@@ -264,6 +264,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 
 .note { font-size: var(--fs-small); color: var(--muted); }
 .note[data-tone="warn"] { color: var(--warning); }
+.note[data-tone="success"] { color: var(--positive); }
+.note[data-tone="danger"] { color: var(--negative); }
 .check { display: inline-flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; }
 .check input { accent-color: var(--text); margin: 3px 0 0; }
 .form-error { color: var(--pill-negative-ink); font-size: 13px; background: var(--pill-negative-bg); padding: 8px 10px; border-radius: var(--radius-control); }

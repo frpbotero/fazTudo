@@ -386,6 +386,10 @@ type Assessment struct {
 	Reason    string            `json:"reason,omitempty"`
 	Criteria  []Criterion       `json:"criteria,omitempty"`
 	Decisions []PendingDecision `json:"pending_decisions,omitempty"`
+	// Change is the story's kind (bug, feature, refactor or trivial) and
+	// ChangeReason why, required for a trivial one.
+	Change       string `json:"change_type,omitempty"`
+	ChangeReason string `json:"change_reason,omitempty"`
 }
 
 // Passo 0 decisions.

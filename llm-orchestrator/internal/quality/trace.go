@@ -295,3 +295,18 @@ func TestIDs(root string) []string {
 	slices.Sort(ids)
 	return ids
 }
+
+// IsCodeFile reports whether rel holds source code the static checks read.
+func IsCodeFile(rel string) bool { return codeExts[ext(rel)] }
+
+// TestFiles lists, sorted, the repository's test files.
+func TestFiles(root string) []string {
+	var files []string
+	walk(root, func(rel string, _ fs.FileInfo) {
+		if IsTestFile(rel) {
+			files = append(files, rel)
+		}
+	})
+	slices.Sort(files)
+	return files
+}

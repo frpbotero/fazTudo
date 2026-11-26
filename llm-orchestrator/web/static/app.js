@@ -1264,7 +1264,7 @@ Critérios de aceitação:
 
   // What each trace status proves; only "comprovado" is a pass.
   const TRACE_TONE = {
-    'comprovado': 'ok', 'falhou': 'bad', 'ignorado': 'warn', 'sem teste': 'warn',
+    'comprovado': 'success', 'falhou': 'danger', 'ignorado': 'warn', 'sem teste': 'warn',
     'sem relatório': 'warn', 'não executado': 'warn', 'só código de saída': '',
   };
   const traceStatus = (t) => t.status || (t.files?.length ? 'só código de saída' : 'sem teste');
@@ -1560,6 +1560,9 @@ Critérios de aceitação:
     paintSteps(stepsHtml(runSteps.map((step) => ({ step, isRunStep: true })), { run, si: -1 }));
   }
 
+  // What proves each kind of change: see the pipeline's change.go.
+  const CHANGE_LABEL = { bug: 'Correção de bug', feature: 'Funcionalidade', refactor: 'Refatoração', trivial: 'Edição trivial' };
+
   function renderStory(run, si, runSteps) {
     const list = run.stories || [];
     const st = list[si];
@@ -1576,6 +1579,10 @@ Critérios de aceitação:
       INTEGRATION[st.integration] ? `<span title="${esc(st.integration_note || '')}">${pill(INTEGRATION[st.integration])}</span>` : '',
       st.baseline && Object.keys(st.baseline.failing || {}).length
         ? `<span title="${esc(`Já falhavam antes da US: ${Object.keys(st.baseline.failing).join(', ')}`)}">${pill({ label: 'Falhas preexistentes', tone: 'warn' })}</span>`
+        : '',
+      st.change ? `<span title="${esc(st.change_reason || '')}">${pill({ label: CHANGE_LABEL[st.change] || st.change, tone: 'neutral' })}</span>` : '',
+      st.reproduction
+        ? `<span title="${esc([st.reproduction.detail, ...(st.reproduction.failures || [])].filter(Boolean).join('\n'))}">${pill({ label: `Bug ${st.reproduction.status}`, tone: st.reproduction.status === 'reproduzida' ? 'success' : 'warn' })}</span>`
         : '',
       st.branch ? `<code>${esc(st.branch)}</code>` : '',
       st.depends_on?.length ? `<span>Depende de ${esc(st.depends_on.join(', '))}</span>` : '',

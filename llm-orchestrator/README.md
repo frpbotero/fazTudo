@@ -187,6 +187,22 @@ falhas). Falha preexistente continua bloqueando a entrega; a marca só diz a que
 revisa que ela não foi introduzida pela US. Comando sem resultado na linha de base (tempo esgotado,
 ou não rodou porque uma camada anterior falhou) fica sem marca. `skip_baseline` desliga.
 
+**Tipo de mudança.** O Passo 0 classifica a US em correção de bug, funcionalidade, refatoração ou edição
+trivial (sem Passo 0, pelas palavras da US). Depois que os comandos passam, cada tipo pede sua prova:
+
+- **Bug** — os testes que a US alterou rodam numa worktree do commit em que a US começou, sem a
+  correção, e precisam falhar lá por comportamento. Sem teste alterado, ou com testes que também passam
+  antes da correção, a verificação devolve para o implementador. Falha só de build, de tempo esgotado ou
+  que a linha de base já tinha não demonstra o bug: a validação fica inconclusiva.
+- **Funcionalidade** — código alterado sem nenhum teste, num repositório que tem testes e sem casos
+  listados pela especificação, volta para o implementador.
+- **Refatoração** — todo arquivo de teste, ID de critério e caso que passava na linha de base continua
+  lá e passando (os casos dependem de relatório por caso).
+- **Edição trivial** — sem teste novo, desde que o Passo 0 diga por que não muda comportamento; sem
+  justificativa, vale como funcionalidade.
+
+Cada rodada de correção roda primeiro os comandos que falharam, mas a aprovação só vem com todos.
+
 **Pendências.** Ao fim de toda execução real, o que ficou sem solução é gravado em
 `~/.config/faztudo/pendencias/<repo>-<hash>.md` (fora do repositório, para não contar como alteração
 pendente). Veja o [README da raiz](../README.md).

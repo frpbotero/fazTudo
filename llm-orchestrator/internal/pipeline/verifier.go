@@ -111,6 +111,12 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 		o.cancelStep(ref, time.Since(started))
 		return evaluation{}, false
 	}
+	extra, ok := o.changeIssues(ctx, ss, st, a)
+	if !ok {
+		o.cancelStep(ref, time.Since(started))
+		return evaluation{}, false
+	}
+	a.issues = append(a.issues, extra...)
 	results, findings, traces, issues := a.results, a.findings, a.traces, a.issues
 	if len(traces) > 0 {
 		if ss.git != nil {

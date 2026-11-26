@@ -528,6 +528,24 @@ func (r *Repo) AddWorktree(ctx context.Context, path string) error {
 	})
 }
 
+// AddWorktreeAt checks out rev, detached, in a new worktree at path; each
+// nested repository is checked out at the commit rev records for it, or at
+// its HEAD when rev records none.
+func (r *Repo) AddWorktreeAt(ctx context.Context, path, rev string) error {
+	if _, err := r.git(ctx, "worktree", "add", "-q", "--detach", path, rev); err != nil {
+		return err
+	}
+	return r.addNestedWorktrees(ctx, path, func(n *Repo, dir string) error {
+		rel, _ := filepath.Rel(r.dir, n.dir)
+		target := r.gitlinkAt(ctx, rev, filepath.ToSlash(rel))
+		if target == "" {
+			target = "HEAD"
+		}
+		_, err := n.git(ctx, "worktree", "add", "-q", "--detach", dir, target)
+		return err
+	})
+}
+
 // addNestedWorktrees gives each nested repository its own worktree at its
 // place inside the worktree at path, created by add. On failure the whole
 // worktree is removed.
