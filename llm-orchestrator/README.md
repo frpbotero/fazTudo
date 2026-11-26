@@ -61,7 +61,18 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    `develop`) antes da onda seguinte começar**: a próxima onda parte da base já com a anterior. Em
    sequência (uma US por onda, ou sem worktrees) o merge na base acontece ao fim de cada US, e o
    repositório termina na base. Se o merge na base falhar (a base mudou e conflita), a execução para
-   com a branch preservada para você resolver. Repositório que começa em uma branch `faztudo/`
+   com a branch preservada para você resolver.
+   **Só entra na base o que foi aprovado e verificado no estado final.** Uma regra única decide toda
+   promoção (sequencial, paralela ou retomada): US com validação reprovada ou inconclusiva nunca é
+   promovida; US *não avaliada* (nenhum comando executado) só com `promote_unverified` na política
+   (opção “Integrar na branch base US sem validação executada”). Antes do merge na base, os
+   comandos do projeto rodam no **candidato**: na branch de integração da onda, sempre, porque US que
+   passam isoladas podem quebrar juntas; na branch da US, quando algo mudou depois da última
+   verificação aprovada (a documentação, por exemplo). Se a base recebeu commits que o candidato não
+   tem, a promoção é bloqueada. Candidato bloqueado deixa a base intacta, a branch fica para revisão
+   (*Fora da base*, com o motivo) e as US que dependem dele, pela análise, não iniciam; as
+   independentes seguem. Sem conseguir criar a branch da US, a execução para em vez de desenvolver
+   na base. Repositório que começa em uma branch `faztudo/`
    (retomada) sem base configurada não é mergeado. Conflito entre US vai
    para um agente de **integração**, que resolve os marcadores e roda os testes; se não resolver, o
    merge é desfeito e a US fica *Com pendências* na própria branch. Falha numa US cancela as demais da

@@ -120,6 +120,9 @@ func newParallelStoryTest(t *testing.T, exec *fakeExecutor) (*Orchestrator, stri
 	o.attempts = 1
 	policy := o.ws.Policy()
 	policy.Git = true
+	// These stages judge nothing: the tests exercise the branches and merges,
+	// while the candidate's commands still run before the base takes it.
+	policy.PromoteUnverified = true
 	if _, err := o.ws.SetPolicy(policy); err != nil {
 		t.Fatal(err)
 	}

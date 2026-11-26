@@ -55,6 +55,14 @@ func renderPendencies(run Run) string {
 			addStep("", s)
 		}
 		count += writePendingCauses(&b, st.Causes)
+		if st.Integration == IntegrationBlocked {
+			count++
+			fmt.Fprintf(&b, "\nFora da branch base: %s", cmp.Or(st.IntegrationNote, "promoção bloqueada"))
+			if st.Branch != "" {
+				fmt.Fprintf(&b, " (branch `%s` mantida para revisão)", st.Branch)
+			}
+			b.WriteString("\n")
+		}
 		if reason := notDelivered(st); reason != "" {
 			if b.Len() == header {
 				count++

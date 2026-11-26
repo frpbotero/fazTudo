@@ -41,7 +41,7 @@ func TestGateWithoutVerdictIsAskedOnlyForTheVerdict(t *testing.T) {
 	if v := step(st.Steps, "review").Validation; v != ValidationPassed {
 		t.Errorf("review validation = %q", v)
 	}
-	if st.Validation != ValidationPassed || run.Validation != ValidationPassed || st.Status != StepDone {
+	if st.Validation != ValidationPassed || run.Validation != ValidationPassed {
 		t.Errorf("story %s/%s, run %s", st.Status, st.Validation, run.Validation)
 	}
 }

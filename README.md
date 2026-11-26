@@ -63,7 +63,9 @@ Pontos que valem saber:
   Resposta sem veredito válido não aprova: a US fica com validação *inconclusiva*, mostrada à parte
   do resultado da execução.
 - **Git por US.** Cada US ganha uma branch `faztudo/<us>-<data>` e cada etapa vira um commit, com o
-  diff visível no painel. O trabalho só entra na sua branch base por merge ao fim da onda.
+  diff visível no painel. O trabalho só entra na sua branch base por merge ao fim da onda, e só
+  depois de aprovado e de os comandos do projeto passarem no conjunto integrado. O que não passa
+  fica na própria branch, para revisão, e a base não muda.
 - **Paralelo ou sequencial.** US independentes e frentes independentes de uma US podem rodar juntas,
   cada uma em um worktree git próprio. Também dá para rodar tudo em sequência.
 - **Somente leitura onde importa.** Discovery, Passo 0, especificação, arquiteto, segurança e review
