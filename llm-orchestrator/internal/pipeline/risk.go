@@ -23,7 +23,8 @@ func (o *Orchestrator) assessStoryRisk(ss *session, st *storyState, changed []st
 	text := st.sc.Story.Title + "\n" + st.sc.Story.Content
 	next := st.risk.Merge(workspace.AssessRisk(riskRules(ss.policy), text, changed))
 	added := slices.DeleteFunc(slices.Clone(next.Required), func(id string) bool { return slices.Contains(st.risk.Required, id) })
-	raised := next.Level != st.risk.Level
+	// The first assessment sets the level; only a rule that matched is news.
+	raised := next.Level != st.risk.Level && len(next.Rules) > 0
 	st.risk = next
 	o.updateStory(st.si, func(r *StoryRun) { risk := next; r.Risk = &risk })
 	if len(added) == 0 && !raised {

@@ -109,4 +109,9 @@ func TestStoriesWithoutRiskRunTheFlowAsConfigured(t *testing.T) {
 	if r := run.Stories[0].Risk; r == nil || r.Level != workspace.RiskLow {
 		t.Errorf("risk = %+v", r)
 	}
+	for _, l := range run.Logs {
+		if strings.Contains(l.Message, "Risco ") {
+			t.Errorf("a story no rule matched logs its risk: %q", l.Message)
+		}
+	}
 }
