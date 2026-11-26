@@ -75,6 +75,9 @@ type Policy struct {
 	// RiskRules make stages mandatory for risky stories; see RiskRule. Nil
 	// uses DefaultRiskRules; an empty list turns them off.
 	RiskRules []RiskRule `json:"risk_rules"`
+	// SkipBaseline turns off running the project commands before each story
+	// (the baseline that tells new failures from preexisting ones).
+	SkipBaseline bool `json:"skip_baseline,omitempty"`
 }
 
 // DefaultEphemeralStacks match the usual name of an isolated E2E stack.

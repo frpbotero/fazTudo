@@ -35,6 +35,9 @@ type Issue struct {
 	// Infra marks a failure no code change can fix, such as a command that ran
 	// out of time: it goes to the report, never to an implementer.
 	Infra bool `json:"infra,omitempty"`
+	// Origin tells a failing command's issue against the story's baseline:
+	// "preexistente" (it already failed before the story) or "nova".
+	Origin string `json:"origin,omitempty"`
 	// Class, Fingerprints, Titles and Files identify the failure behind the
 	// issue. Only the orchestrator's own checks set them.
 	Class        string   `json:"class,omitempty"`
@@ -139,7 +142,7 @@ func readVerdict(output string, stages []Stage, plan Plan) (Verdict, string) {
 		if strings.TrimSpace(is.Description) == "" {
 			continue
 		}
-		is.Infra, is.Class, is.Fingerprints, is.Titles, is.Files = false, "", nil, nil, nil // not a model's to claim
+		is.Infra, is.Class, is.Fingerprints, is.Titles, is.Files, is.Origin = false, "", nil, nil, nil, "" // not a model's to claim
 		is.Agent = strings.ToLower(strings.TrimSpace(is.Agent))
 		if !isImplementer(stages, is.Agent) {
 			is.Agent = defaultImplementer(stages, plan)

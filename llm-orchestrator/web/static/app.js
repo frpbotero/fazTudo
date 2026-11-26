@@ -662,6 +662,7 @@ Critérios de aceitação:
       promote_unverified: el.qPromoteUnverified.checked,
       strict_commands: el.qStrictCommands.checked,
       risk_rules: snapshot?.workspace?.policy?.risk_rules,
+      skip_baseline: snapshot?.workspace?.policy?.skip_baseline,
     };
     try {
       await api('PUT', '/api/workspace/policy', policy);
@@ -1487,6 +1488,9 @@ Critérios de aceitação:
         ? `<span title="${esc((st.risk.reasons || []).join('\n'))}">${pill({ label: `Risco ${st.risk.level.replace('medio', 'médio').replace('critico', 'crítico')}`, tone: st.risk.level === 'medio' ? 'neutral' : 'warn' })}</span>`
         : '',
       INTEGRATION[st.integration] ? `<span title="${esc(st.integration_note || '')}">${pill(INTEGRATION[st.integration])}</span>` : '',
+      st.baseline && Object.keys(st.baseline.failing || {}).length
+        ? `<span title="${esc(`Já falhavam antes da US: ${Object.keys(st.baseline.failing).join(', ')}`)}">${pill({ label: 'Falhas preexistentes', tone: 'warn' })}</span>`
+        : '',
       st.branch ? `<code>${esc(st.branch)}</code>` : '',
       st.depends_on?.length ? `<span>Depende de ${esc(st.depends_on.join(', '))}</span>` : '',
       time,
