@@ -169,6 +169,13 @@ correção que amplia o escopo pode exigir mais etapas, nunca menos. Nem o arqui
 não chega a um resultado deixa a validação da US *inconclusiva*. Lista vazia (`"risk_rules": []`)
 desliga as regras.
 
+**Linha de base.** Antes de qualquer agente mudar o código, os comandos do projeto rodam no snapshot em
+que a US começa (US da mesma onda, no mesmo commit, compartilham a mesma). Na verificação, cada
+falha vem marcada como **nova** (passava antes) ou **preexistente** (já falhava, com as mesmas
+falhas). Falha preexistente continua bloqueando a entrega; a marca só diz a quem corrige e a quem
+revisa que ela não foi introduzida pela US. Comando sem resultado na linha de base (tempo esgotado,
+ou não rodou porque uma camada anterior falhou) fica sem marca. `skip_baseline` desliga.
+
 **Pendências.** Ao fim de toda execução real, o que ficou sem solução é gravado em
 `~/.config/faztudo/pendencias/<repo>-<hash>.md` (fora do repositório, para não contar como alteração
 pendente). Veja o [README da raiz](../README.md).

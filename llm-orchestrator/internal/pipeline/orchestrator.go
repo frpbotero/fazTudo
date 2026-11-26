@@ -128,6 +128,9 @@ type StoryRun struct {
 	// Risk is what the policy's risk rules found: level, reasons and the
 	// stages they made mandatory.
 	Risk *workspace.Risk `json:"risk,omitempty"`
+	// Baseline is how the project commands behaved on the story's starting
+	// snapshot.
+	Baseline *Baseline `json:"baseline,omitempty"`
 	// Integration is whether the story entered the base branch; the note
 	// says why it was kept out.
 	Integration     Integration `json:"integration,omitempty"`
@@ -240,12 +243,16 @@ func (o *Orchestrator) preflight(opts StartOptions) ([]string, error) {
 
 // Orchestrator runs one pipeline at a time and notifies observers on change.
 type Orchestrator struct {
-	exec     Executor
-	ws       *workspace.Manager
-	stages   []Stage
-	onChange func()
-	logger   *slog.Logger
-	runCheck func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
+	// baselines caches the baselines by commit and commands, so the stories
+	// of a wave starting from the same commit share one.
+	baselines  sync.Map
+	baselineMu sync.Mutex
+	exec       Executor
+	ws         *workspace.Manager
+	stages     []Stage
+	onChange   func()
+	logger     *slog.Logger
+	runCheck   func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
 	// sweepStacks and lockStackSlot keep disposable test stacks in check.
 	sweepStacks   func(ctx context.Context, roots, patterns []string) ([]string, error)
 	lockStackSlot func(ctx context.Context, onWait func()) (func(), error)
@@ -652,9 +659,11 @@ type storyState struct {
 	// inconclusive counts gates that never produced a valid verdict.
 	inconclusive int
 	// risk is what the policy's risk rules found so far; it only grows.
-	risk    workspace.Risk
-	red     []string // commands that failed last, retried first
-	skipped bool     // the last assessment left costlier commands out
+	risk workspace.Risk
+	// baseline is how the commands behaved before the story changed anything.
+	baseline *Baseline
+	red      []string // commands that failed last, retried first
+	skipped  bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -850,6 +859,7 @@ func (o *Orchestrator) restoreStoryState(si int, started time.Time, opts StartOp
 	if runStory.Risk != nil {
 		st.risk = *runStory.Risk
 	}
+	st.baseline = runStory.Baseline
 	if runStory.Plan != nil {
 		st.plan = *runStory.Plan
 	}
@@ -966,6 +976,9 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		}
 	}
 
+	if startAt == 0 && !o.takeBaseline(ctx, ss, st) {
+		return false
+	}
 	o.planAudit(ss, st)
 	o.assessStoryRisk(ss, st, nil)
 	streamed := false

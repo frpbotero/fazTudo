@@ -280,6 +280,12 @@ func (o *Orchestrator) commandFailure(ss *session, st *storyState, c quality.Com
 	}
 	is.Agent = o.assignFailure(ss, c, failures, st.plan)
 	is.Fingerprints = quality.Fingerprints(failures)
+	switch is.Origin = st.baseline.failureOrigin(c.Name, is.Fingerprints); is.Origin {
+	case originPreexisting:
+		is.Description = "[Falha preexistente: já falhava antes da US; ainda bloqueia a entrega] " + is.Description
+	case originNew:
+		is.Description = "[Falha nova: introduzida nesta US] " + is.Description
+	}
 	is.Class = classBuild
 	for _, f := range failures {
 		if !f.Compile {

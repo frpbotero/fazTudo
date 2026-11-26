@@ -38,6 +38,8 @@ func newVerifierTest(t *testing.T, exec *fakeExecutor, check func(n int) quality
 	policy.AutoChecks = false
 	policy.Git = false
 	policy.Checks = []quality.Command{{Name: "unit", Run: "npm test"}}
+	// These tests script each command call; baselines have their own tests.
+	policy.SkipBaseline = true
 	if _, err := ws.SetPolicy(policy); err != nil {
 		t.Fatal(err)
 	}
