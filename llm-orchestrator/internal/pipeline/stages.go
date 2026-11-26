@@ -401,6 +401,20 @@ func buildDiscoveryPrompt(task, repo string, stacks []workspace.Stack, graph, in
 	return b.String()
 }
 
+// buildIncrementalDiscoveryPrompt turns a full discovery prompt into an
+// update of the previous report: the agent reads only what changed.
+func buildIncrementalDiscoveryPrompt(full, previous string, changes []workspace.FileChange) string {
+	var b strings.Builder
+	b.WriteString(full)
+	fmt.Fprintf(&b, "\n\n## Atualização incremental\n\nJá existe um discovery deste repositório:\n\n%s\n\n", clip(strings.TrimSpace(previous), maxArtifactBytes))
+	b.WriteString("Desde então, mudaram estes arquivos de manifesto, dependência, instrução, contrato ou arquitetura:\n\n")
+	for _, c := range changes {
+		fmt.Fprintf(&b, "- `%s` (%s)\n", c.Path, c.Change)
+	}
+	b.WriteString("\nLeia só esses arquivos e o que eles afetarem. Mantenha o que continua valendo, corrija o que mudou e devolva o discovery completo atualizado, no mesmo formato.")
+	return b.String()
+}
+
 // writeGraph points agents at the code graph, cheaper than reading files to
 // find where something lives or what a change affects.
 func writeGraph(b *strings.Builder, graph string) {

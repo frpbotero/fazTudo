@@ -402,3 +402,67 @@ func TestRunRefusedWhileAnotherWindowHoldsTheRepository(t *testing.T) {
 	}
 	unlock()
 }
+
+func TestDiscoveryFollowsTheFilesItDependsOn(t *testing.T) {
+	exec := &fakeExecutor{}
+	o, repo := newTest(t, exec)
+	policy := o.ws.Policy()
+	policy.Git = false
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, repo, "package.json", `{"name":"loja"}`)
+	writeFile(t, repo, "src/app.ts", "v1")
+	discoveries := func() []provider.Request {
+		var out []provider.Request
+		for _, r := range exec.reqs {
+			if r.Role == DiscoveryStage.Role {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+
+	_ = o.Start(one(false))
+	waitDone(t, o)
+	if d := o.ws.Discovery(); d == nil || d.Fingerprint == nil || d.Origin != workspace.OriginFull {
+		t.Fatalf("first discovery = %+v", d)
+	}
+
+	writeFile(t, repo, "src/app.ts", "v2") // code only: still valid
+	_ = o.Start(one(false))
+	run := waitDone(t, o)
+	if len(discoveries()) != 1 || run.Discovery.Status != StepSkipped {
+		t.Fatalf("a code change must keep the discovery: %d calls, %+v", len(discoveries()), run.Discovery)
+	}
+
+	writeFile(t, repo, "package.json", `{"name":"loja","dependencies":{"react":"19"}}`)
+	_ = o.Start(one(false))
+	waitDone(t, o)
+	calls := discoveries()
+	if len(calls) != 2 || !strings.Contains(calls[1].Prompt, "Atualização incremental") || !strings.Contains(calls[1].Prompt, "`package.json` (alterado)") {
+		t.Fatalf("a changed manifest must update the discovery incrementally: %d calls", len(calls))
+	}
+	if d := o.ws.Discovery(); d.Origin != workspace.OriginIncremental || !strings.Contains(d.Reason, "package.json") {
+		t.Errorf("report = %s %q", d.Origin, d.Reason)
+	}
+}
+
+func TestOldOrSimulatedDiscoveryIsRemadeForARealRun(t *testing.T) {
+	exec := &fakeExecutor{}
+	o, repo := newTest(t, exec)
+	policy := o.ws.Policy()
+	policy.Git = false
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	o.ws.Store(workspace.Report{Path: repo, Summary: "antigo", CreatedAt: time.Now()}) // older version: no fingerprint
+	_ = o.Start(one(false))
+	waitDone(t, o)
+	if exec.count(DiscoveryStage.Role) != 1 {
+		t.Fatal("a report without fingerprint must be remade")
+	}
+	if d := o.ws.Discovery(); d.Origin != workspace.OriginFull {
+		t.Errorf("without a trusted previous report the update is full: %s", d.Origin)
+	}
+}
