@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Atualiza as skills de addyosmani/agent-skills embutidas em internal/skills/bundle.
 # Uso: scripts/update-skills.sh [commit]   (sem argumento: o commit fixado abaixo)
-# As skills próprias do FazTudo (ex.: structural-health) não são tocadas.
+# As skills próprias do FazTudo (structural-health, story-readiness, change-impact, safe-migrations,
+# test-quality, functional-acceptance) e os perfis em bundle/profiles não são tocados.
+# Depois de atualizar: compare a avaliação e rode UPDATE_GOLDEN=1 go test ./internal/skills.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

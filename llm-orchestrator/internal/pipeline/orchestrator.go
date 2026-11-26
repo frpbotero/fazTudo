@@ -107,10 +107,12 @@ type Step struct {
 	// Candidates are the alternatives compared by best-of-N.
 	Candidates []Candidate `json:"candidates,omitempty"`
 	// Commit records the changes the step made, when git is enabled.
-	Commit     *vcs.Commit `json:"commit,omitempty"`
-	Error      string      `json:"error,omitempty"`
-	StartedAt  *time.Time  `json:"started_at,omitempty"`
-	DurationMS int64       `json:"duration_ms,omitempty"`
+	Commit *vcs.Commit `json:"commit,omitempty"`
+	// Calls record what each agent call of the step ran with.
+	Calls      []CallRecord `json:"calls,omitempty"`
+	Error      string       `json:"error,omitempty"`
+	StartedAt  *time.Time   `json:"started_at,omitempty"`
+	DurationMS int64        `json:"duration_ms,omitempty"`
 }
 
 // LogEntry is a structured event shown in the UI console.
@@ -271,12 +273,14 @@ type Orchestrator struct {
 	// of a wave starting from the same commit share one.
 	baselines  sync.Map
 	baselineMu sync.Mutex
-	exec       Executor
-	ws         *workspace.Manager
-	stages     []Stage
-	onChange   func()
-	logger     *slog.Logger
-	runCheck   func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
+	// skillOverrides are the run's repository complements to the skills.
+	skillOverrides map[string]SkillOverride
+	exec           Executor
+	ws             *workspace.Manager
+	stages         []Stage
+	onChange       func()
+	logger         *slog.Logger
+	runCheck       func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
 	// sweepStacks and lockStackSlot keep disposable test stacks in check.
 	sweepStacks   func(ctx context.Context, roots, patterns []string) ([]string, error)
 	lockStackSlot func(ctx context.Context, onWait func()) (func(), error)
@@ -913,7 +917,7 @@ func (o *Orchestrator) basesOfRun(policy workspace.Policy) map[string]string {
 // protectedPatterns adds the loaded story document to the policy's
 // protected patterns.
 func protectedPatterns(policy workspace.Policy, opts StartOptions) []string {
-	patterns := policy.Protected
+	patterns := append(slices.Clone(policy.Protected), overridePattern)
 	if name := path.Base(filepath.ToSlash(strings.TrimSpace(opts.DocumentName))); name != "." && name != "/" {
 		patterns = append(slices.Clone(patterns), name)
 	}
@@ -958,6 +962,17 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 	o.useLimits(policy, ss.checks)
 	if ss.instructions != "" {
 		o.logf(LevelInfo, "Instruções do projeto (AGENTS.md/CLAUDE.md/Spec Kit) repassadas a todos os agentes.")
+	}
+
+	overrides := projectOverrides(repo)
+	o.mu.Lock()
+	o.skillOverrides = overrides
+	o.mu.Unlock()
+	for name, ov := range overrides {
+		o.logf(LevelInfo, "Skill %s com complemento do projeto: %s (sha256 %s).", name, ov.Path, short(ov.Hash))
+	}
+	for _, p := range policy.Profiles {
+		o.logf(LevelInfo, "Perfil de stack %s escolhido na política.", p)
 	}
 
 	ss.patterns = protectedPatterns(policy, opts)
@@ -1854,6 +1869,7 @@ func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.R
 		return nil, false
 	}
 	o.recordDone(ref, resp, elapsed)
+	o.recordCall(ref, req, resp)
 	o.markTurnLimited(ref, resp, o.limited(req).MaxTurns)
 	return resp, true
 }

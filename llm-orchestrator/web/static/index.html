@@ -471,6 +471,12 @@
       </fieldset>
 
       <div class="field">
+        <label for="qProfiles">Perfis de stack</label>
+        <input type="text" id="qProfiles" autocomplete="off" spellcheck="false" placeholder="go, angular-nestjs-postgres">
+        <p class="note" id="qProfilesNote">Convenções da stack para implementadores e revisores. Opcionais: só valem os listados aqui.</p>
+      </div>
+
+      <div class="field">
         <label for="qMigrationChecks">Comandos de migration</label>
         <textarea id="qMigrationChecks" rows="2" spellcheck="false" placeholder="migrate: make db-reset db-up db-check db-down db-up"></textarea>
         <p class="note">Rodam quando o plano tem migration ou a política de risco pede: num banco descartável, aplicar, conferir integridade, reverter ou recuperar e aplicar de novo. Sem eles, a verificação das migrations fica inconclusiva.</p>

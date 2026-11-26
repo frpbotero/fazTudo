@@ -116,7 +116,7 @@ var reviewLenses = []Lens{
 		ID:     "tests",
 		Title:  "Testes",
 		Focus:  "Cada critério e caso de teste da especificação coberto, com ID no nome? Expectativa contrária à especificação, teste frágil ou vazio.",
-		Skills: []string{"test-driven-development"},
+		Skills: []string{"test-driven-development", "test-quality"},
 	},
 	{
 		ID:       "ux",
@@ -273,6 +273,7 @@ var DefaultStages = []Stage{
 		Assessor: true,
 		ReadOnly: true,
 		Inputs:   []string{},
+		Skills:   []string{"story-readiness"},
 		System:   "Verifica o que o repositório já implementa antes de qualquer mudança. Só leitura.",
 		Task: "Relatório curto:\n" +
 			"1. Busque entidades, módulos, rotas, migrations e testes com o nome do domínio da US.\n" +
@@ -326,7 +327,7 @@ var DefaultStages = []Stage{
 			"2. Mapeie as atividades e quais podem rodar em paralelo: frentes com arquivos disjuntos e sem depender do código da outra.\n" +
 			"3. Por frente: agente, o que faz, arquivos, dependências.\n" +
 			"4. Documentação necessária (cliente final ou mantenedor)? Se sim, inclua docs.",
-		Skills: []string{"planning-and-task-breakdown", "api-and-interface-design"},
+		Skills: []string{"planning-and-task-breakdown", "api-and-interface-design", "change-impact"},
 		Inputs: []string{"context", "spec"},
 	},
 	{
@@ -359,6 +360,7 @@ var DefaultStages = []Stage{
 		Task: "Para cada migration: compatibilidade com o código em produção durante o deploy (expandir e contrair), integridade " +
 			"(constraints, dados existentes, nulos), volume e bloqueio de tabela, e como reverter ou recuperar. " +
 			"Requisito com a verificação que o runner faz em banco descartável (aplicar, conferir, reverter, aplicar de novo).",
+		Skills: []string{"safe-migrations"},
 	},
 	{
 		ID:          "frontend",
@@ -448,7 +450,7 @@ var DefaultStages = []Stage{
 			"4. Robustez: entrada validada, erro tratado, sem duplicação.\n" +
 			"5. Interface: acessível, responsiva, nada cobrindo controle.\n" +
 			"6. Estrutura: modo revisão da skill `structural-health` (arquivos desta US e quem depende deles).",
-		Skills: []string{"code-review-and-quality", "code-simplification", "structural-health"},
+		Skills: []string{"code-review-and-quality", "code-simplification", "structural-health", "test-quality"},
 		Inputs: reviewInputs,
 	},
 	{
@@ -477,6 +479,7 @@ var DefaultStages = []Stage{
 			"aceito, recusado ou sem evidência, citando o caso executado que comprova (ID em tests) ou, para inspeção, arquivo:linha. " +
 			"Regra de negócio sem caso que a exercite é sem evidência. Cenário que a implementação não atende é recusado, com a correção.",
 		Inputs: []string{"context", "spec", "arch", "e2e"},
+		Skills: []string{"functional-acceptance"},
 	},
 	{
 		ID:         "docs",
@@ -566,6 +569,10 @@ type storyContext struct {
 	AuditNotice string
 	// Evidence is what the runner proved, given to the functional QA only.
 	Evidence string
+	// Profiles are the stack profiles the repository chose; Overrides the
+	// project's own complements to bundled skills.
+	Profiles  []string
+	Overrides map[string]SkillOverride
 	// PortBase starts the port range of a story run beside others; 0 alone.
 	PortBase int
 	// Answers are the user's answers to the product decisions the story left
@@ -629,7 +636,7 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 		}
 	}
 	b.WriteString(sc.Evidence)
-	writeSkills(&b, stage.Skills)
+	writeSkillsFor(&b, stage.Skills, sc)
 	b.WriteString("## Sua tarefa\n\n")
 	b.WriteString(stage.Task)
 	b.WriteString(stageInstructions(stage))
@@ -750,12 +757,29 @@ var skillsDir = func() string {
 // writeSkills points the agent at the playbooks of its task. They are files,
 // not CLI skills, so every CLI reads them the same way and Claude keeps
 // --safe-mode; the router grants read access to skillsDir.
-func writeSkills(b *strings.Builder, names []string) {
+func writeSkills(b *strings.Builder, names []string) { writeSkillsFor(b, names, storyContext{}) }
+
+// writeSkillsFor lists the playbooks to read, each with the project's
+// complement when it has one, and the stack profiles the repository chose.
+// A complement adds to the playbook; it cannot lower what the playbook,
+// the policy or the permissions require.
+func writeSkillsFor(b *strings.Builder, names []string, sc storyContext) {
 	dir := skillsDir()
 	var lines []string
+	complemented := false
 	for _, n := range names {
-		if dir != "" && skills.Has(n) {
-			lines = append(lines, fmt.Sprintf("- `%s`: `%s`\n", n, skills.File(dir, n)))
+		if dir == "" || !skills.Has(n) {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- `%s`: `%s`\n", n, skills.File(dir, n)))
+		if o, ok := sc.Overrides[n]; ok {
+			lines = append(lines, fmt.Sprintf("  - complemento do projeto: `%s`\n", o.Path))
+			complemented = true
+		}
+	}
+	for _, p := range sc.Profiles {
+		if dir != "" && skills.HasProfile(p) {
+			lines = append(lines, fmt.Sprintf("- perfil de stack `%s`: `%s`\n", p, skills.ProfileFile(dir, p)))
 		}
 	}
 	if len(lines) == 0 {
@@ -763,6 +787,9 @@ func writeSkills(b *strings.Builder, names []string) {
 	}
 	b.WriteString("## Skills\n\nLeia antes de começar e siga o que se aplica à tarefa (só leitura):\n")
 	b.WriteString(strings.Join(lines, ""))
+	if complemented {
+		b.WriteString("Complemento do projeto acrescenta convenções; não reduz o que a skill, a política ou as permissões exigem.\n")
+	}
 	b.WriteString("Caminhos citados dentro delas são relativos ao próprio SKILL.md. Saída final continua no formato pedido abaixo.\n\n")
 }
 
@@ -805,7 +832,7 @@ func buildFixPrompt(task string, gate Stage, sc storyContext, discovery *workspa
 	if report = strings.TrimSpace(stripJSONBlocks(report)); report != "" {
 		fmt.Fprintf(&b, "## Relatório de %s (rodada %d)\n\n%s\n\n", gate.Title, round, clip(report, maxArtifactBytes))
 	}
-	writeSkills(&b, fixSkills)
+	writeSkillsFor(&b, fixSkills, sc)
 	if brief != "" {
 		b.WriteString(brief)
 	}
@@ -830,7 +857,7 @@ func buildVerifyPrompt(task string, gate Stage, sc storyContext, discovery *work
 		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), maxArtifactBytes))
 	}
 	b.WriteString(sc.Evidence)
-	writeSkills(&b, gate.Skills)
+	writeSkillsFor(&b, gate.Skills, sc)
 	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação, rodada %d: %s %s", round, task, gate.Task)
 	b.WriteString(stageInstructions(gate))
 	return b.String()

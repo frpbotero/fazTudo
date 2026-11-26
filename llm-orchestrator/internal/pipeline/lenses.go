@@ -34,14 +34,18 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := o.executeRetrying(ctx, ref, provider.Request{
+			req := provider.Request{
 				Role:     stage.Role + " · " + l.Title,
 				System:   stage.System,
 				Prompt:   buildPrompt(lensStage(stage, l), st.sc, ss.report, previous) + lensFocus(l),
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
-			})
+			}
+			resp, err := o.executeRetrying(ctx, ref, req)
+			if err == nil {
+				o.recordCall(ref, req, resp)
+			}
 			results[i] = result{resp, err}
 		}()
 	}
