@@ -344,6 +344,20 @@ func (o *Orchestrator) mergeIntoBase(ctx context.Context, ss *session, label str
 	if from == "" || from == ss.bases["."] {
 		return true
 	}
+	sha, _ := ss.git.Rev(ctx, from)
+	key := operationKey("merge-base", sha, ss.bases["."])
+	if op, done := o.operationDone(key); done || (sha != "" && ss.git.IsAncestor(ctx, sha, ss.bases["."])) {
+		// A resumed run finds the merge made before the interruption.
+		if err := ss.git.SwitchBranches(ctx, ss.bases); err != nil {
+			o.failRun(fmt.Errorf("voltar para a branch base: %w", err))
+			return false
+		}
+		if !done {
+			o.recordOperation(Operation{Key: key, Kind: "merge-base", Target: ss.bases["."], Result: sha})
+		}
+		o.logf(LevelInfo, "%s já estava na branch base (%s); merge não repetido.", label, cmpOrString(op.Result, short(sha)))
+		return true
+	}
 	conflicts, err := ss.git.MergeIntoBases(ctx, from, fmt.Sprintf("faztudo: integra %s na base", label), ss.bases)
 	if err != nil {
 		if len(conflicts) == 0 {
@@ -354,6 +368,7 @@ func (o *Orchestrator) mergeIntoBase(ctx context.Context, ss *session, label str
 		o.failRun(err)
 		return false
 	}
+	o.recordOperation(Operation{Key: key, Kind: "merge-base", Target: ss.bases["."], Result: sha})
 	o.logf(LevelSuccess, "%s integrada na branch base (%s).", label, baseLabels(ctx, ss.git))
 	return true
 }
@@ -662,6 +677,10 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 func (o *Orchestrator) mergeStory(ctx context.Context, ss *session, opts StartOptions, si int) bool {
 	branch, story := o.storyBranch(si), opts.Stories[si]
 	if branch == "" {
+		return true
+	}
+	if sha, err := ss.git.Rev(ctx, branch); err == nil && ss.git.IsAncestor(ctx, sha, "HEAD") {
+		o.logf(LevelInfo, "%s já estava integrada; merge não repetido.", story.Title)
 		return true
 	}
 	conflicts, err := ss.git.StartMerge(ctx, branch, fmt.Sprintf("faztudo: integra %s", storyLabel(story)))

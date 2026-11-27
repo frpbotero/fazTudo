@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +25,8 @@ type ResumePoint struct {
 // outputs (the architect's plan included), branches, waves, logs and the
 // options it started with, enough to continue it after the app restarts.
 type journal struct {
+	// Schema is journalSchema when saved; older journals have none.
+	Schema  int          `json:"schema,omitempty"`
 	Run     Run          `json:"run"`
 	Options StartOptions `json:"options"`
 	SavedAt time.Time    `json:"saved_at"`
@@ -138,7 +141,7 @@ func (o *Orchestrator) writeJournal() {
 	if dir == "" || !isOwner || repo == "" {
 		return
 	}
-	data, err := json.Marshal(journal{Run: o.Snapshot(), Options: opts, SavedAt: time.Now()})
+	data, err := json.Marshal(journal{Schema: journalSchema, Run: o.Snapshot(), Options: opts, SavedAt: time.Now()})
 	if err != nil {
 		return
 	}
@@ -150,7 +153,7 @@ func (o *Orchestrator) writeJournal() {
 	}
 	file := journalFile(dir, repo)
 	tmp := file + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		o.logger.Warn("journal da execução não salvo", "err", err)
 		return
 	}
@@ -171,8 +174,20 @@ func (o *Orchestrator) loadJournalLocked(repo string) {
 		return
 	}
 	var j journal
-	if json.Unmarshal(data, &j) != nil || j.Run.Repository != repo {
+	if err := json.Unmarshal(data, &j); err != nil || j.Run.Repository != repo {
+		if err != nil {
+			o.logger.Warn("journal da execução ilegível; ignorado", "file", journalFile(o.journalDir, repo), "err", err)
+		}
 		return
+	}
+	if j.Schema < journalSchema {
+		// Kept as it was, in case the migration loses something; the next save
+		// writes the current schema.
+		backup := fmt.Sprintf("%s.v%d.bak", journalFile(o.journalDir, repo), j.Schema)
+		if _, err := os.Stat(backup); os.IsNotExist(err) {
+			_ = os.WriteFile(backup, data, 0o600)
+		}
+		j.Run.Manifest = nil
 	}
 	skipUnusedAnalysis(&j.Run)
 	if j.Run.Running {

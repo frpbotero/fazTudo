@@ -150,6 +150,9 @@ type StoryRun struct {
 	ChangeReason string `json:"change_reason,omitempty"`
 	// StartCommit is the snapshot the story started from.
 	StartCommit string `json:"start_commit,omitempty"`
+	// Head is the last commit the run made on the story's branch: a resume
+	// that finds the branch elsewhere knows its results judged other code.
+	Head string `json:"head,omitempty"`
 	// Reproduction is a bug fix's proof that its tests fail before the fix.
 	Reproduction *Reproduction `json:"reproduction,omitempty"`
 	// Acceptance is the functional QA's judgment of each scenario.
@@ -205,9 +208,15 @@ type Run struct {
 	Integrations []string `json:"integrations,omitempty"`
 	// Promotions are the decisions on merging candidates into the base.
 	Promotions []Promotion `json:"promotions,omitempty"`
-	Stories    []StoryRun  `json:"stories"`
-	Current    int         `json:"current"` // index into Stories; -1 while discovering
-	Logs       []LogEntry  `json:"logs"`
+	// Manifest is what the run was made of; Operations the side effects it
+	// already performed, so a resume does not repeat them.
+	Manifest   *RunManifest `json:"manifest,omitempty"`
+	Operations []Operation  `json:"operations,omitempty"`
+	// ResumeChecks are why the last resume redid what it redid.
+	ResumeChecks []Invalidation `json:"resume_checks,omitempty"`
+	Stories      []StoryRun     `json:"stories"`
+	Current      int            `json:"current"` // index into Stories; -1 while discovering
+	Logs         []LogEntry     `json:"logs"`
 	// Bases are the branches each repository started from (keyed "." and by
 	// nested path); every wave is merged into them before the next begins.
 	Bases map[string]string `json:"bases,omitempty"`
@@ -277,12 +286,14 @@ type Orchestrator struct {
 	baselineMu sync.Mutex
 	// skillOverrides are the run's repository complements to the skills.
 	skillOverrides map[string]SkillOverride
-	exec           Executor
-	ws             *workspace.Manager
-	stages         []Stage
-	onChange       func()
-	logger         *slog.Logger
-	runCheck       func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
+	// appVersion goes into every run's manifest.
+	appVersion string
+	exec       Executor
+	ws         *workspace.Manager
+	stages     []Stage
+	onChange   func()
+	logger     *slog.Logger
+	runCheck   func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
 	// sweepStacks and lockStackSlot keep disposable test stacks in check.
 	sweepStacks   func(ctx context.Context, roots, patterns []string) ([]string, error)
 	lockStackSlot func(ctx context.Context, onWait func()) (func(), error)
@@ -411,6 +422,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 	if err != nil {
 		return err
 	}
+	manifest := o.buildManifest(context.Background(), opts)
 	o.mu.Lock()
 	if o.busyLocked() {
 		o.mu.Unlock()
@@ -448,6 +460,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		Discovery:  newStep(DiscoveryStage),
 		Stories:    runs,
 		Current:    -1,
+		Manifest:   &manifest,
 	}
 	if len(runs) > 1 {
 		analysis := newStep(AnalysisStage)
@@ -484,6 +497,13 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 // Completed stages before it are kept as context; generated fix/verify steps
 // from that stage onward are discarded and will be rebuilt by the gate.
 func (o *Orchestrator) RetryFailed(story int, stepID string) error {
+	o.mu.RLock()
+	last := o.last
+	o.mu.RUnlock()
+	var cur RunManifest
+	if len(last.Stories) > 0 {
+		cur = o.buildManifest(context.Background(), last)
+	}
 	o.mu.Lock()
 	if o.busyLocked() {
 		o.mu.Unlock()
@@ -514,6 +534,17 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 		o.mu.Unlock()
 		return ErrNoFailedStep
 	}
+	// Results saved before the stop hold only while what they depend on did.
+	invs := o.invalidations(o.run.Manifest, cur, story)
+	if why, moved := branchMoved(context.Background(), o.ws.Path(), o.run.Stories[story]); moved && !o.run.DryRun {
+		if at := slices.IndexFunc(o.stages, func(s Stage) bool { return s.Verifier }); at >= 0 {
+			invs = append(invs, Invalidation{Reason: why, From: at, Stage: o.stages[at].ID})
+		}
+	}
+	requested := stageAt
+	stageAt = earliest(stageAt, invs)
+	o.run.ResumeChecks = invs
+	o.run.Manifest = &cur
 
 	unlock, err := workspace.LockRepository(o.ws.Path())
 	if err != nil {
@@ -574,6 +605,12 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	o.mu.Unlock()
 	o.notify()
 	o.logCustomPrompts(customized)
+	for _, inv := range invs {
+		o.logf(LevelWarn, "Retomada: %s; refazendo a partir de %s.", inv.Reason, o.stages[inv.From].Title)
+	}
+	if stageAt < requested {
+		o.logf(LevelInfo, "Resultados salvos antes de %s continuam valendo; os seguintes são refeitos.", o.stages[stageAt].Title)
+	}
 	o.logf(LevelInfo, "Refazendo %q a partir de %s.", previous.Title, o.stages[stageAt].Title)
 
 	go func() {
@@ -1374,6 +1411,9 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 		o.updateStep(ref, func(s *Step) { s.Commit = c })
 		o.logf(LevelInfo, "Commit %s: %s (%d arquivo(s)).", c.Hash, title, len(c.Files))
 	}
+	if head, err := ss.git.Head(ctx); err == nil && ref.story >= 0 {
+		o.updateStory(ref.story, func(r *StoryRun) { r.Head = head })
+	}
 	return true
 }
 
@@ -1980,6 +2020,7 @@ func (o *Orchestrator) finish(result Result, level, msg string) {
 	o.run.Result = result
 	o.run.FinishedAt = &now
 	o.mu.Unlock()
+	o.captureHeads()
 	o.writePendencies(o.Snapshot())
 	o.logf(level, "%s", msg)
 	o.logger.Info("pipeline finished", "result", result)
@@ -2144,5 +2185,33 @@ func (o *Orchestrator) notify() {
 	o.requestJournalSave()
 	if o.onChange != nil {
 		o.onChange()
+	}
+}
+
+// captureHeads records where each story's branch stands when the run ends,
+// so a resume can tell commits made outside the run.
+func (o *Orchestrator) captureHeads() {
+	o.mu.RLock()
+	repo, dry := o.run.Repository, o.run.DryRun
+	branches := make([]string, len(o.run.Stories))
+	for i, st := range o.run.Stories {
+		branches[i] = st.Branch
+	}
+	o.mu.RUnlock()
+	if dry || repo == "" {
+		return
+	}
+	ctx := context.Background()
+	g, _, err := vcs.Open(ctx, repo)
+	if err != nil || g == nil {
+		return
+	}
+	for i, b := range branches {
+		if b == "" {
+			continue
+		}
+		if head, err := g.Rev(ctx, b); err == nil {
+			o.updateStory(i, func(r *StoryRun) { r.Head = head })
+		}
 	}
 }
