@@ -30,6 +30,12 @@ type evaluation struct {
 	inconclusive bool
 	// advice are the issues proportional moved out of the demands.
 	advice []Issue
+	// scenarios are the functional QA's answers as given and qaVerdict its
+	// verdict before the evidence was applied; missing are the planned
+	// scenarios it left out.
+	scenarios []ScenarioResult
+	qaVerdict Verdict
+	missing   []AcceptanceScenario
 }
 
 // maxFormatRecoveries bounds how many times a gate is asked again, only for
@@ -86,6 +92,12 @@ func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storySt
 				return true
 			}
 			return o.inconclusiveGate(st, stepID, gate, ev.problem)
+		}
+		for try := 1; gate.Acceptor && len(ev.missing) > 0 && !ev.simulated && try <= maxFormatRecoveries; try++ {
+			var alive bool
+			if ev, stepID, alive = o.recoverScenarios(ctx, ss, st, gate, base, stepID, ev, try); !alive {
+				return false
+			}
 		}
 		verdict := ev.verdict
 		o.updateStep(stepRef{st.si, stepID}, func(s *Step) {

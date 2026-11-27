@@ -44,6 +44,9 @@ type Impact struct {
 
 // AcceptanceScenario ties a criterion to a scenario and how it is proven.
 type AcceptanceScenario struct {
+	// ID (AC-1, AC-2, …) is given by the orchestrator, in plan order, so QA
+	// can name the scenario it judged whatever words it uses.
+	ID        string `json:"id,omitempty"`
 	Criterion string `json:"criterion"`
 	Scenario  string `json:"scenario"`
 	Method    string `json:"method,omitempty"` // e.g. "teste unitário", "e2e", "inspeção"
@@ -209,7 +212,16 @@ func cleanAcceptance(in []AcceptanceScenario) []AcceptanceScenario {
 			out = append(out, a)
 		}
 	}
+	numberScenarios(out)
 	return out
+}
+
+// numberScenarios gives each planned scenario its ID by position; whatever
+// ID the architect wrote is replaced.
+func numberScenarios(list []AcceptanceScenario) {
+	for i := range list {
+		list[i].ID = fmt.Sprintf("AC-%d", i+1)
+	}
 }
 
 func cleanNonFunctional(in []NonFunctional) []NonFunctional {

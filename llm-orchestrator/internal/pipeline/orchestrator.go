@@ -797,6 +797,9 @@ func (o *Orchestrator) restoreStoryState(si int, started time.Time, opts StartOp
 	st.startCommit, st.repro = runStory.StartCommit, runStory.Reproduction
 	if runStory.Plan != nil {
 		st.plan = *runStory.Plan
+		// A plan saved before scenarios had IDs gets them as a new one would.
+		st.plan.Acceptance = slices.Clone(st.plan.Acceptance)
+		numberScenarios(st.plan.Acceptance)
 	}
 	steps := slices.Clone(runStory.Steps)
 	o.mu.RUnlock()

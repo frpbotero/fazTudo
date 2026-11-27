@@ -49,7 +49,7 @@ window.FazTudoEvidence = ({ esc }) => {
         <summary>Aceitação funcional: ${accepted} de ${list.length} cenário(s) aceito(s)</summary>
         <table>${list.map((a) => `
           <tr>
-            <td>${esc(a.criterion)}${a.negative ? ' <span class="note">(negativo)</span>' : ''}<br><span class="note">${esc(a.scenario || '')}</span></td>
+            <td>${a.id ? `<code>${esc(a.id)}</code> ` : ''}${esc(a.criterion)}${a.negative ? ' <span class="note">(negativo)</span>' : ''}<br><span class="note">${esc(a.scenario || '')}</span></td>
             <td><span class="note" data-tone="${SCENARIO_TONE[a.status] || ''}">${esc(a.status)}</span></td>
             <td>${(a.tests || []).map((t) => `<code>${esc(t)}</code>`).join(' ')} ${esc(a.evidence || '')}
               ${a.note ? `<br><span class="note">${esc(a.note)}</span>` : ''}

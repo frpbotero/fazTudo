@@ -268,8 +268,13 @@ interpreta, sem substituí-la:
   `arquivo:linha`, e o QA fica como responsável;
 - caso citado que falhou torna o cenário **recusado**, que volta para o implementador mesmo que o QA
   tenha aprovado;
-- aceito sem essa evidência, ou cenário do plano que o QA não avaliou, fica **sem evidência**: a
-  validação da US fica inconclusiva;
+- cada cenário do plano tem um ID (`AC-1`, `AC-2`, …) dado pelo orquestrador, e o QA responde por ele:
+  reescrever o critério com outras palavras não desfaz a ligação. Sem ID, vale o texto (a numeração que o
+  QA acrescenta é ignorada); cenário com ID que o plano não tem aparece como **fora do plano**;
+- cenário do plano que o QA não avaliou é pedido de novo, só ele, em leitura (até 2 vezes, cada uma uma
+  etapa *cenários faltantes*);
+- aceito sem essa evidência, ou cenário do plano que o QA não avaliou nem assim, fica **sem
+  evidência**: a validação da US fica inconclusiva;
 - código alterado depois da aceitação (por uma etapa posterior) **invalida** os cenários aceitos.
 
 A evidência guardada passa por remoção de dados sensíveis (senhas, tokens, e-mails, CPF, números de

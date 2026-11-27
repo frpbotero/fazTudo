@@ -91,6 +91,19 @@ func (f *fakeExecutor) count(role string) int {
 	return n
 }
 
+// promptsFor lists, in order, the prompts sent to role.
+func (f *fakeExecutor) promptsFor(role string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for i, r := range f.roles {
+		if r == role {
+			out = append(out, f.prompts[i])
+		}
+	}
+	return out
+}
+
 var testStages = []Stage{
 	{ID: "a", Title: "A", Role: "ra", Task: "do a"},
 	{ID: "b", Title: "B", Role: "rb", Task: "do b"},
