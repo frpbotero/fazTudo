@@ -47,6 +47,7 @@ func run() error {
 	logLevel := flag.String("log-level", envOr("LOG_LEVEL", "info"), "debug, info, warn ou error (env LOG_LEVEL)")
 	configPath := flag.String("config", envOr("FAZTUDO_CONFIG", settings.DefaultPath()), `arquivo de configuração; "" desativa a persistência (env FAZTUDO_CONFIG)`)
 	evalPath := flag.String("eval", "", "executa a suíte de avaliação (JSON) e sai; veja evals/README.md")
+	evalReport := flag.String("eval-report", "", "refaz o report.md de uma pasta de resultados com o review.json dos revisores e sai")
 	showVersion := flag.Bool("version", false, "exibe a versão e sai")
 	showTokens := flag.Bool("tokens", false, "soma o uso de tokens por execução (logs/tokens.jsonl ao lado da configuração) e sai")
 	flag.Parse()
@@ -54,6 +55,13 @@ func run() error {
 	if *showVersion {
 		fmt.Println(version)
 		return nil
+	}
+	if *evalReport != "" {
+		report, err := eval.Rereport(*evalReport)
+		if err == nil {
+			fmt.Print(report)
+		}
+		return err
 	}
 	if *showTokens {
 		return printTokens(settings.UsageLog(settings.NewStore(*configPath).Path()))

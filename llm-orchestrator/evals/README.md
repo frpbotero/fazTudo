@@ -84,3 +84,9 @@ Use `"dry_run": true` para validar a suíte sem consumir tokens.
 
 Boas tarefas têm uma especificação com IDs de teste e `hidden_checks` independentes da implementação
 (testes de aceitação escritos por você, não pelos agentes).
+
+## Piloto comparativo
+
+[piloto/](piloto/README.md) traz o protocolo para comparar CLI direto, fluxo mínimo e fluxo completo em
+dez tarefas reais, com pré-registro de configuração, orçamento e avaliação. `-eval-report <pasta>` refaz o
+relatório juntando o tempo de revisão humana que os revisores registram em `review.json`.
