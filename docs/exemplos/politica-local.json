@@ -1,0 +1,17 @@
+{
+  "auto_checks": false,
+  "checks": [
+    { "name": "go", "run": "go test -json ./...", "report": { "format": "go-json" } },
+    { "name": "lint", "run": "go vet ./..." }
+  ],
+  "protected": ["US*.md", "EDD*.md"],
+  "git": true,
+  "max_line_length": 140,
+  "check_timeout_s": 900,
+  "candidates": 1,
+  "flow": "balanced",
+  "max_parallel_agents": 3,
+  "budget": { "max_minutes": 90, "max_calls": 120, "max_retries": 6, "max_retry_wait_s": 30 },
+  "profiles": ["go"],
+  "delivery_retention": 10
+}

@@ -8,7 +8,8 @@ implementa, roda os testes do projeto, revisa segurança e código, e documenta.
 **Claude Code**, **Codex** e **Gemini CLI** que você já tem instalados, com troca automática de um
 para o outro quando um atinge o limite de uso.
 
-Roda como aplicativo desktop (macOS, Windows e Linux) ou como servidor local com dashboard web.
+Roda como aplicativo desktop (macOS e Linux) ou como servidor local com dashboard web. Windows ainda
+não é suportado ([por quê](docs/distribuicao.md)).
 
 > Sem os CLIs instalados o app funciona em **modo simulação** (padrão): percorre todo o fluxo sem
 > gastar tokens nem alterar arquivos. Bom para conhecer a ferramenta.
@@ -79,7 +80,7 @@ Pontos que valem saber:
 
 ### Requisitos
 
-- **Go 1.22+** para compilar.
+- **Go 1.25+** para compilar.
 - Para execução real: [`claude`](https://docs.claude.com/claude-code),
   [`codex`](https://github.com/openai/codex) e/ou [`gemini`](https://github.com/google-gemini/gemini-cli)
   no `PATH`, já autenticados (Gemini: `npm i -g @google/gemini-cli` e `gemini` uma vez para entrar com a conta Google).
@@ -110,13 +111,14 @@ Compila e executa `build/bin/FazTudo`. Precisa de `libgtk-3-dev` e `libwebkit2gt
 
 ### Windows
 
-Use o instalador `FazTudo-<versão>-windows-amd64-setup.exe` da página de Releases do repositório
-(o SmartScreen pede *Mais informações → Executar assim mesmo*), ou o [modo servidor](#modo-servidor).
+Ainda não suportado: os comandos do projeto rodam via `/bin/sh` e as travas de repositório, de stack e
+de recurso só existem em Unix. Use o [modo servidor](#modo-servidor) dentro do WSL. Detalhes em
+[docs/distribuicao.md](docs/distribuicao.md).
 
 ### Instaladores prontos
 
 Ao publicar uma tag (`git tag v0.2.0 && git push origin v0.2.0`), o workflow
-[desktop-release](.github/workflows/desktop-release.yml) gera o `.dmg` (macOS), o `.exe` (Windows) e
+[desktop-release](.github/workflows/desktop-release.yml) roda o CI e gera o `.dmg` (macOS) e
 `.deb`/`.rpm`/`.tar.gz` (Linux) e os anexa à Release.
 
 ---
@@ -370,5 +372,15 @@ llm-orchestrator/
   paralelismo, portões de qualidade, persistência, app desktop e tabela da API HTTP.
 - [`llm-orchestrator/evals/README.md`](llm-orchestrator/evals/README.md): como comparar configurações
   do pipeline com `faztudo -eval`.
+- [`llm-orchestrator/evals/piloto/`](llm-orchestrator/evals/piloto/README.md): protocolo do piloto
+  comparativo.
+- [`docs/configuracao.md`](docs/configuracao.md): todos os campos da política, com exemplos em
+  [`docs/exemplos/`](docs/exemplos/) (inclusive um [pacote de entrega](docs/exemplos/pacote-entrega/README.md)).
+- [`docs/migracao.md`](docs/migracao.md): o que muda para configurações e execuções salvas antigas.
+- [`docs/solucao-de-problemas.md`](docs/solucao-de-problemas.md): sintomas comuns e o que fazer.
+- [`docs/distribuicao.md`](docs/distribuicao.md): plataformas suportadas, versões e release.
+- [`docs/contribuicao.md`](docs/contribuicao.md): como contribuir, reportar problemas, licença e atribuições.
+- [`docs/ci.md`](docs/ci.md) e [`docs/provedores.md`](docs/provedores.md): CI e capacidades dos provedores.
+- [`docs/plano-de-evolucao.md`](docs/plano-de-evolucao.md): o plano de evolução implementado.
 - [`blueprint_e_guia_de_constru_o_orquestrador_de_agentes_llm.md`](blueprint_e_guia_de_constru_o_orquestrador_de_agentes_llm.md):
   blueprint original e próximos passos.
