@@ -47,10 +47,21 @@ func (o *Orchestrator) account(resp *provider.Response, policy workspace.Policy)
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.run.Usage == nil {
-		o.run.Usage = &RunUsage{}
+	// Copy on write: snapshots share the pointer and are read unlocked.
+	o.run.Usage = withUsage(o.run.Usage, func(u *RunUsage) { addUsage(u, resp, policy) })
+}
+
+// withUsage returns a changed copy of u, which is never written in place.
+func withUsage(u *RunUsage, change func(*RunUsage)) *RunUsage {
+	next := RunUsage{}
+	if u != nil {
+		next = *u
 	}
-	u := o.run.Usage
+	change(&next)
+	return &next
+}
+
+func addUsage(u *RunUsage, resp *provider.Response, policy workspace.Policy) {
 	u.Calls++
 	if resp.Usage == nil {
 		u.Unreported++
@@ -113,10 +124,7 @@ func (o *Orchestrator) spend(policy workspace.Policy) error {
 	if why == "" {
 		return nil
 	}
-	if o.run.Usage == nil {
-		o.run.Usage = u
-	}
-	u.StoppedBy = why
+	o.run.Usage = withUsage(o.run.Usage, func(u *RunUsage) { u.StoppedBy = why })
 	return fmt.Errorf("%w: %s; o trabalho feito fica salvo. Aumente o orçamento e continue de onde parou", ErrBudgetExceeded, why)
 }
 
@@ -126,13 +134,10 @@ func (o *Orchestrator) mayRetry(policy workspace.Policy, attempt int) (time.Dura
 	b := policy.Budget
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.run.Usage == nil {
-		o.run.Usage = &RunUsage{}
-	}
-	if b.MaxRetries > 0 && o.run.Usage.Retries >= b.MaxRetries {
+	if b.MaxRetries > 0 && o.run.Usage != nil && o.run.Usage.Retries >= b.MaxRetries {
 		return 0, false
 	}
-	o.run.Usage.Retries++
+	o.run.Usage = withUsage(o.run.Usage, func(u *RunUsage) { u.Retries++ })
 	wait := o.retryDelay * time.Duration(attempt)
 	if b.MaxRetryWaitS > 0 {
 		wait = min(wait, time.Duration(b.MaxRetryWaitS)*time.Second)
