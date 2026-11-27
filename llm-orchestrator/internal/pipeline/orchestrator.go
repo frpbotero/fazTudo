@@ -217,9 +217,11 @@ type Run struct {
 	Operations []Operation  `json:"operations,omitempty"`
 	// ResumeChecks are why the last resume redid what it redid.
 	ResumeChecks []Invalidation `json:"resume_checks,omitempty"`
-	Stories      []StoryRun     `json:"stories"`
-	Current      int            `json:"current"` // index into Stories; -1 while discovering
-	Logs         []LogEntry     `json:"logs"`
+	// Delivery is where the run's delivery package was written.
+	Delivery *Delivery  `json:"delivery,omitempty"`
+	Stories  []StoryRun `json:"stories"`
+	Current  int        `json:"current"` // index into Stories; -1 while discovering
+	Logs     []LogEntry `json:"logs"`
 	// Bases are the branches each repository started from (keyed "." and by
 	// nested path); every wave is merged into them before the next begins.
 	Bases map[string]string `json:"bases,omitempty"`
@@ -2067,6 +2069,7 @@ func (o *Orchestrator) finish(result Result, level, msg string) {
 	o.mu.Unlock()
 	o.captureHeads()
 	o.writePendencies(o.Snapshot())
+	o.writeDelivery(o.Snapshot())
 	o.logf(level, "%s", msg)
 	o.logger.Info("pipeline finished", "result", result)
 }

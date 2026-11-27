@@ -1662,6 +1662,7 @@ Critérios de aceitação:
       <div class="story-meta">${meta}</div>
       ${renderReadiness(st, si, run.running)}
       ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
+      ${run.delivery ? `<p class="note">Pacote de entrega: <code>${esc(run.delivery.dir)}</code></p>` : ''}
       ${renderSpecialties(st)}
       ${renderAcceptance(st.acceptance)}
       ${renderCauses(st.causes)}`;

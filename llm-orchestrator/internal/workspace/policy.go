@@ -39,6 +39,9 @@ type Policy struct {
 	// the implementers'); empty keeps the default order. It becomes a default
 	// only after the evaluation shows it helps.
 	ReviewProvider string `json:"review_provider,omitempty"`
+	// DeliveryRetention is how many delivery packages a repository keeps;
+	// 0 is 10.
+	DeliveryRetention int `json:"delivery_retention,omitempty"`
 	// Protected are glob patterns (base name or relative path) of input files
 	// agents must not modify.
 	Protected []string `json:"protected"`
@@ -297,6 +300,9 @@ func (p Policy) Validate() error {
 		if _, err := path.Match(s, ""); err != nil || len(s) > 200 || strings.Trim(s, "*?") == "" {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
+	}
+	if p.DeliveryRetention < 0 || p.DeliveryRetention > 100 {
+		return errors.New("a retenção de pacotes de entrega deve estar entre 0 e 100")
 	}
 	if p.MaxParallelReviews < 0 || p.MaxParallelReviews > 5 {
 		return errors.New("o limite de revisões em paralelo deve estar entre 0 e 5")
