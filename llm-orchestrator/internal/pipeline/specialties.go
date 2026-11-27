@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -81,10 +82,13 @@ func (o *Orchestrator) applySpecialist(st *storyState, ref stepRef, stage Stage,
 	}
 	r := parseSpecialist(resp.Output)
 	o.updateStory(st.si, func(sr *StoryRun) {
-		if sr.Specialties == nil {
-			sr.Specialties = map[string]SpecialistReport{}
+		// A new map: snapshots share the old one and read it unlocked.
+		next := maps.Clone(sr.Specialties)
+		if next == nil {
+			next = map[string]SpecialistReport{}
 		}
-		sr.Specialties[stage.ID] = r
+		next[stage.ID] = r
+		sr.Specialties = next
 	})
 	if len(r.Problems) > 0 {
 		problems := strings.Join(r.Problems, "; ")
