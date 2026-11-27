@@ -9,6 +9,7 @@ import (
 
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/workspace"
 )
 
 // SpecialistReport is the contract every planning specialty answers with:
@@ -131,6 +132,9 @@ func (o *Orchestrator) enforceSpecialties(st *storyState) {
 	if st.plan.Impact != nil && len(st.plan.Impact.Migrations) > 0 {
 		need = append(need, "data", "migrations")
 	}
+	if slices.ContainsFunc(o.ws.Policy().Benchmarks, func(b workspace.Benchmark) bool { return b.Required }) {
+		need = append(need, "performance")
+	}
 	for _, n := range st.plan.NonFunctional {
 		if strings.TrimSpace(n.SLO) != "" && containsAny(strings.ToLower(n.Kind+" "+n.Requirement), "desempenho", "performance", "latência", "latencia", "throughput") {
 			need = append(need, "performance")
@@ -215,10 +219,20 @@ func (o *Orchestrator) runCommandGate(ctx context.Context, ss *session, st *stor
 // a measurement the specialist has nothing to judge from.
 func (o *Orchestrator) measure(ctx context.Context, ss *session, st *storyState) (string, bool) {
 	var b strings.Builder
+	results, alive := o.runBenchmarks(ctx, ss, st)
+	if !alive {
+		return "", false
+	}
+	st.benchResults = results
+	o.updateStory(st.si, func(r *StoryRun) { r.Performance = slices.Clone(results) })
+	b.WriteString(benchmarkEvidence(results))
+	compared := slices.ContainsFunc(results, func(r BenchResult) bool { return r.Verdict != benchVerdictUnclear })
 	b.WriteString("## Medições executadas\n\n")
 	if len(ss.policy.BenchmarkChecks) == 0 {
-		b.WriteString("Nenhum comando de benchmark configurado (`benchmark_checks`): não há medição. Sem medição, não aprove.\n\n")
-		st.measured = false
+		if !compared {
+			b.WriteString("Nenhuma medição comparável (`benchmarks` ou `benchmark_checks`): sem medição, não aprove.\n\n")
+		}
+		st.measured = compared
 		return b.String(), true
 	}
 	timeout := time.Duration(ss.policy.CheckTimeoutS) * time.Second
@@ -240,7 +254,7 @@ func (o *Orchestrator) measure(ctx context.Context, ss *session, st *storyState)
 	for _, n := range st.plan.NonFunctional {
 		fmt.Fprintf(&b, "- Requisito %s: %s (SLO: %s)\n", n.Kind, n.Requirement, cmpOrString(n.SLO, "não definido"))
 	}
-	st.measured = measured
+	st.measured = measured || compared
 	return b.String(), true
 }
 
@@ -262,8 +276,16 @@ func (o *Orchestrator) judgePerformance(st *storyState, ev evaluation) evaluatio
 		return true
 	})
 	o.updateStory(st.si, func(r *StoryRun) { r.Measurements = slices.Clone(answer.Measurements) })
+	issues, unclear := o.benchmarkIssues(st, st.benchResults)
+	if len(issues) > 0 {
+		ev.verdict.Status = VerdictChangesRequested
+		ev.verdict.Issues = append(ev.verdict.Issues, issues...)
+	}
 	if ev.verdict.NeedsChanges() {
 		return ev
+	}
+	if unclear {
+		ev.inconclusive = true
 	}
 	for _, m := range answer.Measurements {
 		if !m.Met {
@@ -277,7 +299,7 @@ func (o *Orchestrator) judgePerformance(st *storyState, ev evaluation) evaluatio
 			})
 		}
 	}
-	if !ev.verdict.NeedsChanges() && (!st.measured || len(answer.Measurements) == 0) {
+	if !ev.verdict.NeedsChanges() && (!st.measured || (len(answer.Measurements) == 0 && len(st.benchResults) == 0)) {
 		ev.inconclusive = true
 	}
 	return ev

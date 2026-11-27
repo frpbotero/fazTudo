@@ -290,6 +290,21 @@ nem quando o arquiteto não responde. Cada uma tem papel, escopo, contrato de sa
 | Verificação das migrations (`migrations`) | plano com migration | roda `migration_checks` em banco descartável; falha volta ao backend | comandos; sem eles, inconclusiva |
 | Desempenho (`performance`) | requisito não funcional de desempenho com meta | julga pelas medições de `benchmark_checks` | medição; meta não atingida volta ao implementador; sem medição, inconclusiva |
 
+**Benchmarks** (`benchmarks` na política). Cada um tem nome, comando, `workload` obrigatório (dados,
+concorrência, aquecimento), `stack` opcional (só roda se o discovery achou essa stack), `warmup`,
+`repeat` (padrão 3), `max_regression_pct` (padrão 10), `max_noise_pct` (padrão 15), `required` e
+`resource`. O comando imprime uma linha JSON com o que mede: `p50_ms`, `p95_ms`, `samples`,
+`throughput_rps`, `mem_mb`, `cpu_pct` ou `queries`. O FazTudo roda o benchmark numa worktree do commit em
+que a US começou e no candidato, alternando os dois depois do aquecimento, e compara as medianas:
+
+- percentil com menos de 20 amostras é descartado;
+- variação entre execuções acima do limite, métrica que só um lado tem ou comando que falha deixam o
+  resultado **inconclusivo**, nunca reprovado com precisão inventada;
+- piora acima do limite é **regressão**: num benchmark `required`, volta ao implementador como
+  problema bloqueante, e a correção passa pelos testes do projeto e é medida de novo;
+- benchmark `required` aciona o especialista de desempenho, que recebe a comparação com o ambiente
+  (sistema, arquitetura, CPUs) e deve propor correção só com profiling ou medição.
+
 Especialidade de planejamento só pode planejar antes do código: se o diff a torna obrigatória depois da
 sua vez, o log avisa e as verificações seguintes continuam julgando. Contrato não atendido (requisito sem
 verificação, nada exigido sem justificativa, resposta sem JSON) deixa a etapa e a US *inconclusivas*.

@@ -24,6 +24,9 @@ type Policy struct {
 	// check integrity, roll back or recover, apply again. They run when a
 	// story's plan or risk calls for the migration check.
 	MigrationChecks []quality.Command `json:"migration_checks,omitempty"`
+	// Benchmarks measure the software against its performance targets,
+	// candidate against baseline; see Benchmark.
+	Benchmarks []Benchmark `json:"benchmarks,omitempty"`
 	// BenchmarkChecks measure the workload a performance requirement is
 	// about; the performance specialist reads their output.
 	BenchmarkChecks []quality.Command `json:"benchmark_checks,omitempty"`
@@ -321,6 +324,9 @@ func (p Policy) Validate() error {
 	if p.ContextBytes != 0 && (p.ContextBytes < 1000 || p.ContextBytes > 64000) {
 		return errors.New("o orçamento de contexto por artefato deve estar entre 1000 e 64000 bytes")
 	}
+	if err := validateBenchmarks(p.Benchmarks); err != nil {
+		return err
+	}
 	if err := validateBudget(p.Budget, p.Prices); err != nil {
 		return err
 	}
@@ -466,6 +472,54 @@ func validateBudget(b Budget, prices map[string]Price) error {
 	for model, p := range prices {
 		if strings.TrimSpace(model) == "" || p.Input < 0 || p.CachedInput < 0 || p.Output < 0 {
 			return fmt.Errorf("preço inválido para o modelo %q", model)
+		}
+	}
+	return nil
+}
+
+// Benchmark is a performance measurement the orchestrator runs on the
+// story's starting snapshot and on the candidate, in turns, under the same
+// conditions. Its command prints, on a line of its own, a JSON object with
+// any of p50_ms, p95_ms, samples, throughput_rps, mem_mb, cpu_pct, queries.
+type Benchmark struct {
+	Name string `json:"name"`
+	Run  string `json:"run"`
+	// Workload says what the command exercises: data, concurrency, warm-up.
+	Workload string `json:"workload"`
+	// Stack limits the benchmark to repositories where the discovery found
+	// that stack (e.g. "Go", "NestJS"); empty runs it everywhere.
+	Stack string `json:"stack,omitempty"`
+	// Warmup runs are discarded; Repeat runs are measured (default 3).
+	Warmup int `json:"warmup,omitempty"`
+	Repeat int `json:"repeat,omitempty"`
+	// MaxRegressionPct is the worsening tolerated (default 10);
+	// MaxNoisePct the spread past which a measurement proves nothing
+	// (default 15).
+	MaxRegressionPct float64 `json:"max_regression_pct,omitempty"`
+	MaxNoisePct      float64 `json:"max_noise_pct,omitempty"`
+	// Required makes a regression block the delivery.
+	Required bool   `json:"required,omitempty"`
+	Resource string `json:"resource,omitempty"`
+}
+
+func validateBenchmarks(list []Benchmark) error {
+	if len(list) > maxChecks {
+		return fmt.Errorf("no máximo %d benchmarks", maxChecks)
+	}
+	for _, b := range list {
+		switch {
+		case strings.TrimSpace(b.Name) == "" || strings.TrimSpace(b.Run) == "":
+			return errors.New("benchmark precisa de nome e comando")
+		case strings.TrimSpace(b.Workload) == "":
+			return fmt.Errorf("benchmark %q: descreva o workload (dados, concorrência, aquecimento)", b.Name)
+		case len(b.Run) > maxCommandLen || strings.ContainsAny(b.Run, "\n\r"):
+			return fmt.Errorf("benchmark %q: comando inválido", b.Name)
+		case b.Warmup < 0 || b.Warmup > 10 || b.Repeat < 0 || b.Repeat > 20:
+			return fmt.Errorf("benchmark %q: aquecimento até 10 e repetições até 20", b.Name)
+		case b.MaxRegressionPct < 0 || b.MaxNoisePct < 0:
+			return fmt.Errorf("benchmark %q: limites não podem ser negativos", b.Name)
+		case b.Resource != "" && !reResource.MatchString(b.Resource):
+			return fmt.Errorf("benchmark %q: recurso inválido", b.Name)
 		}
 	}
 	return nil
