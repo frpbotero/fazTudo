@@ -707,6 +707,9 @@ Critérios de aceitação:
       skip_baseline: snapshot?.workspace?.policy?.skip_baseline,
       style_blocking: snapshot?.workspace?.policy?.style_blocking,
       max_parallel_agents: snapshot?.workspace?.policy?.max_parallel_agents,
+      budget: snapshot?.workspace?.policy?.budget,
+      prices: snapshot?.workspace?.policy?.prices,
+      prices_version: snapshot?.workspace?.policy?.prices_version,
       max_parallel_reviews: snapshot?.workspace?.policy?.max_parallel_reviews,
       review_provider: snapshot?.workspace?.policy?.review_provider,
     };
@@ -1638,6 +1641,20 @@ Critérios de aceitação:
     paintSteps(stepsHtml(runSteps.map((step) => ({ step, isRunStep: true })), { run, si: -1 }));
   }
 
+  // What the run spent: observed and estimated costs apart, unknown said so.
+  function renderUsage(u) {
+    if (!u?.calls) return '';
+    const tokens = (u.input_tokens || 0) + (u.cached_input_tokens || 0) + (u.output_tokens || 0) + (u.reasoning_tokens || 0);
+    const parts = [`${u.calls} chamada(s)`, `${tokens.toLocaleString('pt-BR')} tokens informados`];
+    if (u.retries) parts.push(`${u.retries} nova(s) tentativa(s)`);
+    if (u.cost_observed_usd) parts.push(`custo informado US$ ${u.cost_observed_usd.toFixed(2)}`);
+    if (u.cost_estimated_usd) parts.push(`estimado US$ ${u.cost_estimated_usd.toFixed(2)} (${esc(u.prices_version || 'tabela da política')})`);
+    if (u.unknown_cost) parts.push(`${u.unknown_cost} sem custo conhecido`);
+    if (u.unreported) parts.push(`${u.unreported} sem contagem de tokens`);
+    const stop = u.stopped_by ? ` <span class="note" data-tone="warn">Parou no orçamento: ${esc(u.stopped_by)}.</span>` : '';
+    return `<p class="note">Consumo: ${parts.join(' · ')}.${stop}</p>`;
+  }
+
   // The pull request a story went to, from its promotion.
   function prLink(st) {
     if (st.integration !== 'awaiting_review') return '';
@@ -1682,6 +1699,7 @@ Critérios de aceitação:
       ${renderReadiness(st, si, run.running)}
       ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
       ${run.delivery ? `<p class="note">Pacote de entrega: <code>${esc(run.delivery.dir)}</code></p>` : ''}
+      ${renderUsage(run.usage)}
       ${renderSpecialties(st)}
       ${renderAcceptance(st.acceptance)}
       ${renderCauses(st.causes)}`;

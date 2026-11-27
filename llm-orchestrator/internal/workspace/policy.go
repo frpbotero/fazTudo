@@ -49,6 +49,13 @@ type Policy struct {
 	// MaxParallelAgents bounds the agent calls of a run at once, across
 	// stories, fronts, reviewers and candidates; 0 is 4.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty"`
+	// Budget bounds what a run may spend; zero values leave a bound off.
+	Budget Budget `json:"budget,omitempty"`
+	// Prices estimate the cost of calls whose CLI reports tokens but no cost,
+	// per model, in US$ per million tokens. Without a price the cost stays
+	// unknown; PricesVersion names the table the estimates came from.
+	Prices        map[string]Price `json:"prices,omitempty"`
+	PricesVersion string           `json:"prices_version,omitempty"`
 	// Protected are glob patterns (base name or relative path) of input files
 	// agents must not modify.
 	Protected []string `json:"protected"`
@@ -308,6 +315,9 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
 	}
+	if err := validateBudget(p.Budget, p.Prices); err != nil {
+		return err
+	}
 	if p.MaxParallelAgents < 0 || p.MaxParallelAgents > 16 {
 		return errors.New("o limite de agentes em paralelo deve estar entre 0 e 16")
 	}
@@ -421,3 +431,36 @@ func validateSCM(s SCMPolicy) error {
 }
 
 var reResource = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+
+// Budget bounds a run. Each bound is checked before every agent call: once
+// reached, no new call starts and the work done so far stays. Tokens are
+// counted from what the CLIs report, after each call, so a single call may
+// go past MaxTokens; no CLI lets a hard token ceiling be set mid-call.
+type Budget struct {
+	MaxMinutes int   `json:"max_minutes,omitempty"`
+	MaxCalls   int   `json:"max_calls,omitempty"`
+	MaxTokens  int64 `json:"max_tokens,omitempty"`
+	// MaxRetries bounds the retries of failed agent calls across the run;
+	// MaxRetryWaitS caps the wait before each one.
+	MaxRetries    int `json:"max_retries,omitempty"`
+	MaxRetryWaitS int `json:"max_retry_wait_s,omitempty"`
+}
+
+// Price is a model's cost in US$ per million tokens.
+type Price struct {
+	Input       float64 `json:"input"`
+	CachedInput float64 `json:"cached_input,omitempty"`
+	Output      float64 `json:"output"`
+}
+
+func validateBudget(b Budget, prices map[string]Price) error {
+	if b.MaxMinutes < 0 || b.MaxCalls < 0 || b.MaxTokens < 0 || b.MaxRetries < 0 || b.MaxRetryWaitS < 0 {
+		return errors.New("os limites do orçamento não podem ser negativos")
+	}
+	for model, p := range prices {
+		if strings.TrimSpace(model) == "" || p.Input < 0 || p.CachedInput < 0 || p.Output < 0 {
+			return fmt.Errorf("preço inválido para o modelo %q", model)
+		}
+	}
+	return nil
+}

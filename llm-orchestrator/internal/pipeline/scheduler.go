@@ -84,6 +84,10 @@ func (o *Orchestrator) useSlots(p workspace.Policy) {
 // callAgent is the one door to the providers: it waits for a slot, keeps the
 // time waited on the step, and records the call's usage.
 func (o *Orchestrator) callAgent(ctx context.Context, ref stepRef, req provider.Request, attempt int) (*provider.Response, error) {
+	policy := o.ws.Policy()
+	if err := o.spend(policy); err != nil {
+		return nil, err
+	}
 	o.mu.RLock()
 	slots := o.agentSlots
 	o.mu.RUnlock()
@@ -99,5 +103,16 @@ func (o *Orchestrator) callAgent(ctx context.Context, ref stepRef, req provider.
 	}
 	resp, err := o.exec.Execute(ctx, req, o.providerLog)
 	o.recordUsage(ref, req, resp, attempt)
+	o.account(resp, policy)
 	return resp, err
+}
+
+// retryable tells failures worth another attempt: not a spent budget nor a
+// missing provider, which a retry cannot change.
+func retryable(err error) bool {
+	switch classifyFailure(err) {
+	case FailureBudget, FailureProvider, FailureCanceled:
+		return false
+	}
+	return true
 }
