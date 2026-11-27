@@ -617,6 +617,10 @@ as setas rolam a saída e Ctrl+L limpa a saída local.
 |---------|----------|
 | `status [--json]`, `logs [--level info,warn]` | Consulta a execução e seus eventos. |
 | `stop`, `resume`, `retry --story N --step ID` | Para, continua ou refaz uma etapa. |
+| `why --story N [--json]` | Diz, por etapa, se é obrigatória, exigida pelo risco, opcional ou não aplicável e por quê, com validação e classe da falha. |
+| `answer --story N --answers "a \| b"` | Responde as decisões de produto em aberto; a US recomeça do Passo 0. |
+| `reconcile` | Completa uma integração que ficou parcial, sem desfazer nada. |
+| `review-log --story N --minutes M [--rework M] [--note TEXTO]` | Registra o tempo de revisão humana e de retrabalho. |
 | `stories parse --file US.md` | Mostra as US e o contexto comum identificados. |
 | `repo show/set/branches/base/discovery-reset` | Gerencia o repositório, as branches base e o discovery. |
 | `policy show/apply --file arquivo.json` | Consulta ou aplica todos os campos da política de qualidade. |
@@ -626,6 +630,10 @@ as setas rolam a saída e Ctrl+L limpa a saída local.
 | `commit show --id HASH` | Mostra o patch de um commit da execução. |
 | `health areas [--json]` | Sugere as 3 áreas que mais valem uma limpeza, sem chamar modelo. |
 | `health run --area CAMINHO [--comments] [--tests] [--rounds N] [--real]` | Limpa a estrutura da área numa branch própria (código 0 aprovada, 1 reprovada, 2 uso inválido). |
+
+Console, TUI e painel usam a mesma API, a mesma política e os mesmos contratos; o painel mostra os
+mesmos motivos de cada etapa, a classe da falha, o consumo com o custo desconhecido à parte e os limites
+do orçamento.
 
 As alterações de configuração passam pela mesma validação da API local e são salvas no mesmo
 `config.json` do painel. O processo de console ativo recebe comandos de outros terminais por arquivos

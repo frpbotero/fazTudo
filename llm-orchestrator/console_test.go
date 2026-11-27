@@ -264,3 +264,40 @@ func TestConsoleHealthSuggestsAndRunsACleanup(t *testing.T) {
 		t.Errorf("missing area: %d %s", code, msg)
 	}
 }
+
+func TestConsoleExplainsEachStepAndLogsReviewTime(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repo := t.TempDir()
+	config := filepath.Join(t.TempDir(), "config.json")
+	file := filepath.Join(t.TempDir(), "stories.md")
+	if err := os.WriteFile(file, []byte("# US-1: Login\nComo usuário, quero entrar com senha.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	call := func(args ...string) (string, string, int) {
+		t.Helper()
+		var out, errors bytes.Buffer
+		code := runConsole(append(args, "--repo", repo, "--config", config), strings.NewReader(""), &out, &errors)
+		return out.String(), errors.String(), code
+	}
+	if _, msg, code := call("run", "--file", file, "--sim-delay", "1ms"); code != 0 {
+		t.Fatalf("run: %d %s", code, msg)
+	}
+	out, msg, code := call("why", "--story", "0")
+	if code != 0 {
+		t.Fatalf("why: %d %s", code, msg)
+	}
+	for _, want := range []string{"obrigatória", "exigida pelo risco", "regras de risco", "não aplicável"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("why lacks %q:\n%s", want, out)
+		}
+	}
+	if _, msg, code := call("review-log", "--story", "0", "--minutes", "15", "--note", "conferi o fluxo"); code != 0 {
+		t.Fatalf("review-log: %d %s", code, msg)
+	}
+	if _, msg, code := call("answer", "--story", "0", "--answers", "sim"); code == 0 || !strings.Contains(msg, "decisão") {
+		t.Errorf("answering a story that waits on nothing = %d %s", code, msg)
+	}
+	if _, _, code := call("why"); code != 2 {
+		t.Errorf("why without --story = %d", code)
+	}
+}
