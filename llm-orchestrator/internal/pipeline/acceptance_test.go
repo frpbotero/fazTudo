@@ -280,3 +280,16 @@ func TestQAIsAskedOnlyForTheScenariosItLeftOut(t *testing.T) {
 		t.Errorf("the recovery is a step of its own: %+v", st.Steps)
 	}
 }
+
+func TestQASeesWhichCommandsRanAndHowTheyEnded(t *testing.T) {
+	run := StoryRun{Steps: []Step{{ID: "checks", Checks: []quality.Result{
+		{Name: "go", Command: "go test -json ./...", Passed: true, DurationMS: 800},
+		{Name: "lint", Command: "go vet ./...", Passed: false, ExitCode: 1, DurationMS: 120},
+	}}}}
+	got := executedEvidence(run)
+	for _, want := range []string{"Comandos do projeto na última verificação", "`go vet ./...` (lint): falhou (código 1)", "`go test -json ./...` (go): passou"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("evidence lacks %q:\n%s", want, got)
+		}
+	}
+}

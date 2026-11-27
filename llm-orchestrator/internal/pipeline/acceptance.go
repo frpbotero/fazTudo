@@ -98,6 +98,12 @@ func executedEvidence(run StoryRun) string {
 		}
 		b.WriteString("\n")
 	}
+	if checks := lastChecks(run.Steps); len(checks) > 0 {
+		b.WriteString("\nComandos do projeto na última verificação:\n")
+		for _, c := range checks {
+			fmt.Fprintf(&b, "- `%s` (%s): %s\n", c.Command, c.Name, checkOutcome(c))
+		}
+	}
 	if r := run.Reproduction; r != nil {
 		fmt.Fprintf(&b, "\nReprodução do bug: %s. %s\n", r.Status, r.Detail)
 	}
@@ -170,6 +176,17 @@ func (o *Orchestrator) recoverScenarios(ctx context.Context, ss *session, st *st
 		s.Note = fmt.Sprintf("%d de %d cenário(s) avaliado(s)", len(ids)-len(ev.missing), len(ids))
 	})
 	return ev, id, true
+}
+
+// checkOutcome is how a command ended, as QA reads it.
+func checkOutcome(c quality.Result) string {
+	switch {
+	case c.TimedOut:
+		return "excedeu o tempo"
+	case c.Passed:
+		return fmt.Sprintf("passou em %s", time.Duration(c.DurationMS)*time.Millisecond)
+	}
+	return fmt.Sprintf("falhou (código %d)", c.ExitCode)
 }
 
 // describeScenario is a planned scenario as QA reads it, ID first.

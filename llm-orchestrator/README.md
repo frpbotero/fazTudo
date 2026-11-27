@@ -260,8 +260,8 @@ achados viram pendências) e `custom` (`disabled_stages`). Etapas desligadas apa
 
 **QA funcional** (`acceptance`, depois do E2E; desligado só no `fast`). Só leitura, julga cada critério
 e cenário do plano, inclusive os negativos, pelos critérios originais da US. Recebe do orquestrador a
-evidência executada (status de cada caso da especificação, casos do relatório, reprodução do bug) e a
-interpreta, sem substituí-la:
+evidência executada (status de cada caso da especificação, casos do relatório, como terminou cada comando
+do projeto na última verificação, reprodução do bug) e a interpreta, sem substituí-la:
 
 - cenário **aceito** precisa citar o ID de um caso **comprovado** por execução (ou o nome do caso
   executado, que vale pelo próprio resultado); inspeção precisa de
