@@ -14,3 +14,8 @@ func LockRepository(string) (func(), error) {
 func LockStackSlot(context.Context, func()) (func(), error) {
 	return func() {}, nil
 }
+
+// LockResource is a no-op where flock is unavailable.
+func LockResource(context.Context, string, func()) (func(), error) {
+	return func() {}, nil
+}

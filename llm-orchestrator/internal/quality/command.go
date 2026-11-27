@@ -21,6 +21,9 @@ type Command struct {
 	// Report, when set, is the per-test report the command produces; without
 	// it only the exit code says anything.
 	Report *ReportSpec `json:"report,omitempty"`
+	// Resource names what the command holds while it runs (a database, a
+	// port): commands that share one never run at the same time.
+	Resource string `json:"resource,omitempty"`
 }
 
 // Result is the outcome of one check.

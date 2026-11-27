@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -45,6 +46,9 @@ type Policy struct {
 	// SCM decides how a story reaches the base: merged locally (default) or
 	// through a pull request a human reviews.
 	SCM SCMPolicy `json:"scm,omitempty"`
+	// MaxParallelAgents bounds the agent calls of a run at once, across
+	// stories, fronts, reviewers and candidates; 0 is 4.
+	MaxParallelAgents int `json:"max_parallel_agents,omitempty"`
 	// Protected are glob patterns (base name or relative path) of input files
 	// agents must not modify.
 	Protected []string `json:"protected"`
@@ -304,6 +308,9 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
 	}
+	if p.MaxParallelAgents < 0 || p.MaxParallelAgents > 16 {
+		return errors.New("o limite de agentes em paralelo deve estar entre 0 e 16")
+	}
 	if err := validateSCM(p.SCM); err != nil {
 		return err
 	}
@@ -333,6 +340,9 @@ func (p Policy) Validate() error {
 		}
 		if err := validateReport(c); err != nil {
 			return err
+		}
+		if c.Resource != "" && !reResource.MatchString(c.Resource) {
+			return fmt.Errorf("recurso do comando %q inválido: use letras minúsculas, números e hífen", c.Name)
 		}
 	}
 	return nil
@@ -369,6 +379,7 @@ func normalizeCommands(list []quality.Command) []quality.Command {
 		if c.Name == "" {
 			c.Name = c.Run
 		}
+		c.Resource = strings.ToLower(strings.TrimSpace(c.Resource))
 		if c.Report != nil {
 			r := quality.ReportSpec{Format: strings.TrimSpace(c.Report.Format), Path: strings.TrimSpace(c.Report.Path)}
 			c.Report = nil
@@ -408,3 +419,5 @@ func validateSCM(s SCMPolicy) error {
 	}
 	return nil
 }
+
+var reResource = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)

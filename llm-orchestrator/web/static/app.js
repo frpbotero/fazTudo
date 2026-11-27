@@ -706,6 +706,7 @@ Critérios de aceitação:
       risk_rules: snapshot?.workspace?.policy?.risk_rules,
       skip_baseline: snapshot?.workspace?.policy?.skip_baseline,
       style_blocking: snapshot?.workspace?.policy?.style_blocking,
+      max_parallel_agents: snapshot?.workspace?.policy?.max_parallel_agents,
       max_parallel_reviews: snapshot?.workspace?.policy?.max_parallel_reviews,
       review_provider: snapshot?.workspace?.policy?.review_provider,
     };
@@ -1396,6 +1397,7 @@ Critérios de aceitação:
     if (s.model) parts.push(`<span class="model" title="${esc([s.provider, s.model, s.effort].filter(Boolean).join(' · '))}">${esc(s.model)}</span>`);
     if (s.status === 'running' && s.started_at) parts.push(`<span class="time" data-elapsed="${esc(s.started_at)}"></span>`);
     else if (s.duration_ms) parts.push(`<span class="time">${esc(fmtDuration(s.duration_ms))}</span>`);
+    if (s.queue_ms >= 1000) parts.push(`<span class="time" title="Tempo esperando vaga de agente">fila ${esc(fmtDuration(s.queue_ms))}</span>`);
     if (s.status === 'running') parts.push(pill({ label: 'Executando', tone: 'accent' }));
     if (s.status === 'failed') parts.push(pill({ label: 'Falhou', tone: 'danger' }));
     if (s.status === 'warning') parts.push(pill({ label: 'Com pendências', tone: 'warn' }));

@@ -200,6 +200,14 @@ worktrees. *Sequencial*: sem análise de dependências; uma US de cada vez, na o
 os agentes de cada US um após o outro. Nos dois modos cada US/onda é mergeada na branch base antes da
 seguinte.
 
+**Limites de paralelismo.** Todas as chamadas de agente de uma execução passam por uma fila única com
+`max_parallel_agents` vagas (padrão 4): US paralelas, frentes, revisores e candidatos dividem o mesmo
+limite em vez de se multiplicar. A fila atende por ordem de chegada, então nenhuma chamada espera para
+sempre; parar a execução libera as vagas e mantém as branches. O tempo de espera aparece em cada etapa
+(*fila*) e a duração de cada integração fica na promoção. Comando de verificação com `resource` (ex.:
+`"resource": "postgres"`) só roda quando ninguém mais usa aquele recurso, nem outra US da onda nem outra
+janela do FazTudo; stacks de teste continuam com a vaga única da máquina.
+
 **Fluxo de agentes** (campo *Fluxo de agentes*, por repositório): `full` (padrão), `balanced` (sem
 segurança, E2E e docs), `fast` (Passo 0, especificação, arquiteto, devs e verificação), `audit`
 (verificação, segurança, review e QA funcional do código já desenvolvido, sem arquiteto nem devs; os

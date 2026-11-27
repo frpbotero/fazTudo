@@ -57,7 +57,11 @@ type Promotion struct {
 	Repos []RepoPromotion `json:"repos,omitempty"`
 	// PR is the pull request the candidate went to, in review mode.
 	PR *scm.PullRequest `json:"pr,omitempty"`
-	At time.Time        `json:"at"`
+	// DurationMS is how long the integration took, verification included.
+	DurationMS int64     `json:"duration_ms,omitempty"`
+	started    time.Time // when the integration began
+
+	At time.Time `json:"at"`
 }
 
 // promotable is the single rule every route to the base goes through,
@@ -159,7 +163,7 @@ func (o *Orchestrator) promoteStory(ctx context.Context, ss *session, st *storyS
 		return true
 	}
 	label := storyLabel(st.sc.Story)
-	p := Promotion{Stories: []string{label}, Branch: from}
+	p := Promotion{Stories: []string{label}, Branch: from, started: time.Now()}
 	reason := promotable(o.storyRun(st.si), ss.policy)
 	if reason == "" && (st.verifiedAt.IsZero() || len(o.changedFiles(ss, st.verifiedAt)) > 0) {
 		var alive bool
@@ -202,6 +206,9 @@ func (o *Orchestrator) blockPromotion(ctx context.Context, ss *session, stories 
 // of the base was not delivered, whatever its validation: it is pending.
 func (o *Orchestrator) recordPromotion(p Promotion, stories []int) {
 	p.At = time.Now()
+	if !p.started.IsZero() {
+		p.DurationMS = time.Since(p.started).Milliseconds()
+	}
 	o.mu.Lock()
 	o.run.Promotions = append(o.run.Promotions, p)
 	for _, si := range stories {
