@@ -101,7 +101,11 @@ func (o *Orchestrator) reviewBody(sha string, stories []int) string {
 	b.WriteString("A evidência abaixo complementa os checks do CI e a revisão humana; não é garantia por si só. " +
 		"O merge segue as regras do repositório e o estado atual da base.\n\n")
 	for _, si := range stories {
-		b.WriteString(renderStoryDelivery(run, run.Stories[si]))
+		st := run.Stories[si]
+		// The page is written before the promotion is recorded: it already
+		// says what this pull request is for.
+		st.Integration, st.IntegrationNote = IntegrationAwaitingReview, "aguarda revisão neste pull request"
+		b.WriteString(renderStoryDelivery(run, st))
 		b.WriteString("\n---\n\n")
 	}
 	body := redactSecrets(b.String())
@@ -128,10 +132,7 @@ func (o *Orchestrator) ReviewStatuses(ctx context.Context) ([]ReviewStatus, erro
 	run := o.Snapshot()
 	var out []ReviewStatus
 	var prov scm.Provider
-	for _, p := range run.Promotions {
-		if p.PR == nil {
-			continue
-		}
+	for _, p := range latestReviews(run.Promotions) {
 		if prov == nil {
 			var err error
 			if prov, err = o.scmFor(ctx, run.Repository); err != nil {
@@ -153,6 +154,7 @@ func (o *Orchestrator) ReviewStatuses(ctx context.Context) ([]ReviewStatus, erro
 		}
 		if review, err := prov.Review(ctx, number); err == nil {
 			st.Review = review
+			st.PR.State = cmp.Or(review.State, st.PR.State)
 			st.Stale = review.HeadSHA != "" && p.Commit != "" && review.HeadSHA != p.Commit
 		} else {
 			errs = append(errs, err.Error())
@@ -161,4 +163,23 @@ func (o *Orchestrator) ReviewStatuses(ctx context.Context) ([]ReviewStatus, erro
 		out = append(out, st)
 	}
 	return out, nil
+}
+
+// latestReviews is the last promotion of each pull request: a reconciled one
+// is recorded again, with its outcome.
+func latestReviews(promotions []Promotion) []Promotion {
+	var out []Promotion
+	index := map[string]int{}
+	for _, p := range promotions {
+		if p.PR == nil || p.PR.URL == "" {
+			continue
+		}
+		if i, ok := index[p.PR.URL]; ok {
+			out[i] = p
+			continue
+		}
+		index[p.PR.URL] = len(out)
+		out = append(out, p)
+	}
+	return out
 }

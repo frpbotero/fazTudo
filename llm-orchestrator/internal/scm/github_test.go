@@ -124,3 +124,26 @@ func TestDetectPicksTheHost(t *testing.T) {
 		t.Errorf("no remote = %v", err)
 	}
 }
+
+func TestNoChecksIsAnEmptyList(t *testing.T) {
+	g := &GitHub{Dir: "/repo", Run: func(context.Context, string, string, ...string) (string, error) {
+		return "", errors.New("no checks reported on the 'faztudo/us-4' branch")
+	}}
+	if checks, err := g.Checks(context.Background(), 1); err != nil || len(checks) != 0 {
+		t.Errorf("a repository without CI has no checks, not an error: %+v, %v", checks, err)
+	}
+	g.Run = func(context.Context, string, string, ...string) (string, error) { return "", errors.New("HTTP 401") }
+	if _, err := g.Checks(context.Background(), 1); err == nil {
+		t.Error("a real failure must still be an error")
+	}
+}
+
+func TestReviewReadsTheState(t *testing.T) {
+	g := &GitHub{Dir: "/repo", Run: func(context.Context, string, string, ...string) (string, error) {
+		return `{"reviewDecision":"","mergeStateStatus":"UNKNOWN","headRefOid":"abc","state":"MERGED","mergeCommit":{"oid":"m1"}}`, nil
+	}}
+	r, err := g.Review(context.Background(), 1)
+	if err != nil || r.State != "MERGED" || r.MergeCommit != "m1" {
+		t.Errorf("review = %+v, %v", r, err)
+	}
+}

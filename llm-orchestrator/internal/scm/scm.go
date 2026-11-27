@@ -51,7 +51,18 @@ type Review struct {
 	Decision   string `json:"decision,omitempty"`    // e.g. APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED
 	MergeState string `json:"merge_state,omitempty"` // e.g. CLEAN, BLOCKED, BEHIND
 	HeadSHA    string `json:"head_sha,omitempty"`
+	// State is the pull request's: StateOpen, StateMerged or StateClosed
+	// (closed without merge); MergeCommit is the base's commit once merged.
+	State       string `json:"state,omitempty"`
+	MergeCommit string `json:"merge_commit,omitempty"`
 }
+
+// Pull request states.
+const (
+	StateOpen   = "OPEN"
+	StateMerged = "MERGED"
+	StateClosed = "CLOSED"
+)
 
 // Provider is a source host.
 type Provider interface {

@@ -19,6 +19,7 @@ type fakeSCM struct {
 	created   []scm.Request
 	open      map[string]*scm.PullRequest
 	failPush  error
+	review    *scm.Review // what Review answers when set
 }
 
 func (f *fakeSCM) Host() string { return "fake" }
@@ -54,7 +55,12 @@ func (f *fakeSCM) Checks(context.Context, int) ([]scm.Check, error) {
 	return []scm.Check{{Name: "ci", State: "pass"}}, nil
 }
 func (f *fakeSCM) Review(context.Context, int) (scm.Review, error) {
-	return scm.Review{Decision: "REVIEW_REQUIRED", HeadSHA: "outro"}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.review != nil {
+		return *f.review, nil
+	}
+	return scm.Review{Decision: "REVIEW_REQUIRED", HeadSHA: "outro", State: "OPEN"}, nil
 }
 
 func newReviewTest(t *testing.T, mutate func(*workspace.SCMPolicy)) (*Orchestrator, string, *fakeSCM) {
@@ -162,5 +168,46 @@ func TestDependentWaitsForTheReview(t *testing.T) {
 	run := waitDone(t, o)
 	if st := run.Stories[2]; st.Status != StepSkipped || !strings.Contains(st.IntegrationNote, "revisão") {
 		t.Errorf("US-3 = %s %q", st.Status, st.IntegrationNote)
+	}
+}
+
+func TestMergedPullRequestIntegratesTheStory(t *testing.T) {
+	o, _, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	run := waitDone(t, o)
+	if !strings.Contains(host.created[0].Body, "aguarda revisão neste pull request") {
+		t.Errorf("the pull request must say the story waits for it:\n%s", host.created[0].Body)
+	}
+	if _, err := o.Reconcile(); !errors.Is(err, ErrNothingToReconcile) {
+		t.Fatalf("an open pull request has nothing to reconcile: %v", err)
+	}
+	host.review = &scm.Review{State: "MERGED", MergeCommit: "m1"}
+	p, err := o.Reconcile()
+	if err != nil || p.Status != IntegrationIntegrated || !strings.Contains(p.Reason, run.Promotions[len(run.Promotions)-1].PR.URL) {
+		t.Fatalf("reconcile = %+v, %v", p, err)
+	}
+	st := o.Snapshot().Stories[0]
+	if st.Integration != IntegrationIntegrated || !strings.Contains(st.IntegrationNote, "m1") {
+		t.Errorf("story = %s %q", st.Integration, st.IntegrationNote)
+	}
+	statuses, _ := o.ReviewStatuses(context.Background())
+	if len(statuses) != 1 || statuses[0].PR.State != "MERGED" {
+		t.Errorf("the review status must show the host's state: %+v", statuses)
+	}
+	if _, err := o.Reconcile(); !errors.Is(err, ErrNothingToReconcile) {
+		t.Errorf("a merged pull request is reconciled once: %v", err)
+	}
+}
+
+func TestClosedPullRequestBlocksTheStory(t *testing.T) {
+	o, _, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	waitDone(t, o)
+	host.review = &scm.Review{State: "CLOSED"}
+	if p, err := o.Reconcile(); err != nil || p.Status != IntegrationBlocked || !strings.Contains(p.Reason, "fechado sem merge") {
+		t.Fatalf("reconcile = %+v, %v", p, err)
+	}
+	if st := o.Snapshot().Stories[0]; st.Integration != IntegrationBlocked {
+		t.Errorf("story integration = %s", st.Integration)
 	}
 }

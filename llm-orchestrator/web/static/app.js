@@ -1967,7 +1967,8 @@ Critérios de aceitação:
     el.resumeBtn.hidden = !resume;
     const promotions = snapshot?.run.promotions || [];
     const last = promotions[promotions.length - 1];
-    el.reconcileBtn.hidden = running || last?.status !== 'partial';
+    const awaiting = (snapshot?.run.stories || []).some((s) => s.integration === 'awaiting_review');
+    el.reconcileBtn.hidden = running || (last?.status !== 'partial' && !awaiting);
     el.resumeBtn.title = resume ? `Retoma em ${[resume.story_title, resume.title].filter(Boolean).join(' · ')}` : '';
     el.newRunLink.hidden = running;
     el.startLabel.textContent = running ? 'Execução em andamento…' : 'Iniciar execução';

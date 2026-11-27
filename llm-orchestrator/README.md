@@ -513,8 +513,12 @@ branch candidata e abre um pull request com a evidência, e a US fica *Aguardand
   são integradas localmente. `draft` abre como rascunho.
 - O PR não é duplicado: a operação tem chave estável, e um PR já aberto a partir da branch é
   reutilizado.
-- `GET /api/pipeline/reviews` lê do provedor os checks, a decisão de revisão e se o PR ainda está no
+- `GET /api/pipeline/reviews` lê do provedor o estado do PR (aberto, mergeado, fechado), os checks
+  (repositório sem CI aparece sem checks, não como erro), a decisão de revisão e se o PR ainda está no
   commit avaliado (`stale`).
+- Depois do merge ou do fechamento no host, **Reconciliar integração** (ou `faztudo reconcile`) lê o
+  resultado: PR mergeado conta a US como *integrada*, com o commit do merge; fechado sem merge, como
+  *fora da base*, com a branch preservada. A base local não muda: traga o merge com o seu `git pull`.
 
 GitHub (inclusive Enterprise) usa o `gh` autenticado na máquina, sem shell e com a descrição passada
 por arquivo; o FazTudo não vê token. Bitbucket é a subentrega FT-020b (Cloud e Server diferem; o
@@ -630,7 +634,7 @@ as setas rolam a saída e Ctrl+L limpa a saída local.
 | `stop`, `resume`, `retry --story N --step ID` | Para, continua ou refaz uma etapa. |
 | `why --story N [--json]` | Diz, por etapa, se é obrigatória, exigida pelo risco, opcional ou não aplicável e por quê, com validação e classe da falha. |
 | `answer --story N --answers "a \| b"` | Responde as decisões de produto em aberto; a US recomeça do Passo 0. |
-| `reconcile` | Completa uma integração que ficou parcial, sem desfazer nada. |
+| `reconcile` | Completa uma integração que ficou parcial, ou lê o resultado dos PRs abertos, sem desfazer nada. |
 | `review-log --story N --minutes M [--rework M] [--note TEXTO]` | Registra o tempo de revisão humana e de retrabalho. |
 | `stories parse --file US.md` | Mostra as US e o contexto comum identificados. |
 | `repo show/set/branches/base/discovery-reset` | Gerencia o repositório, as branches base e o discovery. |

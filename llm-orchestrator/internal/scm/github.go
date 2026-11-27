@@ -120,6 +120,10 @@ func (g *GitHub) Create(ctx context.Context, req Request) (*PullRequest, error) 
 func (g *GitHub) Checks(ctx context.Context, number int) ([]Check, error) {
 	out, err := g.Run(ctx, g.Dir, "gh", "pr", "checks", strconv.Itoa(number), "--json", "name,bucket")
 	if err != nil && strings.TrimSpace(out) == "" {
+		// A repository without CI has no checks: that is an answer.
+		if strings.Contains(err.Error(), "no checks reported") {
+			return []Check{}, nil
+		}
 		return nil, fmt.Errorf("gh pr checks: %w", err)
 	}
 	var list []struct {
@@ -138,7 +142,7 @@ func (g *GitHub) Checks(ctx context.Context, number int) ([]Check, error) {
 
 // Review reads the review decision and whether the host would merge it.
 func (g *GitHub) Review(ctx context.Context, number int) (Review, error) {
-	out, err := g.Run(ctx, g.Dir, "gh", "pr", "view", strconv.Itoa(number), "--json", "reviewDecision,mergeStateStatus,headRefOid")
+	out, err := g.Run(ctx, g.Dir, "gh", "pr", "view", strconv.Itoa(number), "--json", "reviewDecision,mergeStateStatus,headRefOid,state,mergeCommit")
 	if err != nil {
 		return Review{}, fmt.Errorf("gh pr view: %w", err)
 	}
@@ -146,11 +150,19 @@ func (g *GitHub) Review(ctx context.Context, number int) (Review, error) {
 		ReviewDecision   string `json:"reviewDecision"`
 		MergeStateStatus string `json:"mergeStateStatus"`
 		HeadRefOid       string `json:"headRefOid"`
+		State            string `json:"state"`
+		MergeCommit      *struct {
+			Oid string `json:"oid"`
+		} `json:"mergeCommit"`
 	}
 	if err := json.Unmarshal([]byte(out), &v); err != nil {
 		return Review{}, fmt.Errorf("gh pr view: resposta ilegível: %w", err)
 	}
-	return Review{Decision: v.ReviewDecision, MergeState: v.MergeStateStatus, HeadSHA: v.HeadRefOid}, nil
+	r := Review{Decision: v.ReviewDecision, MergeState: v.MergeStateStatus, HeadSHA: v.HeadRefOid, State: strings.ToUpper(v.State)}
+	if v.MergeCommit != nil {
+		r.MergeCommit = v.MergeCommit.Oid
+	}
+	return r, nil
 }
 
 // checkBranch refuses a name that could pass for an option.
