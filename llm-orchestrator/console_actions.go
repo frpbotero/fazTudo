@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -29,7 +30,7 @@ func consoleAction(args []string, input io.Reader, out, errOut io.Writer) int {
 			return 2
 		}
 		verb, rest = rest[0], rest[1:]
-	case "status", "logs", "stop", "resume", "retry":
+	case "status", "logs", "stop", "resume", "retry", "why", "answer", "reconcile", "review-log":
 	default:
 		fmt.Fprintf(errOut, "comando desconhecido: %s\n", command)
 		return 2
@@ -49,6 +50,10 @@ func consoleAction(args []string, input io.Reader, out, errOut io.Writer) int {
 	model := fs.Bool("detect-model", false, "usa modelo para detectar histórias")
 	real := fs.Bool("real", false, "permite chamar o modelo para detectar histórias")
 	delay := fs.Duration("sim-delay", 1400*time.Millisecond, "duração de cada etapa simulada")
+	answers := fs.String("answers", "", "respostas às decisões em aberto, separadas por \" | \"")
+	minutes := fs.Int("minutes", 0, "minutos de revisão")
+	rework := fs.Int("rework", 0, "minutos de retrabalho")
+	note := fs.String("note", "", "nota do registro")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -115,6 +120,39 @@ func consoleAction(args []string, input io.Reader, out, errOut io.Writer) int {
 		err = c.request(http.MethodPost, "/api/pipeline/retry", map[string]any{"story": *story, "step": *step}, nil)
 		if err == nil {
 			return c.waitRun(out, errOut)
+		}
+	case "why/":
+		var snap server.Snapshot
+		err = c.request(http.MethodGet, "/api/status", nil, &snap)
+		if err == nil {
+			if *story < 0 || *story >= len(snap.Run.Stories) {
+				fmt.Fprintln(errOut, "informe --story com um índice válido")
+				return 2
+			}
+			if *jsonOutput {
+				result = snap.Run.Stories[*story].Steps
+			} else {
+				printWhy(out, snap.Run.Stories[*story])
+			}
+		}
+	case "answer/":
+		list := splitAnswers(*answers)
+		if *story < 0 || len(list) == 0 {
+			fmt.Fprintln(errOut, "informe --story e --answers")
+			return 2
+		}
+		err = c.request(http.MethodPost, "/api/pipeline/answer", map[string]any{"story": *story, "answers": list}, nil)
+		if err == nil {
+			fmt.Fprintln(out, "Respostas registradas; a US recomeça do Passo 0.")
+			return c.waitRun(out, errOut)
+		}
+	case "reconcile/":
+		err = c.request(http.MethodPost, "/api/pipeline/reconcile", nil, &result)
+	case "review-log/":
+		err = c.request(http.MethodPost, "/api/pipeline/review-log",
+			map[string]any{"story": *story, "minutes": *minutes, "rework_minutes": *rework, "note": *note}, nil)
+		if err == nil {
+			fmt.Fprintln(out, "Tempo de revisão registrado.")
 		}
 	case "repo/show":
 		err = c.request(http.MethodGet, "/api/workspace", nil, &result)
@@ -328,14 +366,31 @@ func writeJSON(out, errOut io.Writer, value any) int {
 	return 0
 }
 
+// printStoryLine shows a story's execution status and, once it closed, its
+// validation, so a finished story is not read as an approved one.
+func printStoryLine(out io.Writer, story pipeline.StoryRun) {
+	if story.Validation == "" {
+		fmt.Fprintf(out, "%s: %s (%s)\n", story.ID, story.Title, story.Status)
+		return
+	}
+	line := fmt.Sprintf("%s: %s (%s, validação %s", story.ID, story.Title, story.Status, story.Validation.Label())
+	if story.Integration == pipeline.IntegrationBlocked {
+		line += ", fora da base: " + story.IntegrationNote
+	}
+	fmt.Fprintln(out, line+")")
+}
+
 func printRunStatus(out io.Writer, run pipeline.Run) {
 	if run.Repository == "" {
 		fmt.Fprintln(out, "Nenhuma execução registrada.")
 		return
 	}
 	fmt.Fprintf(out, "Repositório: %s\nResultado: %s\nEm execução: %t\n", run.Repository, run.Result, run.Running)
+	if run.Validation != "" {
+		fmt.Fprintf(out, "Validação: %s\n", run.Validation.Label())
+	}
 	for _, story := range run.Stories {
-		fmt.Fprintf(out, "%s: %s (%s)\n", story.ID, story.Title, story.Status)
+		printStoryLine(out, story)
 		for _, step := range story.Steps {
 			if step.Status != pipeline.StepPending {
 				fmt.Fprintf(out, "  %s: %s\n", step.Title, step.Status)
@@ -347,5 +402,43 @@ func printRunStatus(out io.Writer, run pipeline.Run) {
 	}
 	if run.Kind == pipeline.RunCleanup {
 		printCleanup(out, run)
+	}
+}
+
+// splitAnswers reads "a | b | c" into its answers.
+func splitAnswers(s string) []string {
+	var out []string
+	for _, a := range strings.Split(s, "|") {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// printWhy says, for each step of a story, why it is part of it and how it
+// ended: the same reasons the dashboard shows.
+func printWhy(out io.Writer, story pipeline.StoryRun) {
+	fmt.Fprintf(out, "%s\n", cmp.Or(story.Title, story.ID))
+	if r := story.Risk; r != nil && len(r.Rules) > 0 {
+		fmt.Fprintf(out, "  risco %s: %s\n", r.Level, strings.Join(r.Reasons, "; "))
+	}
+	for _, s := range story.Steps {
+		if s.Need == "" && s.Kind != "" {
+			continue // fix and verification rounds follow their gate
+		}
+		line := fmt.Sprintf("  %-34s %-12s %-18s %s", s.Title, s.Status, s.Need, s.NeedReason)
+		if s.Validation != "" {
+			line += " · validação " + string(s.Validation)
+		}
+		if s.FailureClass != "" {
+			line += " · falha de " + s.FailureClass
+		}
+		fmt.Fprintln(out, strings.TrimRight(line, " "))
+	}
+	if q := story.Readiness; q != nil {
+		for _, d := range q.Decisions {
+			fmt.Fprintf(out, "  decisão em aberto: %s\n", d.Question)
+		}
 	}
 }

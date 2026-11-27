@@ -18,6 +18,7 @@ import (
 
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/scm"
 	"llm-orchestrator/internal/stories"
 	"llm-orchestrator/internal/vcs"
 	"llm-orchestrator/internal/workspace"
@@ -33,37 +34,6 @@ var ErrNoStories = errors.New("nenhuma User Story informada")
 // resumed from the last execution.
 var ErrNoFailedStep = errors.New("nenhuma etapa com falha para refazer")
 
-// StepStatus is the lifecycle state of a stage.
-type StepStatus string
-
-const (
-	StepPending  StepStatus = "pending"
-	StepRunning  StepStatus = "running"
-	StepDone     StepStatus = "done"
-	StepSkipped  StepStatus = "skipped"
-	StepOmitted  StepStatus = "omitted" // not selected by the architect
-	StepFailed   StepStatus = "failed"
-	StepWarning  StepStatus = "warning" // finished with unresolved issues; the run goes on
-	StepCanceled StepStatus = "canceled"
-)
-
-// Result is the final outcome of a run.
-type Result string
-
-const (
-	ResultSucceeded Result = "succeeded"
-	ResultFailed    Result = "failed"
-	ResultCanceled  Result = "canceled"
-)
-
-// Log levels exposed to the UI.
-const (
-	LevelInfo    = "info"
-	LevelSuccess = "success"
-	LevelWarn    = "warn"
-	LevelError   = "error"
-)
-
 // flowOffNote marks a stage the configured flow turns off.
 const flowOffNote = "Desativada no fluxo configurado"
 
@@ -78,127 +48,52 @@ const (
 	agentRetryDelay = 20 * time.Second
 )
 
-// Step is the observable state of one stage.
-type Step struct {
-	ID       string        `json:"id"`
-	Title    string        `json:"title"`
-	Role     string        `json:"role"`
-	Tier     provider.Tier `json:"tier"`
-	Status   StepStatus    `json:"status"`
-	Provider string        `json:"provider,omitempty"`
-	Model    string        `json:"model,omitempty"`
-	Effort   string        `json:"effort,omitempty"`
-	Output   string        `json:"output,omitempty"`
-	Note     string        `json:"note,omitempty"`
-	Kind     string        `json:"kind,omitempty"`  // "" (stage), "fix", "verify", "investigate" or "stream"
-	Agent    string        `json:"agent,omitempty"` // implementer running a stream
-	Round    int           `json:"round,omitempty"` // fix/verification round
-	Gate     string        `json:"gate,omitempty"`  // gate that requested a fix
-	Issues   []Issue       `json:"issues,omitempty"`
-	// Checks and Findings are the results of an executable gate.
-	Checks   []quality.Result  `json:"checks,omitempty"`
-	Findings []quality.Finding `json:"findings,omitempty"`
-	// Candidates are the alternatives compared by best-of-N.
-	Candidates []Candidate `json:"candidates,omitempty"`
-	// Commit records the changes the step made, when git is enabled.
-	Commit     *vcs.Commit `json:"commit,omitempty"`
-	Error      string      `json:"error,omitempty"`
-	StartedAt  *time.Time  `json:"started_at,omitempty"`
-	DurationMS int64       `json:"duration_ms,omitempty"`
-}
-
-// LogEntry is a structured event shown in the UI console.
-type LogEntry struct {
-	Time    time.Time `json:"time"`
-	Level   string    `json:"level"`
-	Message string    `json:"message"`
-}
-
-// StoryRun is the progress of one user story through the stages.
-type StoryRun struct {
-	ID         string     `json:"id"`
-	Title      string     `json:"title"`
-	Status     StepStatus `json:"status"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	DurationMS int64      `json:"duration_ms,omitempty"`
-	Plan       *Plan      `json:"plan,omitempty"`
-	Branch     string     `json:"branch,omitempty"`
-	// Wave is the 1-based group of stories developed in parallel; DependsOn
-	// lists the stories it waits for, as the dependency analysis found them.
-	Wave      int      `json:"wave,omitempty"`
-	DependsOn []string `json:"depends_on,omitempty"`
-	// Trace links the tests the specification requires to the test files.
-	Trace []quality.Trace `json:"trace,omitempty"`
-	// Causes are the problems found, followed across fix rounds.
-	Causes []Cause `json:"causes,omitempty"`
-	Steps  []Step  `json:"steps"`
-}
-
-// Run describes the current or last pipeline execution: a shared discovery
-// followed by one or more stories developed in sequence.
-type Run struct {
-	// Kind is RunCleanup for a code health run, empty for a story run.
-	Kind       string     `json:"kind,omitempty"`
-	Running    bool       `json:"running"`
-	Source     string     `json:"source,omitempty"`
-	Repository string     `json:"repository,omitempty"`
-	DryRun     bool       `json:"dry_run"`
-	StartedAt  *time.Time `json:"started_at,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	Result     Result     `json:"result,omitempty"`
-	BaseBranch string     `json:"base_branch,omitempty"`
-	Protected  []string   `json:"protected,omitempty"` // input files guarded during the run
-	Discovery  Step       `json:"discovery"`
-	// Analysis maps the dependencies between the stories of a document; it
-	// runs only when there are several.
-	Analysis *Step `json:"analysis,omitempty"`
-	// Waves group the story indexes developed in parallel, in order.
-	Waves [][]int `json:"waves,omitempty"`
-	// Integrations are the branches that merged the stories of each wave.
-	Integrations []string   `json:"integrations,omitempty"`
-	Stories      []StoryRun `json:"stories"`
-	Current      int        `json:"current"` // index into Stories; -1 while discovering
-	Logs         []LogEntry `json:"logs"`
-	// Bases are the branches each repository started from (keyed "." and by
-	// nested path); every wave is merged into them before the next begins.
-	Bases map[string]string `json:"bases,omitempty"`
-	// Resume is where a stopped run continues; nil while running or done.
-	Resume *ResumePoint `json:"resume,omitempty"`
-	// Cleanup holds a code health run's options, checks and verdict.
-	Cleanup *CleanupInfo `json:"cleanup,omitempty"`
-}
-
-// StartOptions configures a run.
-type StartOptions struct {
-	// Stories are developed in order; each one sees the previous as delivered.
-	Stories []stories.Story
-	// Preamble is document-level context shared by every story.
-	Preamble string
-	Source   string
-	DryRun   bool
-	// Rediscover forces a new discovery even if the session has one cached.
-	Rediscover bool
-	// DocumentName is the name of the loaded story file; a file with that
-	// name in the repository is protected like the policy's patterns.
-	DocumentName string
-}
-
-// stepRef addresses a step by ID: story -1 is the discovery step.
-type stepRef struct {
-	story int
-	id    string
-}
-
-var discoveryRef = stepRef{story: -1, id: DiscoveryStage.ID}
-
 // Executor dispatches a task to an LLM provider.
 type Executor interface {
 	Execute(ctx context.Context, req provider.Request, logf provider.Logf) (*provider.Response, error)
 	SetDryRun(bool)
 }
 
+// Preflighter is an Executor that can tell, before a run starts, whether
+// its providers can serve the run's policy (provider.Router does).
+type Preflighter interface {
+	Preflight(ctx context.Context, need provider.Requirements) ([]string, error)
+}
+
+// preflight refuses a real run no provider can serve and returns what will
+// work in a weaker way, to be logged once the run starts.
+func (o *Orchestrator) preflight(opts StartOptions) ([]string, error) {
+	p, ok := o.exec.(Preflighter)
+	if !ok || opts.DryRun {
+		return nil, nil
+	}
+	policy := o.ws.Policy()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	warnings, err := p.Preflight(ctx, provider.Requirements{StrictCommands: policy.StrictCommands, MaxTurns: policy.MaxTurns > 0})
+	if err != nil {
+		return nil, fmt.Errorf("verificação dos providers: %w", err)
+	}
+	return warnings, nil
+}
+
 // Orchestrator runs one pipeline at a time and notifies observers on change.
 type Orchestrator struct {
+	// baselines caches the baselines by commit and commands, so the stories
+	// of a wave starting from the same commit share one.
+	baselines  sync.Map
+	baselineMu sync.Mutex
+	// skillOverrides are the run's repository complements to the skills.
+	skillOverrides map[string]SkillOverride
+	// appVersion goes into every run's manifest.
+	appVersion string
+	// scmFor finds the source host of a repository, for review mode.
+	scmFor func(ctx context.Context, dir string) (scm.Provider, error)
+	// agentSlots bound the run's agent calls at once.
+	agentSlots *fairSlots
+	// lanes are the stories running side by side: a failure of one of them
+	// stops that story, not the run, unless it is global.
+	lanes    map[int]bool
 	exec     Executor
 	ws       *workspace.Manager
 	stages   []Stage
@@ -206,7 +101,9 @@ type Orchestrator struct {
 	logger   *slog.Logger
 	runCheck func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
 	// sweepStacks and lockStackSlot keep disposable test stacks in check.
-	sweepStacks   func(ctx context.Context, roots, patterns []string) ([]string, error)
+	sweepStacks func(ctx context.Context, roots, patterns []string) ([]string, error)
+	// lockResource holds a named shared resource across processes and lanes.
+	lockResource  func(ctx context.Context, name string, onWait func()) (func(), error)
 	lockStackSlot func(ctx context.Context, onWait func()) (func(), error)
 	// attempts and retryDelay control how failing agent calls are retried.
 	attempts   int
@@ -250,8 +147,11 @@ var (
 func New(exec Executor, ws *workspace.Manager, stages []Stage, onChange func(), logger *slog.Logger) *Orchestrator {
 	o := &Orchestrator{exec: exec, ws: ws, baseStages: stages, stages: resolveStages(stages, nil), texts: resolveTexts(nil),
 		onChange: onChange, logger: logger, runCheck: quality.Run,
-		sweepStacks: defaultSweepStacks, lockStackSlot: defaultLockStackSlot,
-		attempts: agentAttempts, retryDelay: agentRetryDelay}
+		sweepStacks: defaultSweepStacks, lockStackSlot: defaultLockStackSlot, lockResource: workspace.LockResource,
+		attempts: agentAttempts, retryDelay: agentRetryDelay,
+		scmFor: func(ctx context.Context, dir string) (scm.Provider, error) {
+			return scm.Detect(ctx, dir, scm.ExecRunner)
+		}}
 	o.run.Discovery = newStep(DiscoveryStage)
 	o.run.Stories = []StoryRun{{Status: StepPending, Steps: o.freshSteps()}}
 	o.run.Current = -1
@@ -322,6 +222,18 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 	if len(opts.Stories) == 0 {
 		return ErrNoStories
 	}
+	o.mu.RLock()
+	busy := o.busyLocked()
+	o.mu.RUnlock()
+	if busy {
+		return ErrAlreadyRunning
+	}
+	// Outside the lock: detecting CLI versions runs them.
+	warnings, err := o.preflight(opts)
+	if err != nil {
+		return err
+	}
+	manifest := o.buildManifest(context.Background(), opts)
 	o.mu.Lock()
 	if o.busyLocked() {
 		o.mu.Unlock()
@@ -359,6 +271,8 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		Discovery:  newStep(DiscoveryStage),
 		Stories:    runs,
 		Current:    -1,
+		Manifest:   &manifest,
+		ID:         newRunID(now),
 	}
 	if len(runs) > 1 {
 		analysis := newStep(AnalysisStage)
@@ -376,6 +290,9 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 	o.logf(LevelInfo, "Execução iniciada em %s: %d US (origem: %s, modo: %s).", repo, len(opts.Stories), opts.Source, mode)
 	o.logger.Info("pipeline started", "repository", repo, "stories", len(opts.Stories), "source", opts.Source, "dry_run", opts.DryRun)
 	o.logCustomPrompts(customized)
+	for _, w := range warnings {
+		o.logf(LevelWarn, "%s", w)
+	}
 
 	go func() {
 		defer close(done)
@@ -392,6 +309,13 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 // Completed stages before it are kept as context; generated fix/verify steps
 // from that stage onward are discarded and will be rebuilt by the gate.
 func (o *Orchestrator) RetryFailed(story int, stepID string) error {
+	o.mu.RLock()
+	last := o.last
+	o.mu.RUnlock()
+	var cur RunManifest
+	if len(last.Stories) > 0 {
+		cur = o.buildManifest(context.Background(), last)
+	}
 	o.mu.Lock()
 	if o.busyLocked() {
 		o.mu.Unlock()
@@ -422,6 +346,17 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 		o.mu.Unlock()
 		return ErrNoFailedStep
 	}
+	// Results saved before the stop hold only while what they depend on did.
+	invs := o.invalidations(o.run.Manifest, cur, story)
+	if why, moved := branchMoved(context.Background(), o.ws.Path(), o.run.Stories[story]); moved && !o.run.DryRun {
+		if at := slices.IndexFunc(o.stages, func(s Stage) bool { return s.Verifier }); at >= 0 {
+			invs = append(invs, Invalidation{Reason: why, From: at, Stage: o.stages[at].ID})
+		}
+	}
+	requested := stageAt
+	stageAt = earliest(stageAt, invs)
+	o.run.ResumeChecks = invs
+	o.run.Manifest = &cur
 
 	unlock, err := workspace.LockRepository(o.ws.Path())
 	if err != nil {
@@ -448,14 +383,18 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	}
 	o.run.Stories[story].Steps = fresh
 	o.run.Stories[story].Status = StepRunning
+	o.run.Stories[story].Validation = ""
+	o.run.Stories[story].Integration, o.run.Stories[story].IntegrationNote = "", ""
 	started := time.Now()
 	o.run.Stories[story].StartedAt = &started
 	o.run.Stories[story].DurationMS = 0
 	for i := range o.run.Stories {
-		if i == story || isFinished(o.run.Stories[i].Status) {
+		if i == story || isFinished(o.run.Stories[i].Status) && !skippedByDependency(o.run.Stories[i]) {
 			continue // delivered stories of a parallel wave are kept
 		}
 		o.run.Stories[i].Status = StepPending
+		o.run.Stories[i].Validation = ""
+		o.run.Stories[i].Integration, o.run.Stories[i].IntegrationNote = "", ""
 		o.run.Stories[i].StartedAt = nil
 		o.run.Stories[i].DurationMS = 0
 		o.run.Stories[i].Plan = nil
@@ -465,6 +404,7 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	}
 	o.run.Running = true
 	o.run.Result = ""
+	o.run.Validation = ""
 	o.run.FinishedAt = nil
 	o.run.Current = story
 	o.isJournalOwner = true
@@ -477,6 +417,12 @@ func (o *Orchestrator) RetryFailed(story int, stepID string) error {
 	o.mu.Unlock()
 	o.notify()
 	o.logCustomPrompts(customized)
+	for _, inv := range invs {
+		o.logf(LevelWarn, "Retomada: %s; refazendo a partir de %s.", inv.Reason, o.stages[inv.From].Title)
+	}
+	if stageAt < requested {
+		o.logf(LevelInfo, "Resultados salvos antes de %s continuam valendo; os seguintes são refeitos.", o.stages[stageAt].Title)
+	}
 	o.logf(LevelInfo, "Refazendo %q a partir de %s.", previous.Title, o.stages[stageAt].Title)
 
 	go func() {
@@ -587,10 +533,39 @@ type storyState struct {
 	planText   string
 	reqs       []quality.Requirement
 	verifiedAt time.Time // when a verifier last approved the repository
-	blocked    string    // Passo 0 reason when the story cannot be developed yet
-	pending    int       // issues a gate could not get fixed within its rounds
-	red        []string  // commands that failed last, retried first
-	skipped    bool      // the last assessment left costlier commands out
+	// verifiedKey is what the approved repository held (content and commands).
+	verifiedKey string
+	blocked     string // Passo 0 reason when the story cannot be developed yet
+	pending     int    // issues a gate could not get fixed within its rounds
+	// inconclusive counts gates that never produced a valid verdict.
+	inconclusive int
+	// risk is what the policy's risk rules found so far; it only grows.
+	risk workspace.Risk
+	// baseline is how the commands behaved before the story changed anything.
+	baseline *Baseline
+	// waiting counts the open product decisions Passo 0 found.
+	waiting int
+	// reused marks a story Passo 0 found done: only executable gates run.
+	reused bool
+	// change is the story's kind; changeReason justifies a trivial one.
+	change, changeReason string
+	// startCommit is the snapshot the story started from, where a bug's tests
+	// must fail; repro is the last reproduction made.
+	startCommit string
+	repro       *Reproduction
+	// acceptedAt is when the functional QA last accepted every scenario.
+	acceptedAt time.Time
+	// measured tells whether a benchmark ran for the performance gate, and
+	// benchmarks is what it printed.
+	measured     bool
+	benchmarks   string
+	benchResults []BenchResult
+	// stageAt is the index of the stage running; late lists the planning
+	// stages the risk required only after they had passed.
+	stageAt int
+	late    []string
+	red     []string // commands that failed last, retried first
+	skipped bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -621,37 +596,97 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 
 // closeStory records how a developed story ended: delivered, delivered with
 // pending issues, or blocked in Passo 0.
-func (o *Orchestrator) closeStory(st *storyState, total int) {
+func (o *Orchestrator) closeStory(ss *session, st *storyState, total int) {
+	o.annotateNeeds(ss, st) // the diff may have raised the risk since the plan
+	if o.invalidateAcceptance(ss, st) {
+		o.logf(LevelWarn, "%s: código alterado depois da aceitação funcional; os cenários precisam ser aceitos de novo.", st.sc.Story.Title)
+	}
 	status := StepDone
 	switch {
+	case st.waiting > 0:
+		status = StepWaiting
 	case st.blocked != "":
 		status = StepSkipped
 		o.logf(LevelWarn, "%s bloqueada no Passo 0: %s", st.sc.Story.Title, st.blocked)
 	case st.pending > 0:
 		status = StepWarning
 		o.logf(LevelWarn, "%s entregue com %d pendência(s) não resolvida(s).", st.sc.Story.Title, st.pending)
+	case st.inconclusive > 0:
+		status = StepWarning
+		o.logf(LevelWarn, "%s entregue sem veredito válido em %d portão(ões); validação inconclusiva.", st.sc.Story.Title, st.inconclusive)
 	case total > 1:
 		o.logf(LevelSuccess, "%s entregue (%d de %d).", st.sc.Story.Title, st.si+1, total)
 	}
-	o.updateStory(st.si, func(r *StoryRun) { r.Status = status; r.DurationMS = time.Since(st.started).Milliseconds() })
+	var missingNote string
+	o.updateStory(st.si, func(r *StoryRun) {
+		r.Status = status
+		r.DurationMS = time.Since(st.started).Milliseconds()
+		r.Validation = storyValidation(r.Steps)
+		// Nothing was built for a reused story: the risk's stages, which
+		// judge a change, do not apply; its executable gates still did.
+		if st.change == ChangeBug && st.repro != nil && (st.repro.Status == ReproUnclear || st.repro.Status == ReproUnverified) {
+			// The fix passes, but nothing showed the bug it fixes.
+			r.Validation = worseValidation(r.Validation, ValidationInconclusive)
+			if r.Status == StepDone {
+				r.Status = StepWarning
+			}
+		}
+		if missing := o.missingRequired(st, r.Steps); len(missing) > 0 && st.blocked == "" && st.waiting == 0 && !st.reused {
+			r.Validation = worseValidation(r.Validation, ValidationInconclusive)
+			missingNote = strings.Join(missing, ", ")
+		}
+		if st.blocked != "" || st.waiting > 0 || o.run.DryRun {
+			// Nothing was checked for real: a blocked story was not built and
+			// a simulation runs no command nor model.
+			r.Validation = ValidationNotEvaluated
+		}
+		if slices.ContainsFunc(r.Acceptance, func(a ScenarioResult) bool { return a.Status == ScenarioInvalidated }) {
+			r.Validation = worseValidation(r.Validation, ValidationInconclusive)
+		}
+		if (missingNote != "" || r.Validation == ValidationInconclusive) && r.Status == StepDone {
+			r.Status = StepWarning
+		}
+	})
+	if missingNote != "" {
+		o.logf(LevelWarn, "%s: etapa(s) obrigatória(s) pela política de risco sem resultado (%s); validação inconclusiva.", st.sc.Story.Title, missingNote)
+	}
 }
 
 // finishSucceeded ends a run that went through every story, pointing out the
 // ones left with pending issues.
+// The run's Result only says it finished; Validation, set here, says whether
+// the delivery was approved.
 func (o *Orchestrator) finishSucceeded(msg string) {
-	o.mu.RLock()
+	o.mu.Lock()
 	var pending []string
 	for _, st := range o.run.Stories {
 		if st.Status == StepWarning {
 			pending = append(pending, cmp.Or(st.ID, st.Title))
 		}
 	}
-	o.mu.RUnlock()
-	if len(pending) > 0 {
-		o.finish(ResultSucceeded, LevelWarn, fmt.Sprintf("Pipeline concluído com pendências em: %s.", strings.Join(pending, ", ")))
-		return
+	var waiting []string
+	for _, st := range o.run.Stories {
+		if st.Status == StepWaiting {
+			waiting = append(waiting, cmp.Or(st.ID, st.Title))
+		}
 	}
-	o.finish(ResultSucceeded, LevelSuccess, msg)
+	validation := runValidation(o.run.Stories)
+	o.run.Validation = validation
+	dry := o.run.DryRun
+	o.mu.Unlock()
+	if len(waiting) > 0 {
+		msg += fmt.Sprintf(" Aguardando decisão de produto em: %s.", strings.Join(waiting, ", "))
+	}
+	switch {
+	case len(pending) > 0:
+		o.finish(ResultSucceeded, LevelWarn, fmt.Sprintf("Pipeline concluído com pendências em: %s. Validação %s.", strings.Join(pending, ", "), validation.Label()))
+	case dry:
+		o.finish(ResultSucceeded, LevelSuccess, msg+" Simulação: nenhuma entrega foi validada.")
+	case validation != ValidationPassed:
+		o.finish(ResultSucceeded, LevelWarn, fmt.Sprintf("%s Validação %s.", msg, validation.Label()))
+	default:
+		o.finish(ResultSucceeded, LevelSuccess, msg)
+	}
 }
 
 // retryExecute rebuilds the transient session around the repository as it was
@@ -676,6 +711,9 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 	}
 	from := slices.IndexFunc(waves, func(w []int) bool { return slices.Contains(w, story) })
 	resume := &resumePoint{si: story, stageAt: stageAt, started: started}
+	if stageAt < 0 {
+		resume = nil // the story starts over, on a new branch
+	}
 	if !o.runWaves(ctx, ss, opts, waves[max(from, 0):], resume) {
 		return
 	}
@@ -687,6 +725,7 @@ func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts Start
 	policy := o.ws.Policy()
 	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
 	o.useLimits(policy, ss.checks)
+	o.useSlots(policy)
 	ss.patterns = protectedPatterns(policy, opts)
 	ss.guard = quality.NewGuard(repo, ss.patterns)
 	if !opts.DryRun && policy.Git {
@@ -734,7 +773,7 @@ func (o *Orchestrator) basesOfRun(policy workspace.Policy) map[string]string {
 // protectedPatterns adds the loaded story document to the policy's
 // protected patterns.
 func protectedPatterns(policy workspace.Policy, opts StartOptions) []string {
-	patterns := policy.Protected
+	patterns := append(slices.Clone(policy.Protected), overridePattern)
 	if name := path.Base(filepath.ToSlash(strings.TrimSpace(opts.DocumentName))); name != "." && name != "/" {
 		patterns = append(slices.Clone(patterns), name)
 	}
@@ -750,8 +789,17 @@ func (o *Orchestrator) restoreStoryState(si int, started time.Time, opts StartOp
 	}
 	o.mu.RLock()
 	runStory := o.run.Stories[si]
+	if runStory.Risk != nil {
+		st.risk = *runStory.Risk
+	}
+	st.baseline = runStory.Baseline
+	st.change, st.changeReason = runStory.Change, runStory.ChangeReason
+	st.startCommit, st.repro = runStory.StartCommit, runStory.Reproduction
 	if runStory.Plan != nil {
 		st.plan = *runStory.Plan
+		// A plan saved before scenarios had IDs gets them as a new one would.
+		st.plan.Acceptance = slices.Clone(st.plan.Acceptance)
+		numberScenarios(st.plan.Acceptance)
 	}
 	steps := slices.Clone(runStory.Steps)
 	o.mu.RUnlock()
@@ -771,8 +819,20 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 	policy := o.ws.Policy()
 	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
 	o.useLimits(policy, ss.checks)
+	o.useSlots(policy)
 	if ss.instructions != "" {
 		o.logf(LevelInfo, "Instruções do projeto (AGENTS.md/CLAUDE.md/Spec Kit) repassadas a todos os agentes.")
+	}
+
+	overrides := projectOverrides(repo)
+	o.mu.Lock()
+	o.skillOverrides = overrides
+	o.mu.Unlock()
+	for name, ov := range overrides {
+		o.logf(LevelInfo, "Skill %s com complemento do projeto: %s (sha256 %s).", name, ov.Path, short(ov.Hash))
+	}
+	for _, p := range policy.Profiles {
+		o.logf(LevelInfo, "Perfil de stack %s escolhido na política.", p)
 	}
 
 	ss.patterns = protectedPatterns(policy, opts)
@@ -786,6 +846,7 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 	if len(ss.checks) == 0 {
 		o.logf(LevelWarn, "Nenhum comando de verificação configurado ou detectado; o portão executável fará só as checagens estáticas.")
 	}
+	o.warnRiskVersusFlow(policy)
 	if opts.DryRun || !policy.Git {
 		return ss, true
 	}
@@ -860,20 +921,49 @@ func dirtyLabels(paths []string) []string {
 // changes.
 func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *storyState, startAt int, createBranch bool) bool {
 	if createBranch {
-		o.startBranch(ctx, ss, st)
+		if !o.startBranch(ctx, ss, st) {
+			return false
+		}
 	}
 
+	if startAt == 0 {
+		o.mu.RLock()
+		list := o.last.Stories
+		o.mu.RUnlock()
+		if built := o.dependencySnapshots(st.si, list); built != nil {
+			o.updateStory(st.si, func(r *StoryRun) { r.BuiltOn = built })
+		}
+		if ss.git != nil {
+			st.startCommit, _ = ss.git.Head(ctx)
+			o.updateStory(st.si, func(r *StoryRun) { r.StartCommit = st.startCommit })
+		}
+		kind, _ := changeKind("", "", st.sc.Story.Title+"\n"+st.sc.Story.Content)
+		o.setChange(st, kind, "")
+		if !o.takeBaseline(ctx, ss, st) {
+			return false
+		}
+	}
 	o.planAudit(ss, st)
+	o.assessStoryRisk(ss, st, nil)
+	o.annotateNeeds(ss, st)
 	streamed := false
 	for stageIndex, stage := range o.stages {
 		if stageIndex < startAt {
 			continue
 		}
+		st.stageAt = stageIndex
+		if stage.Gate || stage.Verifier {
+			// The real diff may raise the risk set from the story's text.
+			o.assessStoryRisk(ss, st, o.changedFiles(ss, st.started))
+		}
 		if stage.Selectable && !st.plan.Includes(stage.ID) {
 			continue // already marked as omitted when the plan was applied
 		}
-		if ss.policy.StageDisabled(stage.ID) {
+		if ss.policy.StageDisabled(stage.ID) && !st.requiredByRisk(stage.ID) {
 			continue // marked as omitted when the story's steps were created
+		}
+		if st.reused && !stage.Verifier {
+			continue // skipped when Passo 0 found the story done
 		}
 		ref := stepRef{st.si, stage.ID}
 		if waves := st.plan.parallelWaves(); stage.Implementer && waves != nil && !ss.policy.Sequential {
@@ -885,10 +975,25 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			continue
 		}
 		if stage.Verifier {
-			if !o.runVerifier(ctx, ss, st, stage) {
+			ok := false
+			switch stage.Commands {
+			case "migrations":
+				ok = o.runCommandGate(ctx, ss, st, stage, ss.policy.MigrationChecks,
+					"sem comandos de migration (`migration_checks`): integridade, compatibilidade e recuperação não foram testadas")
+			default:
+				ok = o.runVerifier(ctx, ss, st, stage)
+			}
+			if !ok {
 				return false
 			}
 			continue
+		}
+		if stage.Measured {
+			bench, alive := o.measure(ctx, ss, st)
+			if !alive {
+				return false
+			}
+			st.benchmarks = bench
 		}
 
 		var resp *provider.Response
@@ -903,10 +1008,11 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			resp, ok = o.runStage(ctx, ref, provider.Request{
 				Role:     stage.Role,
 				System:   stage.System,
-				Prompt:   buildPrompt(stage, st.sc, ss.report, o.stepsBefore(ref)),
+				Prompt:   buildPrompt(stage, o.stageContext(ss, st, stage), ss.report, o.stepsBefore(ref)),
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
+				Prefer:   reviewProvider(ss, stage),
 			})
 		}
 		if !ok || !o.afterAgent(ctx, ss, st, ref) {
@@ -923,6 +1029,11 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			o.applySpec(st, resp)
 		case stage.Planner:
 			st.plan, st.planText = o.applyPlan(st.si, st.sc, resp), resp.Output
+			o.enforceRisk(ss, st) // the architect may add stages, not drop mandatory ones
+			o.enforceSpecialties(st)
+			o.annotateNeeds(ss, st)
+		case stage.Specialist:
+			o.applySpecialist(st, ref, stage, resp)
 		case stage.Gate:
 			recheck := func(ctx context.Context, ref stepRef, issues []Issue, fixes []Step, round int) (evaluation, bool) {
 				if ev, ok := o.checkFixes(ctx, ss, st, ref); !ok {
@@ -930,25 +1041,50 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 				} else if ev != nil {
 					return *ev, true
 				}
+				if stage.Measured {
+					// The fix is judged on new measurements, not the old ones.
+					bench, alive := o.measure(ctx, ss, st)
+					if !alive {
+						return evaluation{}, false
+					}
+					st.benchmarks = bench
+				}
 				resp, ok := o.runStage(ctx, ref, provider.Request{
 					Role:     stage.Role,
 					System:   stage.System,
-					Prompt:   buildVerifyPrompt(o.texts.verifyTask, stage, st.sc, ss.report, issues, fixes, round),
+					Prompt:   buildVerifyPrompt(o.texts.verifyTask, stage, o.stageContext(ss, st, stage), ss.report, issues, fixes, round),
 					Tier:     stage.Tier,
 					WorkDir:  ss.repo,
 					ReadOnly: stage.ReadOnly,
+					Prefer:   reviewProvider(ss, stage),
 				})
 				if !ok || !o.afterAgent(ctx, ss, st, ref) {
 					return evaluation{}, false
 				}
-				return o.llmEvaluation(resp, st.plan), true
+				return o.gateEvaluation(ss, st, stage, resp), true
 			}
-			if !o.enforceGate(ctx, ss, st, stage, o.llmEvaluation(resp, st.plan), recheck) {
+			if !o.enforceGate(ctx, ss, st, stage, o.gateEvaluation(ss, st, stage, resp), recheck) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// stageContext is the story's context as stage reads it: the functional QA
+// also gets the executed evidence.
+func (o *Orchestrator) stageContext(ss *session, st *storyState, stage Stage) storyContext {
+	sc := st.sc
+	if stage.Gate && !ss.dry {
+		sc.Changed = o.changedFiles(ss, st.started)
+	}
+	switch {
+	case stage.Acceptor:
+		sc.Evidence = o.acceptanceEvidence(st)
+	case stage.Measured:
+		sc.Evidence = st.benchmarks
+	}
+	return sc
 }
 
 // planAudit stands in for the architect when the flow turns it off (audit of
@@ -973,66 +1109,34 @@ func (o *Orchestrator) planAudit(ss *session, st *storyState) {
 	o.updateStory(st.si, func(r *StoryRun) { r.Plan = &plan })
 }
 
-// applyAssessment records the Passo 0 decision. It returns true when the
-// story ends here: already implemented (reuse) or blocked.
-func (o *Orchestrator) applyAssessment(st *storyState, ref stepRef, resp *provider.Response) bool {
-	a := parseAssessment(resp.Output)
-	reason := a.Reason
-	if reason == "" {
-		reason = "sem motivo informado"
-	}
-	switch a.Decision {
-	case DecisionReuse:
-		o.updateStep(ref, func(s *Step) { s.Note = "Já atendida: " + reason })
-		o.skipRemaining(st.si, "Já atendida pelo código existente (Passo 0)")
-		o.logf(LevelSuccess, "%s já está implementada; nada a desenvolver.", st.sc.Story.Title)
-		return true
-	case DecisionBlock:
-		o.updateStep(ref, func(s *Step) { s.Note = "Bloqueada: " + reason })
-		o.skipRemaining(st.si, "US bloqueada no Passo 0")
-		st.blocked = reason
-		return true
-	}
-	o.updateStep(ref, func(s *Step) { s.Note = "Decisão: " + decisionLabel(a.Decision) })
-	o.logf(LevelInfo, "Passo 0: %s.", decisionLabel(a.Decision))
-	return false
-}
-
-func decisionLabel(d string) string {
-	switch d {
-	case DecisionExtend:
-		return "estender (só o delta)"
-	case DecisionRefactor:
-		return "refatorar"
-	}
-	return "implementar"
-}
-
-// skipRemaining marks the story's pending steps as skipped.
-func (o *Orchestrator) skipRemaining(si int, note string) {
-	o.mu.Lock()
-	for j := range o.run.Stories[si].Steps {
-		if s := &o.run.Stories[si].Steps[j]; s.Status == StepPending {
-			s.Status, s.Note = StepSkipped, note
-		}
-	}
-	o.mu.Unlock()
-	o.notify()
-}
-
 // startBranch creates the story's branch from the current HEAD, so stories of
 // a sequence build on each other.
-func (o *Orchestrator) startBranch(ctx context.Context, ss *session, st *storyState) {
+// maxBranchAttempts bounds the suffixes tried when a story's branch name is
+// taken (two runs of the same story in the same second).
+const maxBranchAttempts = 5
+
+// startBranch puts the story on a branch of its own. Without one the run
+// stops: developing on the base would put unverified work where only an
+// approved candidate may go.
+func (o *Orchestrator) startBranch(ctx context.Context, ss *session, st *storyState) bool {
 	if ss.git == nil {
-		return
+		return true
 	}
-	branch := vcs.BranchName(storyLabel(st.sc.Story), time.Now())
-	if err := ss.git.CreateBranch(ctx, branch); err != nil {
-		o.logf(LevelWarn, "Não foi possível criar a branch %s: %v.", branch, err)
-		return
+	name := vcs.BranchName(storyLabel(st.sc.Story), time.Now())
+	var err error
+	for i := 1; i <= maxBranchAttempts; i++ {
+		branch := name
+		if i > 1 {
+			branch = fmt.Sprintf("%s-%d", name, i)
+		}
+		if err = ss.git.CreateBranch(ctx, branch); err == nil {
+			o.updateStory(st.si, func(r *StoryRun) { r.Branch = branch })
+			o.logf(LevelInfo, "Branch %s criada para %s.", branch, st.sc.Story.Title)
+			return true
+		}
 	}
-	o.updateStory(st.si, func(r *StoryRun) { r.Branch = branch })
-	o.logf(LevelInfo, "Branch %s criada para %s.", branch, st.sc.Story.Title)
+	o.failRun(fmt.Errorf("não foi possível criar a branch de %s (%v); a US não é desenvolvida na branch base", st.sc.Story.Title, err))
+	return false
 }
 
 func storyLabel(s stories.Story) string {
@@ -1048,6 +1152,7 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 	if !o.guardInputs(ss, ref) {
 		return false
 	}
+	o.undoReviewerEdits(ctx, ss, ref)
 	if ss.git == nil {
 		return true
 	}
@@ -1059,6 +1164,9 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 	case c != nil:
 		o.updateStep(ref, func(s *Step) { s.Commit = c })
 		o.logf(LevelInfo, "Commit %s: %s (%d arquivo(s)).", c.Hash, title, len(c.Files))
+	}
+	if head, err := ss.git.Head(ctx); err == nil && ref.story >= 0 {
+		o.updateStory(ref.story, func(r *StoryRun) { r.Head = head })
 	}
 	return true
 }
@@ -1077,594 +1185,4 @@ func (o *Orchestrator) guardInputs(ss *session, ref stepRef) bool {
 	}
 	o.failStep(ref, 0, err)
 	return false
-}
-
-// testList is the spec stage's machine-readable list of required tests.
-type testList struct {
-	Tests []quality.Requirement `json:"tests"`
-}
-
-// applySpec adds the tests listed by the spec stage to the IDs found in the
-// story document.
-func (o *Orchestrator) applySpec(st *storyState, resp *provider.Response) {
-	if listed, ok := lastJSON(resp.Output, func(l testList) bool { return l.Tests != nil }); ok {
-		for i := range listed.Tests {
-			listed.Tests[i].Kind = strings.ToLower(strings.TrimSpace(listed.Tests[i].Kind))
-		}
-		st.reqs = quality.MergeRequirements(st.reqs, listed.Tests)
-	}
-	if len(st.reqs) > 0 {
-		o.logf(LevelInfo, "%d caso(s) de teste com ID serão rastreados até os arquivos de teste.", len(st.reqs))
-	}
-}
-
-// applyPlan parses the planner output and marks unselected agents as omitted.
-func (o *Orchestrator) applyPlan(si int, sc storyContext, resp *provider.Response) Plan {
-	plan, ok := parsePlan(resp.Output, o.stages)
-	switch {
-	case ok:
-	case resp.Simulated:
-		plan = heuristicPlan(sc.Story.Content, o.stages)
-	default:
-		plan = fullPlan(o.stages, "fallback")
-		o.logf(LevelWarn, "O arquiteto não retornou um plano em JSON; todos os agentes serão executados.")
-	}
-
-	policy := o.ws.Policy()
-	plan.Agents = slices.DeleteFunc(plan.Agents, policy.StageDisabled)
-	var names []string
-	o.mu.Lock()
-	st := &o.run.Stories[si]
-	st.Plan = &plan
-	for _, stage := range o.stages {
-		if !stage.Selectable {
-			continue
-		}
-		if plan.Includes(stage.ID) {
-			names = append(names, stage.Title)
-			continue
-		}
-		if i := stepIndex(st.Steps, stage.ID); i >= 0 && !policy.StageDisabled(stage.ID) {
-			st.Steps[i].Status = StepOmitted
-			st.Steps[i].Note = "Não selecionado pelo arquiteto"
-		}
-	}
-	o.mu.Unlock()
-	o.notify()
-
-	if len(names) == 0 {
-		names = append(names, "nenhum agente opcional")
-	}
-	o.logf(LevelInfo, "Plano do arquiteto: %s.", strings.Join(names, ", "))
-	return plan
-}
-
-// evaluation is a gate's outcome: the verdict, when one could be read, and
-// the report forwarded to whoever fixes the issues.
-type evaluation struct {
-	verdict   Verdict
-	parsed    bool
-	simulated bool
-	report    string
-}
-
-// recheckFunc re-evaluates a gate in the verification step ref after fixes.
-type recheckFunc func(ctx context.Context, ref stepRef, issues []Issue, fixes []Step, round int) (evaluation, bool)
-
-func (o *Orchestrator) llmEvaluation(resp *provider.Response, plan Plan) evaluation {
-	v, ok := parseVerdict(resp.Output, o.stages, plan)
-	return evaluation{verdict: v, parsed: ok, simulated: resp.Simulated, report: resp.Output}
-}
-
-// enforceGate reads a gate's verdict and, while it requests changes, sends the
-// issues to the responsible implementers and re-evaluates the gate.
-func (o *Orchestrator) enforceGate(ctx context.Context, ss *session, st *storyState, gate Stage, ev evaluation, recheck recheckFunc) bool {
-	stepID := gate.ID
-	rounds := maxFixRounds
-	if ss.policy.MaxFixRounds > 0 {
-		rounds = ss.policy.MaxFixRounds
-	}
-	if gate.Verifier {
-		rounds = maxVerifierRounds
-	}
-	st.lastFailures, st.stalls = 0, 0
-	for round := 1; ; round++ {
-		if !ev.parsed {
-			if !ev.simulated {
-				o.logf(LevelWarn, "%s não retornou um veredito em JSON; considerado aprovado.", gate.Title)
-			}
-			return true
-		}
-		verdict := ev.verdict
-		o.updateStep(stepRef{st.si, stepID}, func(s *Step) {
-			s.Issues = verdict.Issues
-			if verdict.NeedsChanges() {
-				s.Note = fmt.Sprintf("%d problema(s) encontrado(s)", len(verdict.Issues))
-			} else {
-				s.Note = "Aprovado"
-			}
-		})
-		if !verdict.NeedsChanges() {
-			o.closeCauses(st, nil)
-			if round > 1 {
-				o.logf(LevelSuccess, "%s aprovou as correções.", gate.Title)
-			}
-			return true
-		}
-
-		fixable := o.triage(ss, st, verdict.Issues)
-		settle := func(msg string) bool {
-			o.closeCauses(st, verdict.Issues)
-			return o.settleGate(st, stepID, gate, verdict.Issues, msg)
-		}
-		switch {
-		case round > rounds:
-			return settle(fmt.Sprintf("%d problema(s) persistem após %d rodadas de correção", len(verdict.Issues), rounds))
-		case len(fixable) == 0:
-			return settle(o.settleNote(st, verdict.Issues))
-		case st.stalled(countCauses(verdict.Issues)):
-			return settle(fmt.Sprintf("%d problema(s) sem redução há %d rodadas", len(verdict.Issues), maxStalledRounds))
-		}
-		fixable, afterID, alive := o.investigate(ctx, ss, st, gate, stepID, fixable, round)
-		if !alive {
-			return false
-		}
-		if len(fixable) == 0 {
-			return settle(o.settleNote(st, verdict.Issues))
-		}
-		tier := o.repairTier(st, fixable)
-		o.countAttempts(st, fixable)
-		fixes := o.scheduleFixes(st.si, gate, afterID, fixable, round)
-		if len(fixes) == 0 {
-			return settle(fmt.Sprintf("%d problema(s) sem implementador para corrigi-los", len(verdict.Issues)))
-		}
-		verifyID := fmt.Sprintf("%s-verify-%d", gate.ID, round+1)
-		o.insertSteps(st.si, fixes[len(fixes)-1].step.ID, Step{
-			ID: verifyID, Title: fmt.Sprintf("%s — rodada %d", gate.Title, round+1), Role: gate.Role, Tier: gate.Tier,
-			Status: StepPending, Kind: "verify", Round: round + 1,
-		})
-
-		fixesStarted := quality.FileClock(ss.repo)
-		var done []Step
-		for _, f := range fixes {
-			ref := stepRef{st.si, f.step.ID}
-			fixResp, ok := o.runStage(ctx, ref, provider.Request{
-				Role:    f.stage.Role,
-				System:  f.stage.System,
-				Prompt:  buildFixPrompt(o.texts.fixTask, gate, st.sc, ss.report, st.planText, ev.report, repairBrief(f.step.Issues, o.causes(st.si)), f.step.Issues, round),
-				Tier:    fixTier(f.stage, tier),
-				WorkDir: ss.repo,
-			})
-			if !ok || !o.afterAgent(ctx, ss, st, ref) {
-				return false
-			}
-			o.recordFix(st, f.step.Issues, fixResp.Output)
-			f.step.Output = fixResp.Output
-			done = append(done, f.step)
-			o.logf(LevelSuccess, "%s concluída via %s.", f.step.Title, fixResp.Name)
-		}
-
-		if !ss.dry && len(o.changedFiles(ss, fixesStarted)) == 0 {
-			o.updateStep(stepRef{st.si, verifyID}, func(s *Step) { s.Note = "Sem alterações desde a última verificação" })
-			stepID = verifyID
-			return settle("as correções não alteraram nenhum arquivo")
-		}
-		if ev, alive = recheck(ctx, stepRef{st.si, verifyID}, verdict.Issues, done, round+1); !alive {
-			return false
-		}
-		stepID = verifyID
-	}
-}
-
-// settleGate keeps the run going when a gate's issues outlast the fix rounds:
-// the step is marked with the pending issues and the next stages and stories
-// still run, so an unattended run never stops on one stubborn problem.
-func (o *Orchestrator) settleGate(st *storyState, stepID string, gate Stage, issues []Issue, msg string) bool {
-	o.updateStep(stepRef{st.si, stepID}, func(s *Step) {
-		s.Status = StepWarning
-		s.Error = msg + ". Pendências registradas; o pipeline segue."
-	})
-	st.pending += len(issues)
-	o.logf(LevelWarn, "%s: %s. Seguindo com as pendências registradas.", gate.Title, msg)
-	return true
-}
-
-// fixTier raises a fix to the heavy model for a cause's second attempt.
-func fixTier(stage Stage, tier provider.Tier) provider.Tier {
-	if tier == provider.TierHeavy {
-		return tier
-	}
-	return stage.Tier
-}
-
-type scheduledFix struct {
-	stage Stage
-	step  Step
-}
-
-// scheduleFixes groups issues by implementer and inserts one pending fix
-// step per implementer right after the gate step.
-func (o *Orchestrator) scheduleFixes(si int, gate Stage, afterID string, issues []Issue, round int) []scheduledFix {
-	policy := o.ws.Policy()
-	var fixes []scheduledFix
-	var names []string
-	for _, impl := range o.stages {
-		if !impl.Implementer || policy.StageDisabled(impl.ID) {
-			continue
-		}
-		var mine []Issue
-		for _, is := range issues {
-			if is.Agent == impl.ID {
-				mine = append(mine, is)
-			}
-		}
-		if len(mine) == 0 {
-			continue
-		}
-		step := Step{
-			ID:     fmt.Sprintf("fix-%s-%d-%s", gate.ID, round, impl.ID),
-			Title:  fmt.Sprintf("Correção: %s (%s, rodada %d)", impl.Title, gate.Title, round),
-			Role:   impl.Role,
-			Tier:   impl.Tier,
-			Status: StepPending,
-			Kind:   "fix",
-			Round:  round,
-			Gate:   gate.ID,
-			Issues: mine,
-		}
-		o.insertSteps(si, afterID, step)
-		afterID = step.ID
-		fixes = append(fixes, scheduledFix{stage: impl, step: step})
-		names = append(names, fmt.Sprintf("%s (%d)", impl.Title, len(mine)))
-	}
-	if len(fixes) > 0 {
-		o.logf(LevelWarn, "%s solicitou %d correção(ões); acionando %s.", gate.Title, len(issues), strings.Join(names, ", "))
-	}
-	return fixes
-}
-
-// discover returns the session's discovery for repo, running it only when
-// there is no cached report.
-func (o *Orchestrator) discover(ctx context.Context, ss *session, graph string) (*workspace.Report, bool) {
-	repo := ss.repo
-	if cached := o.ws.Discovery(); cached != nil && cached.Path == repo {
-		o.updateStep(discoveryRef, func(s *Step) {
-			s.Status = StepSkipped
-			s.Provider, s.Model = cached.Provider, cached.Model
-			s.Output = cached.Summary
-			s.Note = fmt.Sprintf("Reutilizado (%s)", cached.CreatedAt.Format("02/01 15:04"))
-		})
-		o.logf(LevelInfo, "Discovery reutilizado (realizado em %s); Refazer mapeia de novo.", cached.CreatedAt.Format("02/01 15:04"))
-		return cached, true
-	}
-
-	stacks, err := workspace.Scan(repo)
-	if err != nil {
-		o.failStep(discoveryRef, 0, fmt.Errorf("varredura do repositório: %w", err))
-		return nil, false
-	}
-	o.logf(LevelInfo, "Varredura inicial: %d stack(s) identificada(s).", len(stacks))
-
-	resp, ok := o.runStage(ctx, discoveryRef, provider.Request{
-		Role:     DiscoveryStage.Role,
-		System:   o.texts.discovery.System,
-		Prompt:   buildDiscoveryPrompt(o.texts.discovery.Task, repo, stacks, graph, ss.instructions),
-		Tier:     DiscoveryStage.Tier,
-		WorkDir:  repo,
-		ReadOnly: true,
-	})
-	if !ok {
-		return nil, false
-	}
-
-	report := workspace.Report{
-		Path:      repo,
-		Stacks:    stacks,
-		Summary:   resp.Output,
-		Provider:  resp.Name,
-		Model:     resp.Model,
-		Simulated: resp.Simulated,
-		CreatedAt: time.Now(),
-	}
-	o.ws.Store(report)
-	o.logf(LevelSuccess, "Discovery concluído e salvo.")
-	return &report, true
-}
-
-// updateCodeGraph builds the code graph; tests replace it.
-var updateCodeGraph = workspace.UpdateGraph
-
-// updateGraph refreshes the repository's code graph, which agents query
-// instead of scanning files. Without graphify the run goes on, only slower.
-// Simulation leaves the repository untouched.
-func (o *Orchestrator) updateGraph(ctx context.Context, ss *session) string {
-	if ss.dry {
-		return ""
-	}
-	graph, err := updateCodeGraph(ctx, ss.repo)
-	if err != nil {
-		o.logf(LevelWarn, "Grafo do código indisponível: %v", err)
-		return ""
-	}
-	o.logf(LevelInfo, "Grafo do código atualizado: %s.", graph)
-	return graph
-}
-
-// runStage executes a step and records its outcome. A failing call (CLI
-// crash, timeout, network) is retried with a growing delay; after the last
-// attempt, or on cancellation, it finishes the run and returns false.
-func (o *Orchestrator) runStage(ctx context.Context, ref stepRef, req provider.Request) (*provider.Response, bool) {
-	started := time.Now()
-	o.markRunning(ref, started)
-	resp, err := o.executeRetrying(ctx, ref, req)
-	elapsed := time.Since(started)
-	if err != nil {
-		o.stopOnError(ctx, ref, elapsed, err)
-		return nil, false
-	}
-	o.recordDone(ref, resp, elapsed)
-	o.markTurnLimited(ref, resp, o.limited(req).MaxTurns)
-	return resp, true
-}
-
-func (o *Orchestrator) markRunning(ref stepRef, started time.Time) {
-	o.updateStep(ref, func(s *Step) {
-		s.Status = StepRunning
-		s.StartedAt = &started
-	})
-}
-
-// executeRetrying calls the provider, retrying failures until the attempts
-// run out or ctx is canceled.
-func (o *Orchestrator) executeRetrying(ctx context.Context, ref stepRef, req provider.Request) (*provider.Response, error) {
-	req = o.limited(req)
-	prompt := req.Prompt
-	for attempt := 1; ; attempt++ {
-		resp, err := o.exec.Execute(ctx, req, o.providerLog)
-		o.recordUsage(ref, req, resp, attempt)
-		if errors.Is(err, provider.ErrTurnLimit) {
-			return o.turnLimited(ref, req, resp, err)
-		}
-		if err == nil || ctx.Err() != nil || attempt >= o.attempts {
-			return resp, err
-		}
-		wait := o.retryDelay * time.Duration(attempt)
-		o.logf(LevelWarn, "%s falhou (tentativa %d de %d): %s. Nova tentativa em %s.",
-			o.stepTitle(ref), attempt, o.attempts, clipRunes(err.Error(), 300), wait)
-		o.updateStep(ref, func(s *Step) { s.Note = fmt.Sprintf("Tentativa %d de %d", attempt+1, o.attempts) })
-		select {
-		case <-ctx.Done():
-		case <-time.After(wait):
-		}
-		req.Prompt = prompt + resumeNote
-	}
-}
-
-func (o *Orchestrator) recordDone(ref stepRef, resp *provider.Response, elapsed time.Duration) {
-	o.updateStep(ref, func(s *Step) {
-		s.Status = StepDone
-		s.Provider = resp.Name
-		s.Model = resp.Model
-		s.Effort = resp.Effort
-		s.Output = resp.Output
-		s.DurationMS = elapsed.Milliseconds()
-	})
-	resp.Duration = elapsed
-}
-
-// stopOnError ends the run after a failed step: canceled when ctx was,
-// failed otherwise.
-func (o *Orchestrator) stopOnError(ctx context.Context, ref stepRef, elapsed time.Duration, err error) {
-	if ctx.Err() != nil {
-		o.cancelStep(ref, elapsed)
-		return
-	}
-	o.failStep(ref, elapsed, err)
-}
-
-// resumeNote tells a retried agent that a previous attempt may have left work
-// (or a stuck process) behind.
-const resumeNote = "\n\n[RETOMADA] A tentativa anterior desta tarefa falhou ou excedeu o tempo. " +
-	"Verifique o estado atual dos arquivos e continue de onde parou. Não deixe servidor nem watcher em primeiro plano."
-
-func (o *Orchestrator) cancelStep(ref stepRef, elapsed time.Duration) {
-	o.updateStep(ref, func(s *Step) { s.Status = StepCanceled; s.DurationMS = elapsed.Milliseconds() })
-	o.abortRemaining(ref.story, StepCanceled)
-	o.finish(ResultCanceled, LevelWarn, "Execução cancelada pelo usuário.")
-}
-
-// failStep marks the step failed and ends the run. A zero elapsed keeps the
-// duration already recorded.
-func (o *Orchestrator) failStep(ref stepRef, elapsed time.Duration, err error) {
-	var title string
-	o.updateStep(ref, func(s *Step) {
-		s.Status = StepFailed
-		s.Error = err.Error()
-		if elapsed > 0 {
-			s.DurationMS = elapsed.Milliseconds()
-		}
-		title = s.Title
-	})
-	o.abortRemaining(ref.story, StepFailed)
-	o.finish(ResultFailed, LevelError, fmt.Sprintf("Falha na etapa \"%s\": %v", title, err))
-}
-
-// finish ends the run; when parallel stories stop one after the other, the
-// first outcome is kept.
-func (o *Orchestrator) finish(result Result, level, msg string) {
-	now := time.Now()
-	o.mu.Lock()
-	if !o.run.Running {
-		o.mu.Unlock()
-		return
-	}
-	o.run.Running = false
-	o.run.Result = result
-	o.run.FinishedAt = &now
-	o.mu.Unlock()
-	o.writePendencies(o.Snapshot())
-	o.logf(level, "%s", msg)
-	o.logger.Info("pipeline finished", "result", result)
-}
-
-// stepsBefore returns the steps of a story that precede ref and produced output.
-func (o *Orchestrator) stepsBefore(ref stepRef) []Step {
-	o.mu.RLock()
-	defer o.mu.RUnlock()
-	steps := o.run.Stories[ref.story].Steps
-	var out []Step
-	for _, s := range steps[:max(stepIndex(steps, ref.id), 0)] {
-		if s.Output != "" {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// insertSteps adds steps right after the step afterID of story si.
-func (o *Orchestrator) insertSteps(si int, afterID string, steps ...Step) {
-	o.mu.Lock()
-	st := &o.run.Stories[si]
-	i := stepIndex(st.Steps, afterID) + 1
-	st.Steps = slices.Insert(st.Steps, i, steps...)
-	o.mu.Unlock()
-	o.notify()
-}
-
-func (o *Orchestrator) stepTitle(ref stepRef) string {
-	o.mu.RLock()
-	defer o.mu.RUnlock()
-	if step := o.stepLocked(ref); step != nil {
-		return step.Title
-	}
-	return ref.id
-}
-
-func stepIndex(steps []Step, id string) int {
-	return slices.IndexFunc(steps, func(s Step) bool { return s.ID == id })
-}
-
-// abortRemaining marks every pending step as canceled and closes story si
-// with the given status; other stories in progress or pending are canceled.
-func (o *Orchestrator) abortRemaining(si int, current StepStatus) {
-	o.mu.Lock()
-	if o.run.Discovery.Status == StepPending {
-		o.run.Discovery.Status = StepCanceled
-	}
-	if a := o.run.Analysis; a != nil && a.Status == StepPending {
-		a.Status = StepCanceled
-	}
-	for i := range o.run.Stories {
-		st := &o.run.Stories[i]
-		for j := range st.Steps {
-			if st.Steps[j].Status == StepPending {
-				st.Steps[j].Status = StepCanceled
-			}
-		}
-		switch st.Status {
-		case StepRunning:
-			st.Status = StepCanceled
-			if i == si {
-				st.Status = current
-			}
-			if st.StartedAt != nil {
-				st.DurationMS = time.Since(*st.StartedAt).Milliseconds()
-			}
-		case StepPending:
-			st.Status = StepCanceled
-		}
-	}
-	o.mu.Unlock()
-	o.notify()
-}
-
-func (o *Orchestrator) updateStep(ref stepRef, fn func(*Step)) {
-	o.mu.Lock()
-	if step := o.stepLocked(ref); step != nil {
-		fn(step)
-	}
-	if ref.story >= 0 {
-		o.focusLocked(ref.story)
-	}
-	o.mu.Unlock()
-	o.notify()
-}
-
-// stepLocked finds the step ref addresses; story -1 holds the run-level
-// discovery and analysis steps.
-func (o *Orchestrator) stepLocked(ref stepRef) *Step {
-	switch {
-	case ref == analysisRef:
-		return o.run.Analysis
-	case ref.story < 0:
-		return &o.run.Discovery
-	}
-	steps := o.run.Stories[ref.story].Steps
-	if i := stepIndex(steps, ref.id); i >= 0 {
-		return &steps[i]
-	}
-	return nil
-}
-
-// focusLocked makes story i the current one, unless another story is still
-// running beside it.
-func (o *Orchestrator) focusLocked(i int) {
-	c := o.run.Current
-	if c >= 0 && c < len(o.run.Stories) && c != i && o.run.Stories[c].Status == StepRunning {
-		return
-	}
-	o.run.Current = i
-}
-
-func (o *Orchestrator) updateStory(i int, fn func(*StoryRun)) {
-	o.mu.Lock()
-	o.focusLocked(i)
-	fn(&o.run.Stories[i])
-	o.mu.Unlock()
-	o.notify()
-}
-
-func (o *Orchestrator) logf(level, format string, args ...any) {
-	o.mu.Lock()
-	o.run.Logs = append(o.run.Logs, LogEntry{Time: time.Now(), Level: level, Message: fmt.Sprintf(format, args...)})
-	if over := len(o.run.Logs) - maxLogs; over > 0 {
-		o.run.Logs = slices.Delete(o.run.Logs, 0, over)
-	}
-	o.mu.Unlock()
-	o.notify()
-}
-
-// providerLog adapts router events to UI log levels.
-func (o *Orchestrator) providerLog(level slog.Level, format string, args ...any) {
-	switch {
-	case level >= slog.LevelError:
-		o.logf(LevelError, format, args...)
-	case level >= slog.LevelWarn:
-		o.logf(LevelWarn, format, args...)
-	default:
-		o.logf(LevelInfo, format, args...)
-	}
-}
-
-func (o *Orchestrator) freshSteps() []Step {
-	policy := o.ws.Policy()
-	steps := make([]Step, len(o.stages))
-	for i, s := range o.stages {
-		steps[i] = newStep(s)
-		if policy.StageDisabled(s.ID) {
-			steps[i].Status, steps[i].Note = StepOmitted, flowOffNote
-		}
-	}
-	return steps
-}
-
-func newStep(s Stage) Step {
-	return Step{ID: s.ID, Title: s.Title, Role: s.Role, Tier: s.Tier, Status: StepPending}
-}
-
-func (o *Orchestrator) notify() {
-	o.requestJournalSave()
-	if o.onChange != nil {
-		o.onChange()
-	}
 }

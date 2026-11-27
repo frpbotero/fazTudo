@@ -1,0 +1,271 @@
+package pipeline
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"llm-orchestrator/internal/scm"
+	"llm-orchestrator/internal/stories"
+	"llm-orchestrator/internal/workspace"
+)
+
+// fakeSCM is a host that keeps its pull requests in memory.
+type fakeSCM struct {
+	mu        sync.Mutex
+	published []string
+	created   []scm.Request
+	open      map[string]*scm.PullRequest
+	failPush  error
+	review    *scm.Review // what Review answers when set
+}
+
+func (f *fakeSCM) Host() string { return "fake" }
+func (f *fakeSCM) Target(context.Context) (scm.Target, error) {
+	return scm.Target{Host: "fake", Repository: "acme/loja"}, nil
+}
+func (f *fakeSCM) Publish(_ context.Context, b string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failPush != nil {
+		return f.failPush
+	}
+	f.published = append(f.published, b)
+	return nil
+}
+func (f *fakeSCM) Find(_ context.Context, head string) (*scm.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.open[head], nil
+}
+func (f *fakeSCM) Create(_ context.Context, r scm.Request) (*scm.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.created = append(f.created, r)
+	pr := &scm.PullRequest{Number: len(f.created), URL: "https://host/pr/" + r.Head, Head: r.Head, Base: r.Base}
+	if f.open == nil {
+		f.open = map[string]*scm.PullRequest{}
+	}
+	f.open[r.Head] = pr
+	return pr, nil
+}
+func (f *fakeSCM) Checks(context.Context, int) ([]scm.Check, error) {
+	return []scm.Check{{Name: "ci", State: "pass"}}, nil
+}
+func (f *fakeSCM) Review(context.Context, int) (scm.Review, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.review != nil {
+		return *f.review, nil
+	}
+	return scm.Review{Decision: "REVIEW_REQUIRED", HeadSHA: "outro", State: "OPEN"}, nil
+}
+
+func newReviewTest(t *testing.T, mutate func(*workspace.SCMPolicy)) (*Orchestrator, string, *fakeSCM) {
+	t.Helper()
+	o, repo, _ := newPromotionTest(t, true, func(string) bool { return true })
+	host := &fakeSCM{}
+	o.scmFor = func(context.Context, string) (scm.Provider, error) { return host, nil }
+	policy := o.ws.Policy()
+	policy.SCM = workspace.SCMPolicy{Mode: workspace.SCMPullRequest, Draft: true}
+	mutate(&policy.SCM)
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	return o, repo, host
+}
+
+func TestReviewModeOpensAPullRequestInsteadOfMerging(t *testing.T) {
+	o, repo, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	run := waitDone(t, o)
+	st := run.Stories[0]
+	if st.Integration != IntegrationAwaitingReview || st.Status != StepDone {
+		t.Fatalf("story = %s %s, logs %+v", st.Status, st.Integration, run.Logs)
+	}
+	if exists(repo, "um.txt") {
+		t.Error("the base took the story before the review")
+	}
+	if len(host.created) != 1 || !host.created[0].Draft || host.created[0].Head != st.Branch {
+		t.Fatalf("pull requests = %+v", host.created)
+	}
+	p := run.Promotions[len(run.Promotions)-1]
+	if p.PR == nil || p.Commit == "" || !strings.Contains(host.created[0].Body, p.Commit) {
+		t.Errorf("the pull request must carry the evaluated commit: %+v", p)
+	}
+	if !strings.Contains(host.created[0].Body, "complementa os checks do CI") {
+		t.Error("the evidence must not present itself as a guarantee")
+	}
+	statuses, err := o.ReviewStatuses(context.Background())
+	if err != nil || len(statuses) != 1 || !statuses[0].Stale || statuses[0].Checks[0].State != "pass" {
+		t.Errorf("statuses = %+v, %v", statuses, err)
+	}
+}
+
+func TestPullRequestIsNotDuplicated(t *testing.T) {
+	o, _, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	run := waitDone(t, o)
+	branch := run.Stories[0].Branch
+	// The host already has it open: a second attempt reuses it.
+	ss := &session{repo: run.Repository, policy: o.ws.Policy()}
+	pr, err := o.preparePR(context.Background(), ss, "US-1", branch, "abc", []int{0})
+	if err != nil || pr.URL != host.open[branch].URL || len(host.created) != 1 {
+		t.Errorf("second preparation = %+v, %v; created %d", pr, err, len(host.created))
+	}
+}
+
+func TestOnlyRiskyStoriesGoToReview(t *testing.T) {
+	o, repo, host := newReviewTest(t, func(p *workspace.SCMPolicy) { p.ReviewFrom = workspace.RiskHigh })
+	policy := o.ws.Policy()
+	policy.RiskRules = []workspace.RiskRule{{Name: "Auth", Keywords: []string{"login"}, Level: workspace.RiskHigh, Require: []string{"checks"}}}
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	list := []stories.Story{
+		{ID: "US-1", Title: "US-1 Catálogo", Content: "<<um>>"},
+		{ID: "US-2", Title: "US-2 Login", Content: "<<dois>> login com senha"},
+	}
+	_ = o.Start(StartOptions{Stories: list, Source: "Markdown"})
+	run := waitDone(t, o)
+	if st := run.Stories[0]; st.Integration != IntegrationIntegrated || !exists(repo, "um.txt") {
+		t.Errorf("a low-risk story merges locally: %s", st.Integration)
+	}
+	if st := run.Stories[1]; st.Integration != IntegrationAwaitingReview {
+		t.Errorf("a high-risk story goes to review: %s (%s)", st.Integration, st.IntegrationNote)
+	}
+	if len(host.created) != 1 {
+		t.Errorf("pull requests = %d", len(host.created))
+	}
+}
+
+func TestFailedPublicationKeepsTheBranch(t *testing.T) {
+	o, repo, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	host.failPush = errors.New("permission denied")
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	run := waitDone(t, o)
+	st := run.Stories[0]
+	if st.Integration != IntegrationBlocked || !strings.Contains(st.IntegrationNote, "permission denied") {
+		t.Fatalf("story = %s %q", st.Integration, st.IntegrationNote)
+	}
+	if exists(repo, "um.txt") || gitOut(t, repo, "branch", "--list", st.Branch) == "" {
+		t.Error("the base must stay as it was and the branch must stay for review")
+	}
+}
+
+func TestDependentWaitsForTheReview(t *testing.T) {
+	o, _, _ := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	// Wave 1 (US-1, US-2) goes to review; US-3 depends on both.
+	o.baseStages, o.stages = gatedStages, gatedStages
+	policy := o.ws.Policy()
+	policy.Sequential = false
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	_ = o.Start(StartOptions{Stories: threeStories, Source: "Markdown"})
+	run := waitDone(t, o)
+	if st := run.Stories[2]; st.Status != StepSkipped || !strings.Contains(st.IntegrationNote, "revisão") {
+		t.Errorf("US-3 = %s %q", st.Status, st.IntegrationNote)
+	}
+}
+
+func TestMergedPullRequestIntegratesTheStory(t *testing.T) {
+	o, _, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	run := waitDone(t, o)
+	if !strings.Contains(host.created[0].Body, "aguarda revisão neste pull request") {
+		t.Errorf("the pull request must say the story waits for it:\n%s", host.created[0].Body)
+	}
+	if _, err := o.Reconcile(); !errors.Is(err, ErrNothingToReconcile) {
+		t.Fatalf("an open pull request has nothing to reconcile: %v", err)
+	}
+	host.review = &scm.Review{State: "MERGED", MergeCommit: "m1"}
+	p, err := o.Reconcile()
+	if err != nil || p.Status != IntegrationIntegrated || !strings.Contains(p.Reason, run.Promotions[len(run.Promotions)-1].PR.URL) {
+		t.Fatalf("reconcile = %+v, %v", p, err)
+	}
+	st := o.Snapshot().Stories[0]
+	if st.Integration != IntegrationIntegrated || !strings.Contains(st.IntegrationNote, "m1") {
+		t.Errorf("story = %s %q", st.Integration, st.IntegrationNote)
+	}
+	statuses, _ := o.ReviewStatuses(context.Background())
+	if len(statuses) != 1 || statuses[0].PR.State != "MERGED" {
+		t.Errorf("the review status must show the host's state: %+v", statuses)
+	}
+	if _, err := o.Reconcile(); !errors.Is(err, ErrNothingToReconcile) {
+		t.Errorf("a merged pull request is reconciled once: %v", err)
+	}
+}
+
+func TestClosedPullRequestBlocksTheStory(t *testing.T) {
+	o, _, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	waitDone(t, o)
+	host.review = &scm.Review{State: "CLOSED"}
+	if p, err := o.Reconcile(); err != nil || p.Status != IntegrationBlocked || !strings.Contains(p.Reason, "fechado sem merge") {
+		t.Fatalf("reconcile = %+v, %v", p, err)
+	}
+	if st := o.Snapshot().Stories[0]; st.Integration != IntegrationBlocked {
+		t.Errorf("story integration = %s", st.Integration)
+	}
+}
+
+func TestDependentContinuesOnceTheMergeIsInTheLocalBase(t *testing.T) {
+	o, repo, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	o.baseStages, o.stages = gatedStages, gatedStages
+	policy := o.ws.Policy()
+	policy.Sequential = false
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	o.SetJournalDir(t.TempDir())
+	_ = o.Start(StartOptions{Stories: threeStories, Source: "Markdown"})
+	run := waitDone(t, o)
+	if run.Stories[2].Status != StepSkipped {
+		t.Fatalf("US-3 = %s", run.Stories[2].Status)
+	}
+	writtenAt := run.Delivery.At
+
+	host.review = &scm.Review{State: "MERGED", MergeCommit: "m1"}
+	if _, err := o.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	snap := o.Snapshot()
+	if snap.Resume == nil || snap.Resume.Story != 2 || !snap.Resume.Fresh {
+		t.Fatalf("the dependent must be offered to continue: %+v", snap.Resume)
+	}
+	if snap.Delivery == nil || !snap.Delivery.At.After(writtenAt) {
+		t.Errorf("reconcile must rewrite the delivery package: %+v", snap.Delivery)
+	}
+	if md, _ := os.ReadFile(filepath.Join(snap.Delivery.Dir, "US-1.md")); !strings.Contains(string(md), "merge feito no pull request") {
+		t.Errorf("the package must show the reconciled integration:\n%s", md)
+	}
+
+	// Merged on the host only: the local base still lacks US-1 and US-2.
+	if err := o.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	run = waitDone(t, o)
+	if st := run.Stories[2]; st.Status != StepSkipped || !strings.Contains(st.IntegrationNote, "git pull") {
+		t.Fatalf("without the merge in the local base, US-3 must wait for it: %s %q", st.Status, st.IntegrationNote)
+	}
+
+	// The user pulls the merge into the base: the pull request's branch.
+	for _, p := range latestReviews(run.Promotions) {
+		gitOut(t, repo, "merge", "--no-edit", p.Branch)
+	}
+	if err := o.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	run = waitDone(t, o)
+	if st := run.Stories[2]; st.Status != StepDone || st.Integration != IntegrationAwaitingReview {
+		t.Errorf("US-3 = %s %s %q", st.Status, st.Integration, st.IntegrationNote)
+	}
+	if run.Stories[0].Integration != IntegrationIntegrated {
+		t.Errorf("the reconciled stories stay integrated: %s", run.Stories[0].Integration)
+	}
+}

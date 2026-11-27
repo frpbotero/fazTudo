@@ -35,10 +35,11 @@ const sweepTimeout = 90 * time.Second
 // whose repository did not change since the last approval is skipped.
 func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storyState, stage Stage) bool {
 	ref := stepRef{st.si, stage.ID}
-	if !st.verifiedAt.IsZero() && len(o.changedFiles(ss, st.verifiedAt)) == 0 {
+	if note := o.stillVerified(ss, st); note != "" {
 		o.updateStep(ref, func(s *Step) {
 			s.Status = StepSkipped
-			s.Note = "Sem alterações desde a última verificação aprovada"
+			s.Note = note
+			s.Validation = ValidationPassed // the approval holds for unchanged code
 		})
 		return true
 	}
@@ -52,7 +53,7 @@ func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storySt
 	if !o.enforceGate(ctx, ss, st, stage, ev, recheck) {
 		return false
 	}
-	st.verifiedAt = quality.FileClock(ss.repo)
+	o.markVerified(ss, st)
 	return true
 }
 
@@ -73,13 +74,17 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 		return nil, false
 	}
 	if a.passed() {
-		st.verifiedAt = quality.FileClock(ss.repo)
+		o.markVerified(ss, st)
+		if len(a.traces) > 0 {
+			// The gate after this fix judges with the cases that just ran.
+			o.updateStory(st.si, func(r *StoryRun) { r.Trace = a.traces })
+		}
 		return nil, true
 	}
 	report := verifierReport(a)
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
-		s.Checks = a.results
+		s.Checks = quality.WithoutCases(a.results)
 		s.Findings = a.findings
 		s.Output = report
 		s.DurationMS = time.Since(started).Milliseconds()
@@ -110,8 +115,20 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 		o.cancelStep(ref, time.Since(started))
 		return evaluation{}, false
 	}
+	extra, ok := o.changeIssues(ctx, ss, st, a)
+	if !ok {
+		o.cancelStep(ref, time.Since(started))
+		return evaluation{}, false
+	}
+	a.issues = append(a.issues, extra...)
 	results, findings, traces, issues := a.results, a.findings, a.traces, a.issues
 	if len(traces) > 0 {
+		if ss.git != nil {
+			commit, _ := ss.git.Head(ctx)
+			for i := range traces {
+				traces[i].Commit = commit
+			}
+		}
 		o.updateStory(st.si, func(r *StoryRun) { r.Trace = traces })
 	}
 
@@ -123,12 +140,14 @@ func (o *Orchestrator) verify(ctx context.Context, ss *session, st *storyState, 
 	elapsed := time.Since(started)
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepDone
-		s.Checks = results
+		s.Checks = quality.WithoutCases(results)
 		s.Findings = findings
 		s.Output = report
 		s.DurationMS = elapsed.Milliseconds()
 	})
-	return evaluation{verdict: verdict, parsed: true}, true // issues quote the failures; no report
+	// Issues quote the failures; no report. Without any command run, an
+	// approval rests on static checks alone and is not an executed proof.
+	return evaluation{verdict: verdict, parsed: true, noEvidence: len(results) == 0}, true
 }
 
 // assessment is the outcome of the deterministic checks on one directory.
@@ -158,7 +177,28 @@ func (a assessment) failedCommands() []string {
 // changed files and the test traceability. It returns false when ctx was
 // canceled.
 func (o *Orchestrator) assess(ctx context.Context, ss *session, st *storyState, dir string, changed []string) (assessment, bool) {
-	return o.assessChecks(ctx, ss, st, dir, changed, ss.checks)
+	a, ok := o.assessChecks(ctx, ss, st, dir, changed, ss.checks)
+	o.linkTraces(ss, st, &a)
+	return a, ok
+}
+
+// linkTraces ties the traces to the cases the commands reported, once every
+// command of the assessment ran, and asks for the required tests that only
+// exist as skipped cases.
+func (o *Orchestrator) linkTraces(ss *session, st *storyState, a *assessment) {
+	if len(a.traces) == 0 {
+		return
+	}
+	a.traces = quality.LinkResults(a.traces, a.results)
+	// A spec may reuse an ID an earlier story's tests carry; those tests
+	// passed before and prove nothing about this story. A refactoring is the
+	// exception: its proof is that the old tests still pass.
+	if b := st.baseline; b != nil && st.change != ChangeRefactor {
+		a.traces = quality.DiscountPreexisting(a.traces, b.TestIDs, func(c quality.CaseRef) bool {
+			return slices.Contains(b.PassedCases, caseKey(c.Command, c.Name))
+		})
+	}
+	a.issues = append(a.issues, o.skippedIssues(ss, a.traces, st.plan)...)
 }
 
 // reassess proves a fix cheaply: first the commands that failed; only when
@@ -175,6 +215,7 @@ func (o *Orchestrator) reassess(ctx context.Context, ss *session, st *storyState
 	}
 	first, ok := o.assessChecks(ctx, ss, st, ss.repo, changed, red)
 	if !ok || len(first.failedCommands()) > 0 {
+		o.linkTraces(ss, st, &first)
 		st.note(first)
 		first.skipped = append(first.skipped, otherNames(ss.checks, red)...)
 		st.skipped = true
@@ -183,6 +224,7 @@ func (o *Orchestrator) reassess(ctx context.Context, ss *session, st *storyState
 	rest := slices.DeleteFunc(slices.Clone(ss.checks), failed)
 	a, ok := o.assessChecks(ctx, ss, st, ss.repo, changed, rest)
 	a.results = append(first.results, a.results...)
+	o.linkTraces(ss, st, &a)
 	st.note(a)
 	return a, ok
 }
@@ -277,6 +319,12 @@ func (o *Orchestrator) commandFailure(ss *session, st *storyState, c quality.Com
 	}
 	is.Agent = o.assignFailure(ss, c, failures, st.plan)
 	is.Fingerprints = quality.Fingerprints(failures)
+	switch is.Origin = st.baseline.failureOrigin(c.Name, is.Fingerprints); is.Origin {
+	case originPreexisting:
+		is.Description = "[Falha preexistente: já falhava antes da US; ainda bloqueia a entrega] " + is.Description
+	case originNew:
+		is.Description = "[Falha nova: introduzida nesta US] " + is.Description
+	}
 	is.Class = classBuild
 	for _, f := range failures {
 		if !f.Compile {
@@ -308,6 +356,17 @@ func failureTitle(f quality.Failure) string {
 // Stories running side by side may each have an agent using a stack, so there
 // only the run's ends sweep.
 func (o *Orchestrator) runGated(ctx context.Context, ss *session, dir string, c quality.Command, timeout time.Duration) quality.Result {
+	if c.Resource != "" {
+		release, err := o.lockResource(ctx, c.Resource, func() { o.logf(LevelInfo, "%s aguarda o recurso %s.", c.Name, c.Resource) })
+		if err != nil {
+			if ctx.Err() != nil {
+				return quality.Result{Name: c.Name, Command: c.Run, ExitCode: -1, Output: err.Error()}
+			}
+			o.logf(LevelWarn, "Trava do recurso %s indisponível (%v); seguindo sem ela.", c.Resource, err)
+		} else {
+			defer release()
+		}
+	}
 	if !quality.Heavy(c) {
 		return o.runCheck(ctx, dir, c, timeout)
 	}
@@ -484,6 +543,38 @@ func (o *Orchestrator) traceIssues(ss *session, traces []quality.Trace, plan Pla
 	return issues
 }
 
+// skippedIssues asks for the required tests whose every reported case was
+// skipped: a test that never runs proves nothing.
+func (o *Orchestrator) skippedIssues(ss *session, traces []quality.Trace, plan Plan) []Issue {
+	skipped := map[string][]string{}
+	var order []string
+	for _, t := range traces {
+		if t.Status != quality.TraceSkipped || (t.Kind == "e2e" && ss.policy.StageDisabled("e2e")) {
+			continue
+		}
+		agent := o.assignKind(t.Kind, plan)
+		if _, seen := skipped[agent]; !seen {
+			order = append(order, agent)
+		}
+		skipped[agent] = append(skipped[agent], t.ID)
+	}
+	var issues []Issue
+	for _, agent := range order {
+		ids := skipped[agent]
+		issues = append(issues, Issue{
+			Agent:    agent,
+			Severity: "alta",
+			Description: fmt.Sprintf("%d caso(s) de teste da especificação só aparecem como ignorados (skip) no relatório: %s. "+
+				"Teste ignorado não comprova o critério; faça-o rodar.", len(ids), strings.Join(ids, ", ")),
+			Location:     "rastreabilidade",
+			Class:        classMissingTest,
+			Fingerprints: []string{quality.TextFingerprint("ignorado", agent)},
+			Titles:       []string{"Testes da especificação ignorados"},
+		})
+	}
+	return issues
+}
+
 func commandIssue(c quality.Command, r quality.Result) string {
 	if r.TimedOut {
 		return fmt.Sprintf("`%s` (%s) excedeu o tempo limite depois de %s, sem concluir. Não indica erro no código: "+
@@ -560,20 +651,28 @@ func verifierReport(a assessment) string {
 
 	if len(traces) > 0 {
 		found := 0
-		var missing []string
+		byStatus := map[string][]string{}
 		for _, t := range traces {
 			if t.Found() {
 				found++
-			} else {
-				missing = append(missing, t.ID)
 			}
+			byStatus[t.Status] = append(byStatus[t.Status], t.ID)
 		}
-		fmt.Fprintf(&b, "\n## Rastreabilidade dos testes\n\n%d de %d casos de teste encontrados nos arquivos de teste.\n", found, len(traces))
-		if len(missing) > 0 {
-			fmt.Fprintf(&b, "Sem teste: %s\n", strings.Join(missing, ", "))
+		fmt.Fprintf(&b, "\n## Rastreabilidade dos testes\n\n%d de %d casos de teste encontrados nos arquivos de teste; "+
+			"%d comprovados por execução.\n", found, len(traces), len(byStatus[quality.TraceProven]))
+		for _, status := range traceReportOrder {
+			if ids := byStatus[status]; len(ids) > 0 {
+				fmt.Fprintf(&b, "- %s: %s\n", status, strings.Join(ids, ", "))
+			}
 		}
 	}
 	return b.String()
+}
+
+// traceReportOrder lists what a trace may be short of, worst first.
+var traceReportOrder = []string{
+	quality.TraceFailed, quality.TraceMissing, quality.TraceSkipped, quality.TraceReused, quality.TraceNoReport, quality.TraceNotRun,
+	quality.TraceExitOnly,
 }
 
 func describeChecks(checks []quality.Command) string {
@@ -610,4 +709,31 @@ func clipRunes(s string, n int) string {
 		return string(r)
 	}
 	return string(r[:n]) + "…"
+}
+
+// markVerified remembers that the repository, as it is now, passed: when, and
+// what its changed files held, with the commands that judged them.
+func (o *Orchestrator) markVerified(ss *session, st *storyState) {
+	st.verifiedAt = quality.FileClock(ss.repo)
+	st.verifiedKey = o.verificationKey(ss, st)
+}
+
+// stillVerified tells why the last approval still holds, or "": nothing was
+// touched since, or what was touched holds the same content. The key covers
+// the content and the commands, never only the files' names or times.
+func (o *Orchestrator) stillVerified(ss *session, st *storyState) string {
+	if st.verifiedAt.IsZero() {
+		return ""
+	}
+	if len(o.changedFiles(ss, st.verifiedAt)) == 0 {
+		return "Sem alterações desde a última verificação aprovada"
+	}
+	if st.verifiedKey != "" && o.verificationKey(ss, st) == st.verifiedKey {
+		return "Arquivos regravados com o mesmo conteúdo da última verificação aprovada"
+	}
+	return ""
+}
+
+func (o *Orchestrator) verificationKey(ss *session, st *storyState) string {
+	return baselineKey(contentKey(ss.repo, o.changedFiles(ss, st.started)), ss.checks)
 }

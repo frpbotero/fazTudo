@@ -15,11 +15,44 @@ type Requirement struct {
 	Kind        string `json:"kind,omitempty"` // unit | integration | e2e
 }
 
-// Trace links a required test to the test files that mention its ID.
+// Trace links a required test to the test files that mention its ID and to
+// the executed cases that carry it.
 type Trace struct {
 	Requirement
 	Files []string `json:"files,omitempty"`
+	// Cases are the executed cases whose name carries the ID, from the
+	// commands' reports.
+	Cases []CaseRef `json:"cases,omitempty"`
+	// Status is what the evidence proves; see the Trace* statuses.
+	Status string `json:"status,omitempty"`
+	// Commit is the snapshot the cases ran on; empty without git.
+	Commit string `json:"commit,omitempty"`
 }
+
+// CaseRef is an executed case linked to a requirement.
+type CaseRef struct {
+	Command     string   `json:"command"`
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	Attachments []string `json:"attachments,omitempty"`
+}
+
+// Trace statuses. Only TraceProven says the requirement was shown to hold.
+const (
+	TraceProven   = "comprovado"         // a linked case passed and none failed
+	TraceFailed   = "falhou"             // a linked case failed
+	TraceSkipped  = "ignorado"           // every linked case was skipped
+	TraceNotRun   = "não executado"      // a test file names it, but no reported case carries it
+	TraceNoReport = "sem relatório"      // a configured report was missing or unreadable
+	TraceExitOnly = "só código de saída" // no command has a report: only the commands are proven
+	TraceMissing  = "sem teste"          // no test file names it
+	// TraceReused: the tests named the ID before the story, and only cases
+	// that already passed then carry it. They prove the old behavior.
+	TraceReused = "ID de antes da US"
+)
+
+// Proven reports whether executed evidence shows the requirement holds.
+func (t Trace) Proven() bool { return t.Status == TraceProven }
 
 // Found reports whether some test file references the requirement.
 func (t Trace) Found() bool { return len(t.Files) > 0 }
@@ -143,11 +176,7 @@ func TraceTests(root string, reqs []Requirement) []Trace {
 	patterns := make([]*regexp.Regexp, len(reqs))
 	for i, r := range reqs {
 		traces[i] = Trace{Requirement: r}
-		alts := []string{regexp.QuoteMeta(r.ID)}
-		if short := shortID(r.ID); short != "" {
-			alts = append(alts, regexp.QuoteMeta(short))
-		}
-		patterns[i] = regexp.MustCompile(`(?:^|[^A-Za-z0-9-])(?:` + strings.Join(alts, "|") + `)(?:[^A-Za-z0-9]|$)`)
+		patterns[i] = regexp.MustCompile(`(?:^|[^A-Za-z0-9-])` + idAlternatives(r.ID) + `(?:[^A-Za-z0-9]|$)`)
 	}
 	if len(reqs) == 0 {
 		return traces
@@ -168,6 +197,93 @@ func TraceTests(root string, reqs []Requirement) []Trace {
 		}
 	})
 	return traces
+}
+
+func idAlternatives(id string) string {
+	alts := []string{regexp.QuoteMeta(id)}
+	if short := shortID(id); short != "" {
+		alts = append(alts, regexp.QuoteMeta(short))
+	}
+	return "(?:" + strings.Join(alts, "|") + ")"
+}
+
+// LinkResults ties each trace to the executed cases that carry its ID and
+// sets what the evidence proves. A case name may spell the ID with
+// underscores (Go test functions) and follow a "Test" prefix. A trace with
+// no linked case is never proven, whatever the exit codes say.
+func LinkResults(traces []Trace, results []Result) []Trace {
+	reported, broken := false, false
+	for _, r := range results {
+		switch {
+		case r.Report.Read():
+			reported = true
+		case r.Report != nil:
+			broken = true
+		}
+	}
+	out := make([]Trace, len(traces))
+	for i, t := range traces {
+		t.Cases = nil
+		re := regexp.MustCompile(`(?:^|[^A-Za-z0-9]|Test)` + idAlternatives(t.ID) + `(?:[^A-Za-z0-9]|$)`)
+		for _, r := range results {
+			for _, c := range r.Cases {
+				if re.MatchString(strings.ReplaceAll(c.Name, "_", "-")) {
+					t.Cases = append(t.Cases, CaseRef{Command: r.Name, Name: c.Name, Status: c.Status, Attachments: c.Attachments})
+				}
+			}
+		}
+		t.Status = traceStatus(t, reported, broken)
+		out[i] = t
+	}
+	return out
+}
+
+// DiscountPreexisting keeps old tests from proving a story: from each trace
+// whose ID the tests named before the story (idsBefore), it drops the cases
+// that already passed then. A trace left with no case is TraceReused. The
+// input is not changed.
+func DiscountPreexisting(traces []Trace, idsBefore []string, passedBefore func(CaseRef) bool) []Trace {
+	out := slices.Clone(traces)
+	for i, t := range out {
+		if !slices.ContainsFunc(idsBefore, func(id string) bool {
+			return strings.EqualFold(id, t.ID) || (shortID(t.ID) != "" && strings.EqualFold(id, shortID(t.ID)))
+		}) {
+			continue
+		}
+		cases := slices.DeleteFunc(slices.Clone(t.Cases), passedBefore)
+		if len(cases) == len(t.Cases) {
+			continue
+		}
+		t.Cases = cases
+		if len(cases) == 0 {
+			t.Status = TraceReused
+		} else {
+			t.Status = traceStatus(t, true, false)
+		}
+		out[i] = t
+	}
+	return out
+}
+
+func traceStatus(t Trace, reported, broken bool) string {
+	has := func(status string) bool {
+		return slices.ContainsFunc(t.Cases, func(c CaseRef) bool { return c.Status == status })
+	}
+	switch {
+	case has(CaseFailed):
+		return TraceFailed
+	case has(CasePassed):
+		return TraceProven
+	case len(t.Cases) > 0:
+		return TraceSkipped
+	case !t.Found():
+		return TraceMissing
+	case broken:
+		return TraceNoReport
+	case reported:
+		return TraceNotRun
+	}
+	return TraceExitOnly
 }
 
 // shortID strips a layer prefix (UT-, IT-, E2E-, TC-) when what remains is
@@ -208,4 +324,19 @@ func TestIDs(root string) []string {
 	}
 	slices.Sort(ids)
 	return ids
+}
+
+// IsCodeFile reports whether rel holds source code the static checks read.
+func IsCodeFile(rel string) bool { return codeExts[ext(rel)] }
+
+// TestFiles lists, sorted, the repository's test files.
+func TestFiles(root string) []string {
+	var files []string
+	walk(root, func(rel string, _ fs.FileInfo) {
+		if IsTestFile(rel) {
+			files = append(files, rel)
+		}
+	})
+	slices.Sort(files)
+	return files
 }

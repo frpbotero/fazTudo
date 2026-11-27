@@ -540,3 +540,22 @@ func TestHealthEndpoints(t *testing.T) {
 		t.Errorf("real cleanup without git: status %d, want 409", resp.StatusCode)
 	}
 }
+
+func TestAnswerValidation(t *testing.T) {
+	ts, _ := newTestServer(t)
+	cases := []struct {
+		name, body string
+		want       int
+	}{
+		{"no story waiting", `{"story": 0, "answers": ["R$ 200"]}`, http.StatusUnprocessableEntity},
+		{"unknown field", `{"story": 0, "answers": [], "evil": 1}`, http.StatusBadRequest},
+		{"malformed", `{`, http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := do(t, ts, "POST", "/api/pipeline/answer", c.body).StatusCode; got != c.want {
+				t.Errorf("status = %d, want %d", got, c.want)
+			}
+		})
+	}
+}

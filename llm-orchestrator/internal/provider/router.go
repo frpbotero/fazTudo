@@ -56,6 +56,12 @@ type Request struct {
 	Commands []string
 	// ReadDirs are directories outside WorkDir the agent may read.
 	ReadDirs []string
+	// StrictCommands demands a provider that restricts a writing agent to
+	// Commands; providers that cannot are skipped, even on failover.
+	StrictCommands bool
+	// Prefer tries this provider first, such as a different one for review;
+	// the others stay as failover.
+	Prefer ID
 }
 
 // Response is the result of a successful task.
@@ -86,6 +92,9 @@ type State struct {
 	Models    []Model    `json:"models"`
 	// Catalog is where Models came from; empty means the built-in fallback.
 	Catalog string `json:"catalog,omitempty"`
+	// Version is the installed CLI's, once a preflight detected it.
+	Version      string       `json:"version,omitempty"`
+	Capabilities Capabilities `json:"capabilities"`
 	Settings
 }
 
@@ -115,6 +124,7 @@ type managed struct {
 	efforts   []string // union of the visible models' effort levels
 	catalog   string   // catalog source; "" for the fallback
 	catalogAt time.Time
+	version   string // detected by Preflight; "" until then
 }
 
 // loadCatalog refreshes the model list from the CLI, keeping the fallback
@@ -165,6 +175,7 @@ type Router struct {
 	exec     Runner
 	sim      Runner
 	lookPath func(string) (string, error)
+	version  func(ctx context.Context, binary string) string
 	now      func() time.Time
 	poll     time.Duration
 }
@@ -187,6 +198,11 @@ func WithLookPath(fn func(string) (string, error)) Option {
 	return func(r *Router) { r.lookPath = fn }
 }
 
+// WithVersion overrides CLI version detection (mainly for tests).
+func WithVersion(fn func(ctx context.Context, binary string) string) Option {
+	return func(r *Router) { r.version = fn }
+}
+
 // WithPollInterval sets how often a request waiting on cooldowns re-checks.
 func WithPollInterval(d time.Duration) Option {
 	return func(r *Router) { r.poll = d }
@@ -205,6 +221,7 @@ func NewRouter(dryRun bool, clis []CLI, opts ...Option) *Router {
 		exec:     ExecRunner{},
 		sim:      SimulatedRunner{Delay: 1400 * time.Millisecond},
 		lookPath: exec.LookPath,
+		version:  cliVersion,
 		now:      time.Now,
 		poll:     2 * time.Second,
 	}
@@ -316,10 +333,12 @@ func (r *Router) States() []State {
 			Status:    StatusAvailable,
 			// Never null: a CLI without effort levels (Gemini) is an empty
 			// list, which the panel can iterate.
-			Efforts:  append([]string{}, p.efforts...),
-			Models:   p.models,
-			Catalog:  displayHome(p.catalog),
-			Settings: p.settings,
+			Efforts:      append([]string{}, p.efforts...),
+			Models:       p.models,
+			Catalog:      displayHome(p.catalog),
+			Version:      p.version,
+			Capabilities: p.cli.Caps,
+			Settings:     p.settings,
 		}
 		switch {
 		case !p.resetAt.IsZero():
@@ -367,16 +386,19 @@ func (r *Router) Restore(id ID) error {
 // quota errors and waiting when every provider is cooling down. An agent that
 // ran out of turns returns its partial response together with ErrTurnLimit.
 func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response, error) {
-	handoff := false
+	handoff, warned := false, false
 	var announced time.Time
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 
-		p, settings, nextReset := r.pick()
+		p, settings, nextReset, lacking := r.pick(req)
 		if p == nil {
 			if nextReset.IsZero() {
+				if lacking != "" {
+					return nil, fmt.Errorf("%w: %s", ErrNoCapableProvider, lacking)
+				}
 				return nil, ErrNoProvider
 			}
 			if !nextReset.Equal(announced) {
@@ -419,6 +441,12 @@ func (r *Router) Execute(ctx context.Context, req Request, logf Logf) (*Response
 		if handoff {
 			inv.Prompt += "\n\n[HAND-OFF] Uma tentativa anterior desta tarefa foi interrompida por limite de uso. " +
 				"Verifique o estado atual dos arquivos e continue de onde ele parou."
+		}
+
+		if !warned && !dry && !req.ReadOnly && r.weakerThanPrimary(p) {
+			// Allowed by the policy, but never silent.
+			logf(slog.LevelWarn, "%s assume a tarefa sem restringir os comandos à lista da política (isolamento: %s).", p.cli.Name, p.cli.Caps.Isolation)
+			warned = true
 		}
 
 		runner := r.exec
@@ -485,33 +513,54 @@ func (r *Router) failoverEnabled() bool {
 	return r.failover
 }
 
-// pick returns the first provider able to run now, starting with the default
-// one (and only it when failover is off). When none is, it returns the
-// earliest cooldown expiry, or a zero time if waiting would not help.
-func (r *Router) pick() (*managed, Settings, time.Time) {
+// pick returns the first provider able to run req now, starting with the
+// default one (and only it when failover is off). Providers lacking a
+// capability req depends on are skipped, so failover never trades a
+// restriction the request demands for a provider that cannot apply it. When
+// none can run, it returns the earliest cooldown expiry (zero if waiting
+// would not help) and what the skipped providers lacked.
+func (r *Router) pick(req Request) (*managed, Settings, time.Time, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	now := r.now()
 	dry := r.DryRun()
 	candidates := r.ordered()
+	if i := slices.IndexFunc(candidates, func(p *managed) bool { return p.cli.ID == req.Prefer }); req.Prefer != "" && i > 0 {
+		preferred := candidates[i]
+		candidates = append([]*managed{preferred}, slices.Delete(slices.Clone(candidates), i, i+1)...)
+	}
 	if !r.failover {
 		candidates = candidates[:min(1, len(candidates))]
 	}
 	var earliest time.Time
+	var lacking []string
 	for _, p := range candidates {
 		r.refresh(p, now)
 		if !dry && !p.installed {
 			continue
 		}
+		if lack := p.cli.Caps.missing(req); lack != "" {
+			lacking = append(lacking, fmt.Sprintf("%s sem %s", p.cli.Name, lack))
+			continue
+		}
 		if p.resetAt.IsZero() {
-			return p, p.settings, time.Time{}
+			return p, p.settings, time.Time{}, ""
 		}
 		if earliest.IsZero() || p.resetAt.Before(earliest) {
 			earliest = p.resetAt
 		}
 	}
-	return nil, Settings{}, earliest
+	return nil, Settings{}, earliest, strings.Join(lacking, "; ")
+}
+
+// weakerThanPrimary reports whether p, taking over from the default
+// provider, does not restrict commands as the default would.
+func (r *Router) weakerThanPrimary(p *managed) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	primary := r.find(r.primary)
+	return primary != nil && primary != p && primary.cli.Caps.CommandAllowlist && !p.cli.Caps.CommandAllowlist
 }
 
 // refresh expires cooldowns and re-checks the binary. Caller holds r.mu.

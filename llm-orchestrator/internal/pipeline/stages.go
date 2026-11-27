@@ -39,6 +39,21 @@ type Stage struct {
 	Implementer bool
 	// Gate stages return a verdict; requested changes trigger fix rounds.
 	Gate bool
+	// Acceptor marks the functional QA gate: it reads the executed evidence
+	// and its scenarios are held to it.
+	Acceptor bool
+	// Conditional selectable stages run only when the plan names them or the
+	// risk requires them: neither the default nor the fallback plan does.
+	Conditional bool
+	// Specialist stages answer with the specialty contract (requirements and
+	// how each is verified), which the implementers and QA receive.
+	Specialist bool
+	// Measured gates get the benchmark commands' output first and must judge
+	// from it.
+	Measured bool
+	// Commands names the policy commands a verifier runs instead of the
+	// project checks: "migrations" for MigrationChecks.
+	Commands string
 	// Verifier stages call no model: the orchestrator runs the project's
 	// commands and static checks, and failures go back to the implementers.
 	Verifier bool
@@ -87,7 +102,9 @@ var reviewLenses = []Lens{
 			"import faltando, trecho apagado sem motivo, estilo diferente do projeto, código minificado. " +
 			"Padrão de projeto do plano ignorado; componente acoplado. Nome que não revela intenção ou abreviado; " +
 			"boolean sem forma de pergunta (is/has), lista no singular, função sem verbo. " +
-			"Função com mais de uma responsabilidade, > 20 linhas, > 3 argumentos, if/else aninhado sem guard clause.",
+			"Função com mais de uma responsabilidade, if/else aninhado sem guard clause. Tamanho de função e número de argumentos: " +
+			"a convenção do projeto manda; sem convenção, ~20 linhas e 3 argumentos são referência, não regra. " +
+			"Estilo e nomes vão com category \"estilo\".",
 		Skills: []string{"code-simplification"},
 	},
 	{
@@ -101,7 +118,7 @@ var reviewLenses = []Lens{
 		ID:     "tests",
 		Title:  "Testes",
 		Focus:  "Cada critério e caso de teste da especificação coberto, com ID no nome? Expectativa contrária à especificação, teste frágil ou vazio.",
-		Skills: []string{"test-driven-development"},
+		Skills: []string{"test-driven-development", "test-quality"},
 	},
 	{
 		ID:       "ux",
@@ -128,31 +145,51 @@ const planInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"agents\": [\"frontend\", \"backend\", \"security\", \"e2e\", \"docs\"], " +
 	"\"pattern\": \"padrão de projeto e por quê\", " +
 	"\"streams\": [{\"id\": \"api-carrinho\", \"agent\": \"backend\", \"title\": \"API do carrinho\", \"scope\": \"o que entrega\", " +
-	"\"files\": [\"src/cart/\"], \"depends_on\": []}], \"reason\": \"motivo de cada escolha\"}\n```\n" +
+	"\"files\": [\"src/cart/\"], \"depends_on\": [], \"resources\": [\"contrato POST /cart\"]}], " +
+	"\"impact\": {\"contracts\": [\"API, evento ou schema alterado ou usado\"], \"consumers\": [\"quem usa o que muda\"], " +
+	"\"migrations\": [\"mudança de schema ou dados\"], \"shared_resources\": [\"banco, fila, serviço, porta\"], \"rollback\": \"como desfazer ou recuperar\"}, " +
+	"\"acceptance\": [{\"criterion\": \"critério da US\", \"scenario\": \"dado/quando/então\", \"method\": \"teste unitário | integração | e2e | inspeção\", \"negative\": false}], " +
+	"\"non_functional\": [{\"kind\": \"desempenho\", \"requirement\": \"o que a US exige\", \"slo\": \"meta mensurável ou vazio se a US não define\"}], " +
+	"\"reason\": \"motivo de cada escolha\"}\n```\n" +
 	"\"agents\": só o necessário. frontend = interface; backend = API, dados, regras; " +
 	"security = auth, dados sensíveis, pagamento, entrada externa; e2e = fluxo de tela; " +
+	"ux = jornada visual nova ou ambígua (protótipo antes da implementação); data = mudança de schema ou de dados; " +
+	"performance = requisito de desempenho com meta; " +
 	"docs = documentação para cliente final (uso mudou) ou mantenedor (fluxo, integração, configuração novos). " +
 	"Só interface: sem backend. Mudança simples: sem security, e2e nem docs. Code review sempre roda.\n" +
 	"\"streams\": frentes de implementação (agent frontend ou backend). Frentes sem depends_on entre si e com files disjuntos " +
 	"rodam em paralelo, cada uma em cópia isolada do repositório, e são integradas no fim. " +
 	"depends_on só se a frente precisa do código pronto de outra; contrato do EDD basta para frontend e backend andarem juntos. " +
+	"resources: contrato, migration, banco ou serviço que a frente altera; frentes com o mesmo recurso não rodam juntas. " +
+	"impact: consumidores e contratos além dos arquivos editados; com migration, diga como reverter. " +
+	"acceptance: um cenário por critério, inclusive negativos, com o método de comprovação. " +
+	"non_functional: só o que a US pede; sem meta na US, slo vazio (não invente número). " +
 	"Nada a paralelizar: omita streams."
 
 const assessInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
-	"```json\n{\"decision\": \"reuse\" | \"extend\" | \"refactor\" | \"implement\" | \"block\", \"reason\": \"evidência curta\"}\n```\n" +
+	"```json\n{\"decision\": \"reuse\" | \"extend\" | \"refactor\" | \"implement\" | \"block\", \"reason\": \"evidência curta\", " +
+	"\"criteria\": [{\"criterion\": \"critério de aceite\", \"status\": \"existente\" | \"parcial\" | \"ausente\" | \"ambiguo\", \"evidence\": \"arquivo:linha ou por que é ambíguo\"}], " +
+	"\"pending_decisions\": [{\"question\": \"decisão de produto que a US não define\", \"options\": [\"alternativa\"], \"impact\": \"o que muda conforme a resposta\"}], " +
+	"\"change_type\": \"bug\" | \"feature\" | \"refactor\" | \"trivial\", \"change_reason\": \"obrigatório para trivial: por que não muda comportamento\"}\n```\n" +
 	"reuse = existe e atende todos os critérios de aceite (US encerrada sem implementar); " +
 	"extend = existe em parte (só o delta); refactor = existe com modelo incompatível; " +
-	"implement = não existe e dependências prontas; block = dependência ausente ou decisão de produto em aberto. " +
-	"reuse e block só com evidência no código (arquivo:linha)."
+	"implement = não existe e dependências prontas; block = dependência ausente. " +
+	"Um item em criteria por critério de aceite. pending_decisions só para decisão de negócio que o código e a US não respondem; " +
+	"não invente a resposta nem reescreva a US. reuse e block só com evidência no código (arquivo:linha). " +
+	"change_type: bug = comportamento errado a corrigir; refactor = mesma conduta, outra estrutura; " +
+	"trivial = texto, configuração ou ajuste sem mudança de comportamento; feature = o resto."
 
 const specInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"tests\": [{\"id\": \"UT-CART-01\", \"description\": \"o que verifica\", \"kind\": \"unit\" | \"integration\" | \"e2e\"}]}\n```\n" +
-	"Documento já tem IDs de teste: use os mesmos. Orquestrador confere cada ID nos arquivos de teste."
+	"Documento já tem IDs de teste: use os mesmos. Caso novo ganha ID novo: nunca repita um ID que os testes do repositório já usam " +
+	"(confira nos arquivos de teste). Orquestrador confere cada ID nos arquivos de teste, e caso que já passava antes da US não comprova ID repetido."
 
 const verdictInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"status\": \"approved\" | \"changes_requested\", \"issues\": [{\"agent\": \"frontend\" | \"backend\", \"severity\": \"alta\" | \"média\" | \"baixa\", " +
+	"\"category\": \"comportamento\" | \"segurança\" | \"teste\" | \"estrutura\" | \"estilo\", " +
 	"\"description\": \"problema e correção\", \"location\": \"arquivo:linha\"}]}\n```\n" +
-	"changes_requested só para o que bloqueia entrega. Cada issue com o agente que corrige. Sugestão opcional fora de issues."
+	"changes_requested só para o que bloqueia entrega. Cada issue com o agente que corrige. Sugestão opcional fora de issues. " +
+	"estilo (nome, formatação, tamanho sem convenção do projeto) é registrado como recomendação, não bloqueia."
 
 // engineeringRules are the implementers' working rules, adapted from the
 // Codebuff/Freebuff orchestrator guidelines.
@@ -163,6 +200,9 @@ const engineeringRules = "Regras:\n" +
 	"- Mudança mínima, solução simples.\n" +
 	"- Reutilize helpers e componentes existentes. Não reimplemente.\n" +
 	"- Passo 0 diz o que já existe: implemente só o que falta, não reescreva o que já atende.\n" +
+	"- Bug: primeiro um teste que falhe pelo comportamento errado, depois a correção; o orquestrador roda esse teste " +
+	"no código anterior à correção e exige que falhe lá. Funcionalidade: cenários relevantes, inclusive negativos. " +
+	"Refatoração: testes existentes continuam e passam. Edição trivial sem mudança de comportamento: sem teste novo.\n" +
 	"- Não faça varreduras cegas ou recursivas com grep/find no repositório inteiro. Use o grafo graphify e inspecione apenas arquivos relevantes.\n" +
 	"- Mudou símbolo exportado: atualize todas as referências.\n" +
 	"- Sem git commit/push/branch (orquestrador versiona), sem instalação global, sem script de produção.\n" +
@@ -221,8 +261,8 @@ var DiscoveryStage = Stage{
 // the earlier ones: implementers the findings and the plan; reviewers the plan
 // and what was implemented. Project check reports never go forward.
 var (
-	implementerInputs = []string{"context", "spec", "arch"}
-	reviewInputs      = []string{"spec", "arch", "frontend", "backend"}
+	implementerInputs = []string{"context", "spec", "threat-model", "arch", "ux", "data"}
+	reviewInputs      = []string{"spec", "threat-model", "arch", "frontend", "backend"}
 )
 
 // DefaultStages is the Passo 0 → EDD → architecture → implementation →
@@ -238,6 +278,7 @@ var DefaultStages = []Stage{
 		Assessor: true,
 		ReadOnly: true,
 		Inputs:   []string{},
+		Skills:   []string{"story-readiness"},
 		System:   "Verifica o que o repositório já implementa antes de qualquer mudança. Só leitura.",
 		Task: "Relatório curto:\n" +
 			"1. Busque entidades, módulos, rotas, migrations e testes com o nome do domínio da US.\n" +
@@ -261,6 +302,22 @@ var DefaultStages = []Stage{
 		Inputs:    []string{"context"},
 	},
 	{
+		ID:          "threat-model",
+		Title:       "Modelagem de ameaças",
+		Role:        "Threat Modeler",
+		Tier:        provider.TierHeavy,
+		Selectable:  true,
+		Conditional: true,
+		Specialist:  true,
+		ReadOnly:    true,
+		Inputs:      []string{"context", "spec"},
+		System:      "Modelagem de ameaças (STRIDE) de mudança sensível, antes do plano. Só leitura; não implementa.",
+		Task: "Ativos, fronteiras de confiança e fluxos de dados que a US toca. Para cada ameaça relevante (falsificação, " +
+			"adulteração, repúdio, vazamento, negação de serviço, elevação de privilégio): o controle que a implementação precisa ter " +
+			"e o teste negativo que o comprova (ex.: acesso sem permissão recusado). Só o que esta US muda.",
+		Skills: []string{"security-and-hardening"},
+	},
+	{
 		ID:       "arch",
 		Title:    "Arquitetura e plano de delegação",
 		Role:     "Chief Architect",
@@ -275,8 +332,40 @@ var DefaultStages = []Stage{
 			"2. Mapeie as atividades e quais podem rodar em paralelo: frentes com arquivos disjuntos e sem depender do código da outra.\n" +
 			"3. Por frente: agente, o que faz, arquivos, dependências.\n" +
 			"4. Documentação necessária (cliente final ou mantenedor)? Se sim, inclua docs.",
-		Skills: []string{"planning-and-task-breakdown", "api-and-interface-design"},
+		Skills: []string{"planning-and-task-breakdown", "api-and-interface-design", "change-impact"},
 		Inputs: []string{"context", "spec"},
+	},
+	{
+		ID:          "ux",
+		Title:       "UX e protótipo",
+		Role:        "UX Specialist",
+		Tier:        provider.TierStandard,
+		Selectable:  true,
+		Conditional: true,
+		Specialist:  true,
+		ReadOnly:    true,
+		Inputs:      []string{"context", "spec", "arch"},
+		System:      "Especialista de UX antes da implementação, quando a jornada visual é nova ou ambígua. Só leitura; não implementa.",
+		Task: "Protótipo em texto da jornada: telas, hierarquia, estados (carregando, vazio, erro, sucesso), mensagens e foco do teclado, " +
+			"no padrão visual do projeto. Cada requisito com a verificação (e2e, teste de componente ou inspeção visual). " +
+			"Ambiguidade que só o produto decide: diga, não invente.",
+		Skills: []string{"frontend-ui-engineering"},
+	},
+	{
+		ID:          "data",
+		Title:       "Dados e migrations",
+		Role:        "Data & Migrations Specialist",
+		Tier:        provider.TierHeavy,
+		Selectable:  true,
+		Conditional: true,
+		Specialist:  true,
+		ReadOnly:    true,
+		Inputs:      []string{"context", "spec", "arch"},
+		System:      "Especialista de dados. Planeja a mudança de schema ou de dados antes da implementação. Só leitura; não implementa.",
+		Task: "Para cada migration: compatibilidade com o código em produção durante o deploy (expandir e contrair), integridade " +
+			"(constraints, dados existentes, nulos), volume e bloqueio de tabela, e como reverter ou recuperar. " +
+			"Requisito com a verificação que o runner faz em banco descartável (aplicar, conferir, reverter, aplicar de novo).",
+		Skills: []string{"safe-migrations"},
 	},
 	{
 		ID:          "frontend",
@@ -313,6 +402,16 @@ var DefaultStages = []Stage{
 		Task:     "Executa os comandos do projeto, checagens de sintaxe e legibilidade e a rastreabilidade dos testes.",
 	},
 	{
+		ID:          "migrations",
+		Title:       "Verificação das migrations",
+		Role:        "Portão automático",
+		Verifier:    true,
+		Selectable:  true,
+		Conditional: true,
+		Commands:    "migrations",
+		Task:        "Executa os comandos de migration da política em banco descartável: aplicar, conferir integridade, reverter ou recuperar.",
+	},
+	{
 		ID:         "security",
 		Title:      "Segurança (OWASP) e testes unitários",
 		Role:       "AppSec & QA Engineer",
@@ -324,6 +423,21 @@ var DefaultStages = []Stage{
 		Task:       "Procure: entrada sem validação/sanitização, XSS, injeção, auth/autorização falha, segredo exposto, header inseguro. Avalie também os testes unitários.",
 		Skills:     []string{"security-and-hardening"},
 		Inputs:     reviewInputs,
+	},
+	{
+		ID:          "performance",
+		Title:       "Desempenho",
+		Role:        "Performance Engineer",
+		Tier:        provider.TierHeavy,
+		Selectable:  true,
+		Conditional: true,
+		Gate:        true,
+		Measured:    true,
+		ReadOnly:    true,
+		Inputs:      []string{"spec", "arch", "frontend", "backend"},
+		System:      "Especialista de desempenho. Só leitura. Julga pela medição que o orquestrador executou, nunca por intuição.",
+		Task: "Compare cada medição com o requisito não funcional da US. Gargalo só com a medição que o mostra (consulta, " +
+			"concorrência, alocação, I/O) e a correção. Sem medição: não aprove.",
 	},
 	{
 		ID:       "review",
@@ -341,7 +455,7 @@ var DefaultStages = []Stage{
 			"4. Robustez: entrada validada, erro tratado, sem duplicação.\n" +
 			"5. Interface: acessível, responsiva, nada cobrindo controle.\n" +
 			"6. Estrutura: modo revisão da skill `structural-health` (arquivos desta US e quem depende deles).",
-		Skills: []string{"code-review-and-quality", "code-simplification", "structural-health"},
+		Skills: []string{"code-review-and-quality", "code-simplification", "structural-health", "test-quality"},
 		Inputs: reviewInputs,
 	},
 	{
@@ -355,6 +469,22 @@ var DefaultStages = []Stage{
 		Task: "Escreva e rode os testes Playwright dos fluxos da US (ID do caso no nome) e verifique tela e rede. " +
 			"A aplicação sobe pelo `webServer` do playwright.config (rode com `npx playwright test`).",
 		Inputs: reviewInputs,
+	},
+	{
+		ID:       "acceptance",
+		Title:    "QA funcional e aceitação",
+		Role:     "Functional QA",
+		Tier:     provider.TierStandard,
+		Gate:     true,
+		Acceptor: true,
+		ReadOnly: true,
+		System: "QA funcional. Só leitura: não altera código nem testes. Julga a jornada e as regras de negócio pelos critérios " +
+			"originais da US, não pela descrição da implementação. A evidência executada vem do orquestrador; você a interpreta.",
+		Task: "Para cada critério de aceite e cenário do plano, inclusive negativos e estados de erro e vazio: " +
+			"aceito, recusado ou sem evidência, citando o caso executado que comprova (ID em tests) ou, para inspeção, arquivo:linha. " +
+			"Regra de negócio sem caso que a exercite é sem evidência. Cenário que a implementação não atende é recusado, com a correção.",
+		Inputs: []string{"context", "spec", "arch", "e2e"},
+		Skills: []string{"functional-acceptance"},
 	},
 	{
 		ID:         "docs",
@@ -383,6 +513,32 @@ const auditNotice = "## Modo auditoria\n\nEsta US já foi desenvolvida: não há
 // maxArtifactBytes caps how much of each previous stage's output is forwarded.
 const maxArtifactBytes = 4_000
 
+// maxChangedListed bounds the changed files a gate's prompt lists.
+const maxChangedListed = 60
+
+func (sc storyContext) artifactBytes() int {
+	if sc.ArtifactBytes > 0 {
+		return sc.ArtifactBytes
+	}
+	return maxArtifactBytes
+}
+
+// writeChanged points a gate at what the story changed. A longer list is
+// cut and says so: the gate still reviews the whole change.
+func writeChanged(b *strings.Builder, files []string) {
+	if len(files) == 0 {
+		return
+	}
+	b.WriteString("## Arquivos alterados nesta US\n\n")
+	for _, f := range files[:min(len(files), maxChangedListed)] {
+		fmt.Fprintf(b, "- `%s`\n", f)
+	}
+	if len(files) > maxChangedListed {
+		fmt.Fprintf(b, "- … e mais %d (lista truncada; revise a mudança inteira)\n", len(files)-maxChangedListed)
+	}
+	b.WriteString("\n")
+}
+
 // maxPreambleBytes caps how much document context is forwarded to stages.
 const maxPreambleBytes = 2_000
 
@@ -398,6 +554,20 @@ func buildDiscoveryPrompt(task, repo string, stacks []workspace.Stack, graph, in
 	}
 	writeInstructions(&b, instructions)
 	fmt.Fprintf(&b, "## Sua tarefa\n\n%s", task)
+	return b.String()
+}
+
+// buildIncrementalDiscoveryPrompt turns a full discovery prompt into an
+// update of the previous report: the agent reads only what changed.
+func buildIncrementalDiscoveryPrompt(full, previous string, changes []workspace.FileChange) string {
+	var b strings.Builder
+	b.WriteString(full)
+	fmt.Fprintf(&b, "\n\n## Atualização incremental\n\nJá existe um discovery deste repositório:\n\n%s\n\n", clip(strings.TrimSpace(previous), maxArtifactBytes))
+	b.WriteString("Desde então, mudaram estes arquivos de manifesto, dependência, instrução, contrato ou arquitetura:\n\n")
+	for _, c := range changes {
+		fmt.Fprintf(&b, "- `%s` (%s)\n", c.Path, c.Change)
+	}
+	b.WriteString("\nLeia só esses arquivos e o que eles afetarem. Mantenha o que continua valendo, corrija o que mudou e devolva o discovery completo atualizado, no mesmo formato.")
 	return b.String()
 }
 
@@ -428,8 +598,22 @@ type storyContext struct {
 	Audit bool
 	// AuditNotice is the customized text of the audit notice, if any.
 	AuditNotice string
+	// Evidence is what the runner proved, given to the functional QA only.
+	Evidence string
+	// ArtifactBytes caps each earlier stage's output forwarded in the
+	// prompt; 0 is maxArtifactBytes. Changed are the files the story changed
+	// so far, given to the gates so they look where the change is.
+	ArtifactBytes int
+	Changed       []string
+	// Profiles are the stack profiles the repository chose; Overrides the
+	// project's own complements to bundled skills.
+	Profiles  []string
+	Overrides map[string]SkillOverride
 	// PortBase starts the port range of a story run beside others; 0 alone.
 	PortBase int
+	// Answers are the user's answers to the product decisions the story left
+	// open; they come after the story, which stays as written.
+	Answers []PendingDecision
 }
 
 // Parallel stories share the machine: each gets its own port range so their
@@ -484,10 +668,12 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 	if previous = stageInputs(stage, previous); len(previous) > 0 {
 		b.WriteString("## Etapas anteriores\n\n")
 		for _, s := range previous {
-			fmt.Fprintf(&b, "### %s (%s)\n\n%s\n\n", s.Title, s.Role, clip(strings.TrimSpace(s.Output), maxArtifactBytes))
+			fmt.Fprintf(&b, "### %s (%s)\n\n%s\n\n", s.Title, s.Role, clip(strings.TrimSpace(s.Output), sc.artifactBytes()))
 		}
 	}
-	writeSkills(&b, stage.Skills)
+	writeChanged(&b, sc.Changed)
+	b.WriteString(sc.Evidence)
+	writeSkillsFor(&b, stage.Skills, sc)
 	b.WriteString("## Sua tarefa\n\n")
 	b.WriteString(stage.Task)
 	b.WriteString(stageInstructions(stage))
@@ -517,6 +703,12 @@ func stageInstructions(stage Stage) string {
 		return specInstructions
 	case stage.Planner:
 		return planInstructions
+	case stage.Acceptor:
+		return acceptanceInstructions
+	case stage.Specialist:
+		return specialistInstructions
+	case stage.Measured:
+		return performanceInstructions
 	case stage.Gate:
 		return verdictInstructions
 	}
@@ -537,6 +729,13 @@ func writeContext(b *strings.Builder, sc storyContext, discovery *workspace.Repo
 	b.WriteString("## User Story\n\n")
 	b.WriteString(strings.TrimSpace(sc.Story.Content))
 	b.WriteString("\n\n")
+	if len(sc.Answers) > 0 {
+		b.WriteString("## Decisões de produto respondidas pelo usuário\n\nValem junto com a US; não as reabra.\n\n")
+		for _, a := range sc.Answers {
+			fmt.Fprintf(b, "- %s → %s\n", a.Question, a.Answer)
+		}
+		b.WriteString("\n")
+	}
 	if sc.Audit {
 		b.WriteString(cmp.Or(sc.AuditNotice, auditNotice))
 	}
@@ -595,12 +794,29 @@ var skillsDir = func() string {
 // writeSkills points the agent at the playbooks of its task. They are files,
 // not CLI skills, so every CLI reads them the same way and Claude keeps
 // --safe-mode; the router grants read access to skillsDir.
-func writeSkills(b *strings.Builder, names []string) {
+func writeSkills(b *strings.Builder, names []string) { writeSkillsFor(b, names, storyContext{}) }
+
+// writeSkillsFor lists the playbooks to read, each with the project's
+// complement when it has one, and the stack profiles the repository chose.
+// A complement adds to the playbook; it cannot lower what the playbook,
+// the policy or the permissions require.
+func writeSkillsFor(b *strings.Builder, names []string, sc storyContext) {
 	dir := skillsDir()
 	var lines []string
+	complemented := false
 	for _, n := range names {
-		if dir != "" && skills.Has(n) {
-			lines = append(lines, fmt.Sprintf("- `%s`: `%s`\n", n, skills.File(dir, n)))
+		if dir == "" || !skills.Has(n) {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- `%s`: `%s`\n", n, skills.File(dir, n)))
+		if o, ok := sc.Overrides[n]; ok {
+			lines = append(lines, fmt.Sprintf("  - complemento do projeto: `%s`\n", o.Path))
+			complemented = true
+		}
+	}
+	for _, p := range sc.Profiles {
+		if dir != "" && skills.HasProfile(p) {
+			lines = append(lines, fmt.Sprintf("- perfil de stack `%s`: `%s`\n", p, skills.ProfileFile(dir, p)))
 		}
 	}
 	if len(lines) == 0 {
@@ -608,6 +824,9 @@ func writeSkills(b *strings.Builder, names []string) {
 	}
 	b.WriteString("## Skills\n\nLeia antes de começar e siga o que se aplica à tarefa (só leitura):\n")
 	b.WriteString(strings.Join(lines, ""))
+	if complemented {
+		b.WriteString("Complemento do projeto acrescenta convenções; não reduz o que a skill, a política ou as permissões exigem.\n")
+	}
 	b.WriteString("Caminhos citados dentro delas são relativos ao próprio SKILL.md. Saída final continua no formato pedido abaixo.\n\n")
 }
 
@@ -648,9 +867,9 @@ func buildFixPrompt(task string, gate Stage, sc storyContext, discovery *workspa
 		fmt.Fprintf(&b, "## Plano do arquiteto\n\n%s\n\n", clip(plan, maxArtifactBytes))
 	}
 	if report = strings.TrimSpace(stripJSONBlocks(report)); report != "" {
-		fmt.Fprintf(&b, "## Relatório de %s (rodada %d)\n\n%s\n\n", gate.Title, round, clip(report, maxArtifactBytes))
+		fmt.Fprintf(&b, "## Relatório de %s (rodada %d)\n\n%s\n\n", gate.Title, round, clip(report, sc.artifactBytes()))
 	}
-	writeSkills(&b, fixSkills)
+	writeSkillsFor(&b, fixSkills, sc)
 	if brief != "" {
 		b.WriteString(brief)
 	}
@@ -672,10 +891,24 @@ func buildVerifyPrompt(task string, gate Stage, sc storyContext, discovery *work
 	writeIssues(&b, issues)
 	b.WriteString("\n## Correções aplicadas\n\n")
 	for _, f := range fixes {
-		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), maxArtifactBytes))
+		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), sc.artifactBytes()))
 	}
-	writeSkills(&b, gate.Skills)
+	writeChanged(&b, sc.Changed)
+	b.WriteString(sc.Evidence)
+	writeSkillsFor(&b, gate.Skills, sc)
 	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação, rodada %d: %s %s", round, task, gate.Task)
+	b.WriteString(stageInstructions(gate))
+	return b.String()
+}
+
+// buildFormatPrompt asks a gate only for the verdict its previous answer
+// lacked: the report is quoted back and nothing is reviewed or changed again.
+func buildFormatPrompt(problem, report string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Sua resposta anterior não trouxe um veredito válido (%s).\n"+
+		"Não revise o código de novo e não altere arquivos. Com base só no relatório abaixo, "+
+		"responda apenas com o bloco JSON do veredito. Problema de severidade alta exige changes_requested.\n\n", problem)
+	fmt.Fprintf(&b, "## Relatório anterior\n\n%s\n", clip(strings.TrimSpace(report), maxArtifactBytes))
 	b.WriteString(verdictInstructions)
 	return b.String()
 }
@@ -687,5 +920,8 @@ func clip(s string, n int) string {
 	for n > 0 && !utf8.RuneStart(s[n]) {
 		n--
 	}
-	return s[:n] + "\n\n[… conteúdo truncado]"
+	return s[:n] + "\n\n" + truncationMark
 }
+
+// truncationMark ends an artifact cut to fit the context budget.
+const truncationMark = "[… conteúdo truncado]"

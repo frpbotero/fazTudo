@@ -28,6 +28,20 @@ Critérios de aceitação:
     failed: { label: 'Falhou', tone: 'danger' },
     canceled: { label: 'Cancelado', tone: 'warn' },
   };
+  // Validation is apart from the result: a run that finished may still have
+  // delivered nothing approved.
+  const VALIDATION = {
+    passed: { label: 'Validação aprovada', short: 'aprovada', tone: 'success' },
+    failed: { label: 'Validação reprovada', short: 'reprovada', tone: 'danger' },
+    inconclusive: { label: 'Validação inconclusiva', short: 'inconclusiva', tone: 'warn' },
+    not_evaluated: { label: 'Não avaliada', short: 'não avaliada', tone: 'neutral' },
+  };
+  const INTEGRATION = {
+    integrated: { label: 'Na branch base', tone: 'success' },
+    blocked: { label: 'Fora da base', tone: 'danger' },
+    partial: { label: 'Integração parcial', tone: 'warn' },
+    awaiting_review: { label: 'Aguardando revisão no PR', tone: 'neutral' },
+  };
   const PROVIDER_STATUS = {
     available: { label: 'Disponível', tone: 'success' },
     cooldown: { label: 'Em cooldown', tone: 'warn' },
@@ -40,7 +54,7 @@ Critérios de aceitação:
     version: $('version'), conn: $('conn'), connText: $('connText'),
     themeBtn: $('themeBtn'), configBtn: $('configBtn'),
     runForm: $('runForm'), source: $('source'), story: $('story'), storyCount: $('storyCount'),
-    modeNote: $('modeNote'), startBtn: $('startBtn'), startLabel: $('startLabel'), stopBtn: $('stopBtn'), resumeBtn: $('resumeBtn'),
+    modeNote: $('modeNote'), startBtn: $('startBtn'), startLabel: $('startLabel'), stopBtn: $('stopBtn'), resumeBtn: $('resumeBtn'), reconcileBtn: $('reconcileBtn'),
     repoForm: $('repoForm'), repoPath: $('repoPath'), repoSaveBtn: $('repoSaveBtn'),
     discovery: $('discovery'), discoveryBadge: $('discoveryBadge'),
     openMdBtn: $('openMdBtn'), mdFile: $('mdFile'), fileInfo: $('fileInfo'),
@@ -65,7 +79,10 @@ Critérios de aceitação:
     configDialog: $('configDialog'), configForm: $('configForm'), configFields: $('configFields'), configError: $('configError'),
     quality: $('quality'), qualityDialog: $('qualityDialog'), qualityForm: $('qualityForm'), qualityRepo: $('qualityRepo'),
     qAuto: $('qAuto'), qSuggested: $('qSuggested'), qCustom: $('qCustom'), qChecks: $('qChecks'), qProtected: $('qProtected'),
-    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
+    qMigrationChecks: $('qMigrationChecks'), qBenchmarkChecks: $('qBenchmarkChecks'),
+    qProfiles: $('qProfiles'), qProfilesNote: $('qProfilesNote'),
+    qScmMode: $('qScmMode'), qScmReviewFrom: $('qScmReviewFrom'), qScmDraft: $('qScmDraft'),
+    qMaxLine: $('qMaxLine'), qTimeout: $('qTimeout'), qCandidates: $('qCandidates'), qMode: $('qMode'), qFlow: $('qFlow'), qFlowNote: $('qFlowNote'), qStages: $('qStages'), qGit: $('qGit'), qMaxTurns: $('qMaxTurns'), qStopOnTurnLimit: $('qStopOnTurnLimit'), qPromoteUnverified: $('qPromoteUnverified'), qStrictCommands: $('qStrictCommands'), qAgentCommands: $('qAgentCommands'), qEphemeralStacks: $('qEphemeralStacks'),
     promptsError: $('promptsError'), promptList: $('promptList'), promptForm: $('promptForm'), promptTitle: $('promptTitle'),
     promptDescription: $('promptDescription'), promptParts: $('promptParts'), promptWarning: $('promptWarning'), promptValue: $('promptValue'),
     promptDefault: $('promptDefault'), promptContractBox: $('promptContractBox'), promptContract: $('promptContract'), promptDiscard: $('promptDiscard'),
@@ -98,6 +115,7 @@ Critérios de aceitação:
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const pill = ({ label, tone }) => `<span class="pill" data-tone="${tone}">${esc(label)}</span>`;
+  const { renderTrace, renderAcceptance, renderSpecialties } = window.FazTudoEvidence({ esc });
   const fmtTime = (iso) => new Date(iso).toLocaleTimeString('pt-BR', { hour12: false });
   const fmtDuration = (ms) => {
     if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
@@ -417,6 +435,19 @@ Critérios de aceitação:
     }
   });
 
+  // Completes a promotion that reached only some repositories; nothing is reset.
+  el.reconcileBtn.addEventListener('click', async () => {
+    el.reconcileBtn.disabled = true;
+    try {
+      await api('POST', '/api/pipeline/reconcile');
+      toast('Integração reconciliada em todos os repositórios.', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      el.reconcileBtn.disabled = false;
+    }
+  });
+
   el.stopBtn.addEventListener('click', async () => {
     try {
       await api('POST', '/api/pipeline/stop');
@@ -502,21 +533,40 @@ Critérios de aceitação:
           </div>`).join('')
       : '<p class="note">Nenhum manifesto reconhecido; veja o relatório na etapa de discovery.</p>';
     const via = [d.provider, d.model].filter(Boolean).join(' · ');
+    const origin = d.origin === 'incremental' ? 'Atualizado' : 'Feito';
+    const files = d.fingerprint ? Object.keys(d.fingerprint.files || {}).length : 0;
+    // Validity comes from the fingerprint: an old report without one is
+    // remade on the next run, so the panel says so instead of vouching for it.
+    const validity = !d.fingerprint
+      ? 'Sem impressão digital dos arquivos: será refeito na próxima execução.'
+      : `Válido enquanto ${files} arquivo(s) de manifesto, dependência, instrução e contrato não mudarem${d.validated_at ? `; conferido às ${esc(fmtTime(d.validated_at))}` : ''}.`;
     el.discovery.innerHTML = `
       <div class="discovery-meta">
-        <span>Feito às ${esc(fmtTime(d.created_at))}${via ? ` via ${esc(via)}` : ''}${d.simulated ? ' (simulado)' : ''}</span>
+        <span>${origin} às ${esc(fmtTime(d.created_at))}${via ? ` via ${esc(via)}` : ''}${d.simulated ? ' (simulado)' : ''}</span>
         <button class="btn btn-ghost btn-sm" type="button" data-action="rediscover">${icon('rotate')}Refazer</button>
       </div>
+      ${d.reason ? `<p class="note">Motivo: ${esc(d.reason)}.</p>` : ''}
+      <p class="note">${validity}</p>
       <div class="stack-groups">${stacks}</div>`;
   }
 
   // ---------- quality gates ----------
-  const commandLines = (checks) => (checks || []).map((c) => `${c.name}: ${c.run}`).join('\n');
+  // A command line is "name: run", or "name [format:path]: run" when the
+  // command writes a per-test report.
+  const reportTag = (r) => (r?.format ? ` [${r.format}${r.path ? `:${r.path}` : ''}]` : '');
+  const commandLines = (checks) => (checks || []).map((c) => `${c.name}${reportTag(c.report)}: ${c.run}`).join('\n');
 
   function parseCommands(text) {
     return text.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
       const i = line.indexOf(': ');
-      return i > 0 ? { name: line.slice(0, i).trim(), run: line.slice(i + 2).trim() } : { name: line, run: line };
+      if (i <= 0) return { name: line, run: line };
+      const cmd = { name: line.slice(0, i).trim(), run: line.slice(i + 2).trim() };
+      const m = cmd.name.match(/^(.*?)\s*\[([\w-]+)(?::([^\]]+))?\]$/);
+      if (m) {
+        cmd.name = m[1].trim() || cmd.run;
+        cmd.report = { format: m[2], ...(m[3] ? { path: m[3].trim() } : {}) };
+      }
+      return cmd;
     });
   }
 
@@ -529,7 +579,7 @@ Critérios de aceitação:
   const FLOW_OFF = {
     full: [],
     balanced: ['security', 'e2e', 'docs'],
-    fast: ['security', 'review', 'e2e', 'docs'],
+    fast: ['security', 'review', 'e2e', 'acceptance', 'docs'],
     audit: ['context', 'spec', 'arch', 'frontend', 'backend', 'e2e', 'docs'],
   };
   const stageBoxes = () => [...el.qStages.querySelectorAll('input[data-stage]')];
@@ -593,6 +643,15 @@ Critérios de aceitação:
       : '<li class="note">Nenhum comando encontrado nos manifestos (package.json, go.mod, pyproject.toml…).</li>';
     el.qChecks.value = commandLines(p.checks?.length ? p.checks : suggested);
     el.qProtected.value = (p.protected || []).join('\n');
+    el.qProfiles.value = (p.profiles || []).join(', ');
+    el.qScmMode.value = p.scm?.mode === 'pr' ? 'pr' : '';
+    el.qScmReviewFrom.value = p.scm?.review_from || '';
+    el.qScmDraft.checked = Boolean(p.scm?.draft);
+    const suggestedProfiles = (snapshot?.workspace?.suggested_profiles || []).filter((x) => !(p.profiles || []).includes(x));
+    el.qProfilesNote.textContent = 'Convenções da stack para implementadores e revisores. Opcionais: só valem os listados aqui.' +
+      (suggestedProfiles.length ? ` Detectado neste repositório: ${suggestedProfiles.join(', ')}.` : '');
+    el.qMigrationChecks.value = commandLines(p.migration_checks);
+    el.qBenchmarkChecks.value = commandLines(p.benchmark_checks);
     el.qMaxLine.value = p.max_line_length;
     el.qTimeout.value = p.check_timeout_s;
     el.qCandidates.value = String(p.candidates || 1);
@@ -600,6 +659,8 @@ Critérios de aceitação:
     el.qGit.checked = p.git;
     el.qMaxTurns.value = p.max_turns || '';
     el.qStopOnTurnLimit.checked = !!p.stop_on_turn_limit;
+    el.qPromoteUnverified.checked = !!p.promote_unverified;
+    el.qStrictCommands.checked = !!p.strict_commands;
     el.qAgentCommands.value = (p.agent_commands || []).join('\n');
     el.qEphemeralStacks.value = (p.ephemeral_stacks || []).join('\n');
     el.qFlow.value = p.flow || 'full';
@@ -621,6 +682,11 @@ Critérios de aceitação:
     const policy = {
       auto_checks: el.qAuto.checked,
       checks: parseCommands(el.qChecks.value),
+      profiles: el.qProfiles.value.split(',').map((x) => x.trim()).filter(Boolean),
+      scm: { mode: el.qScmMode.value, review_from: el.qScmReviewFrom.value, draft: el.qScmDraft.checked },
+      delivery_retention: snapshot?.workspace?.policy?.delivery_retention,
+      migration_checks: parseCommands(el.qMigrationChecks.value),
+      benchmark_checks: parseCommands(el.qBenchmarkChecks.value),
       protected: el.qProtected.value.split('\n').map((l) => l.trim()).filter(Boolean),
       git: el.qGit.checked,
       max_line_length: Number(el.qMaxLine.value) || 0,
@@ -636,6 +702,20 @@ Critérios de aceitação:
       agent_commands: el.qAgentCommands.value.split('\n').map((l) => l.trim()).filter(Boolean),
       ephemeral_stacks: el.qEphemeralStacks.value.split('\n').map((l) => l.trim()).filter(Boolean),
       base_branches: snapshot?.workspace?.policy?.base_branches,
+      promote_unverified: el.qPromoteUnverified.checked,
+      strict_commands: el.qStrictCommands.checked,
+      risk_rules: snapshot?.workspace?.policy?.risk_rules,
+      skip_baseline: snapshot?.workspace?.policy?.skip_baseline,
+      style_blocking: snapshot?.workspace?.policy?.style_blocking,
+      max_parallel_agents: snapshot?.workspace?.policy?.max_parallel_agents,
+      context_bytes: snapshot?.workspace?.policy?.context_bytes,
+      log_limit: snapshot?.workspace?.policy?.log_limit,
+      budget: snapshot?.workspace?.policy?.budget,
+      benchmarks: snapshot?.workspace?.policy?.benchmarks,
+      prices: snapshot?.workspace?.policy?.prices,
+      prices_version: snapshot?.workspace?.policy?.prices_version,
+      max_parallel_reviews: snapshot?.workspace?.policy?.max_parallel_reviews,
+      review_provider: snapshot?.workspace?.policy?.review_provider,
     };
     try {
       await api('PUT', '/api/workspace/policy', policy);
@@ -764,6 +844,16 @@ Critérios de aceitação:
     }
   });
 
+  // What the adapter enforces, in one line: users choose a provider knowing
+  // which restrictions hold for it.
+  function capabilitySummary(c) {
+    if (!c) return '';
+    const parts = [c.command_allowlist ? 'comandos restritos à lista' : 'comandos não restritos à lista'];
+    if (!c.max_turns) parts.push('sem limite de turnos');
+    if (!c.diagnose) parts.push('diagnóstico só leitura');
+    return `${parts.join(' · ')} · isolamento: ${c.isolation}`;
+  }
+
   function renderProviders(providers) {
     el.providers.innerHTML = providers.map((p) => {
       const status = PROVIDER_STATUS[p.status] || PROVIDER_STATUS.available;
@@ -789,6 +879,8 @@ Critérios de aceitação:
             <dt>Heavy</dt><dd title="${esc(p.heavy_model)}">${esc(p.heavy_model)}</dd>
             <dt>Standard</dt><dd title="${esc(p.std_model)}">${esc(p.std_model)}</dd>
             <dt>Esforço</dt><dd>${esc(p.effort || 'padrão')}</dd>
+            ${p.version ? `<dt>Versão</dt><dd title="${esc(p.version)}">${esc(p.version)}</dd>` : ''}
+            <dt>Garantias</dt><dd title="${esc(capabilitySummary(p.capabilities))}">${esc(capabilitySummary(p.capabilities))}</dd>
           </dl>
           <div class="provider-foot">${foot}</div>
         </div>`;
@@ -878,7 +970,9 @@ Critérios de aceitação:
     skipped: { label: 'Bloqueada', tone: 'warn' },
     failed: { label: 'Falhou', tone: 'danger' },
     canceled: { label: 'Cancelada', tone: 'neutral' },
+    waiting_input: { label: 'Aguardando decisão', tone: 'warn' },
   };
+  const CRITERION_LABEL = { existente: 'existente', parcial: 'parcial', ausente: 'ausente', ambiguo: 'ambíguo' };
   const KIND_TAGS = { fix: 'Correção', verify: 'Verificação', investigate: 'Investigação', stream: 'Frente', merge: 'Integração' };
   const CAUSE_STATUS = {
     open: { label: 'Em correção', sev: 'média' },
@@ -1023,6 +1117,16 @@ Critérios de aceitação:
   }
 
   // ----- step rows -----
+  function impactRows(impact) {
+    if (!impact) return '';
+    const rows = [
+      ['Contratos', impact.contracts], ['Consumidores', impact.consumers],
+      ['Migrations', impact.migrations], ['Recursos compartilhados', impact.shared_resources],
+    ].filter(([, items]) => items?.length)
+      .map(([label, items]) => `<dt>${label}</dt><dd>${items.map(esc).join(', ')}</dd>`).join('');
+    return rows + (impact.rollback ? `<dt>Reversão</dt><dd>${esc(impact.rollback)}</dd>` : '');
+  }
+
   function renderPlan(plan, steps, key) {
     if (!plan) return '';
     const titles = new Map(steps.map((s) => [s.id, s.title]));
@@ -1043,6 +1147,10 @@ Critérios de aceitação:
             ${plan.pattern ? `<dt>Padrão de projeto</dt><dd>${esc(plan.pattern)}</dd>` : ''}
             ${streams.length ? `<dt>Frentes</dt><dd><ul>${streamList}</ul></dd>` : ''}
             ${plan.reason ? `<dt>Motivo</dt><dd>${esc(plan.reason)}</dd>` : ''}
+            ${impactRows(plan.impact)}
+            ${plan.acceptance?.length ? `<dt>Aceitação</dt><dd><ul>${plan.acceptance.map((a) => `<li>${esc(a.scenario)}${a.method ? ` <span class="muted">(${esc(a.method)}${a.negative ? ', negativo' : ''})</span>` : ''}</li>`).join('')}</ul></dd>` : ''}
+            ${plan.non_functional?.length ? `<dt>Não funcionais</dt><dd><ul>${plan.non_functional.map((n) => `<li>${esc(n.kind)}: ${esc(n.requirement)}${n.slo ? ` <span class="muted">(SLO ${esc(n.slo)})</span>` : ' <span class="muted">(sem SLO)</span>'}</li>`).join('')}</ul></dd>` : ''}
+            ${plan.gaps?.length ? `<dt>Lacunas</dt><dd><ul>${plan.gaps.map((g) => `<li>${esc(g)}</li>`).join('')}</ul></dd>` : ''}
           </dl>
           ${note ? `<p class="note">${esc(note)}</p>` : ''}
         </div>
@@ -1082,6 +1190,70 @@ Critérios de aceitação:
       </li>`;
   }
 
+  // Passo 0's readiness: each criterion with its evidence and, when the story
+  // waits on the user, the open decisions with a field for each answer.
+
+
+  function renderReadiness(st, si, running) {
+    const r = st.readiness;
+    if (!r) return '';
+    const criteria = (r.criteria || []).map((c) => `
+      <li>
+        <span class="sev" data-sev="${c.status === 'existente' ? 'baixa' : c.status === 'parcial' ? 'média' : 'alta'}">${esc(CRITERION_LABEL[c.status] || c.status)}</span>
+        <span>${esc(c.criterion)}</span>
+        <span class="issue-meta">${c.evidence ? `<code>${esc(c.evidence)}</code>` : ''}</span>
+      </li>`).join('');
+    const answered = (st.answers || []).map((a) => `<li><span></span><span>${esc(a.question)} → <strong>${esc(a.answer)}</strong></span><span></span></li>`).join('');
+    const open = r.decisions || [];
+    const form = st.status === 'waiting_input' && open.length ? `
+      <form class="decisions" data-story="${si}">
+        <h3>Decisões de produto em aberto <span class="muted">${open.length}</span></h3>
+        ${open.map((d, i) => `
+          <label class="field">
+            <span>${esc(d.question)}${d.impact ? ` <span class="muted">(${esc(d.impact)})</span>` : ''}</span>
+            <textarea name="answer" rows="2" maxlength="2000" required placeholder="${esc((d.options || []).join(' · '))}" data-index="${i}"></textarea>
+          </label>`).join('')}
+        <button class="btn btn-sm" type="submit"${running ? ' disabled title="Aguarde a execução terminar"' : ''}>Responder e retomar</button>
+      </form>` : '';
+    return `
+      ${criteria ? `<div class="issues"><h3>Critérios no Passo 0 <span class="muted">${(r.criteria || []).length}</span></h3><ul>${criteria}</ul></div>` : ''}
+      ${answered ? `<div class="issues"><h3>Decisões respondidas</h3><ul>${answered}</ul></div>` : ''}
+      ${form}`;
+  }
+
+  el.storyHead.addEventListener('submit', async (e) => {
+    const review = e.target.closest('form.review-log');
+    if (review) {
+      e.preventDefault();
+      const field = (n) => review.querySelector(`[name="${n}"]`);
+      try {
+        await api('POST', '/api/pipeline/review-log', {
+          story: Number(review.dataset.story),
+          minutes: Number(field('minutes').value) || 0,
+          rework_minutes: Number(field('rework').value) || 0,
+          note: field('note').value.trim(),
+        });
+        toast('Tempo de revisão registrado.', 'success');
+        review.reset();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+      return;
+    }
+    const form = e.target.closest('form.decisions');
+    if (!form) return;
+    e.preventDefault();
+    const answers = [...form.querySelectorAll('textarea[name="answer"]')]
+      .sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index))
+      .map((t) => t.value.trim());
+    try {
+      await api('POST', '/api/pipeline/answer', { story: Number(form.dataset.story), answers });
+      toast('Respostas registradas; a US recomeça do Passo 0.', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  });
+
   function renderCauses(causes) {
     if (!causes?.length) return '';
     return `
@@ -1100,7 +1272,7 @@ Critérios de aceitação:
           <li>
             ${is.severity ? `<span class="sev" data-sev="${esc(is.severity)}">${esc(is.severity)}</span>` : '<span></span>'}
             <span>${issueDescription(is.description)}</span>
-            <span class="issue-meta"><span>${esc(is.agent)}</span>${is.location ? `<code>${esc(is.location)}</code>` : ''}</span>
+            <span class="issue-meta"><span>${esc(is.agent)}</span>${is.location ? `<code>${esc(is.location)}</code>` : ''}${is.sources?.length ? `<span title="Revisores que apontaram">${esc(is.sources.join(', '))}</span>` : ''}</span>
           </li>`).join('')}
         </ul>
       </div>`;
@@ -1115,6 +1287,7 @@ Critérios de aceitação:
           <span class="check-name">${esc(c.name)}</span>
           <code title="${esc(c.command)}">${esc(c.command)}</code>
           <span class="time">${esc(fmtDuration(c.duration_ms))}</span>
+          ${c.report ? `<span class="note" data-tone="${c.report.status === 'lido' ? '' : 'warn'}" title="${esc(c.report.detail || c.report.path || '')}">relatório ${esc(c.report.format)}: ${c.report.status === 'lido' ? `${c.report.passed || 0} ok, ${c.report.failed || 0} falha(s), ${c.report.skipped || 0} ignorado(s)` : esc(c.report.status)}</span>` : ''}
           ${!c.passed && c.output ? `<details class="check-out"><summary>Saída (${c.timed_out ? 'tempo esgotado' : `código ${esc(c.exit_code)}`})</summary><pre>${esc(c.output)}</pre></details>` : ''}
         </li>`).join('')}
       </ul>`;
@@ -1152,24 +1325,6 @@ Critérios de aceitação:
       </div>`;
   }
 
-  function renderTrace(trace) {
-    if (!trace?.length) return '';
-    const found = trace.filter((t) => t.files?.length).length;
-    const missing = trace.filter((t) => !t.files?.length);
-    const pct = Math.round((found / trace.length) * 100);
-    return `
-      <div class="trace" data-complete="${missing.length === 0}">
-        <div class="trace-head"><span>Rastreabilidade dos testes</span><span class="num">${found} de ${trace.length}</span></div>
-        <div class="trace-bar" role="img" aria-label="${pct}% dos casos de teste encontrados"><span data-pct="${pct}"></span></div>
-        ${missing.length ? `<div class="chips">${missing.map((t) => `<span class="chip" data-missing title="${esc(t.description || '')}">${esc(t.id)}</span>`).join('')}</div>` : ''}
-        <details class="trace-all"><summary>Ver todos</summary>
-          <table>${trace.map((t) => `
-            <tr><td><code>${esc(t.id)}</code></td><td>${esc(t.description || '')}</td>
-            <td>${t.files?.length ? t.files.map((f) => `<code>${esc(f)}</code>`).join(' ') : '<span class="note" data-tone="warn">sem teste</span>'}</td></tr>`).join('')}
-          </table>
-        </details>
-      </div>`;
-  }
 
   // The dependency analysis, as a table of waves.
   function renderWaves(run) {
@@ -1196,6 +1351,11 @@ Critérios de aceitação:
     if (s.model) parts.push(`<span class="model" title="${esc([s.provider, s.model, s.effort].filter(Boolean).join(' · '))}">${esc(s.model)}</span>`);
     if (s.status === 'running' && s.started_at) parts.push(`<span class="time" data-elapsed="${esc(s.started_at)}"></span>`);
     else if (s.duration_ms) parts.push(`<span class="time">${esc(fmtDuration(s.duration_ms))}</span>`);
+    if (s.need && s.need !== 'obrigatória') {
+      parts.push(`<span class="note" data-tone="${s.need === 'exigida pelo risco' ? 'warn' : ''}" title="${esc(s.need_reason || '')}">${esc(s.need)}</span>`);
+    }
+    if (s.failure_class) parts.push(`<span class="note" data-tone="danger" title="Classe da falha">${esc(s.failure_class)}</span>`);
+    if (s.queue_ms >= 1000) parts.push(`<span class="time" title="Tempo esperando vaga de agente">fila ${esc(fmtDuration(s.queue_ms))}</span>`);
     if (s.status === 'running') parts.push(pill({ label: 'Executando', tone: 'accent' }));
     if (s.status === 'failed') parts.push(pill({ label: 'Falhou', tone: 'danger' }));
     if (s.status === 'warning') parts.push(pill({ label: 'Com pendências', tone: 'warn' }));
@@ -1214,6 +1374,7 @@ Critérios de aceitação:
     if (s === ctx.run.analysis) blocks.push(renderWaves(ctx.run));
     if (s.kind === 'fix') blocks.push(renderIssues(s.issues, 'Correções solicitadas'));
     else if (s.issues?.length) blocks.push(renderIssues(s.issues, ['failed', 'warning'].includes(s.status) ? 'Problemas não resolvidos' : 'Problemas encontrados'));
+    if (s.advisory?.length) blocks.push(renderIssues(s.advisory, 'Recomendações de estilo (não bloqueiam)'));
     blocks.push(renderChecks(s.checks), renderCandidates(s.candidates));
     if (ctx.withTrace) blocks.push(renderTrace(ctx.story?.trace));
     blocks.push(renderCommit(s));
@@ -1288,7 +1449,11 @@ Critérios de aceitação:
     const delivered = list.filter((s) => s.status === 'done' || s.status === 'warning').length;
     const pending = list.filter((s) => s.status === 'warning' || s.status === 'skipped').length;
     const took = run.finished_at ? ` em ${fmtDuration(Date.parse(run.finished_at) - Date.parse(run.started_at))}` : '';
-    return `Concluída${esc(took)}: ${delivered} de ${list.length} US entregue${list.length === 1 ? '' : 's'}${pending ? `, ${pending} com pendências` : ''}.`;
+    const out = list.filter((s) => s.integration === 'blocked').length;
+    const kept = out ? ` ${out} fora da branch base.` : '';
+    const v = VALIDATION[run.validation];
+    const validation = v ? ` Validação ${v.short}${run.dry_run ? ' (simulação)' : ''}.` : '';
+    return `Concluída${esc(took)}: ${delivered} de ${list.length} US entregue${list.length === 1 ? '' : 's'}${pending ? `, ${pending} com pendências` : ''}.${validation}${kept}`;
   }
 
   function cleanupFinding(run) {
@@ -1345,6 +1510,9 @@ Critérios de aceitação:
     let state = { label: 'Ocioso', tone: 'neutral' };
     if (run.running) state = { label: 'Em execução', tone: 'accent' };
     else if (run.result) state = RUN_RESULT[run.result];
+    if (!run.running && run.result === 'succeeded' && VALIDATION[run.validation] && run.validation !== 'passed') {
+      state = { label: `Concluído · ${VALIDATION[run.validation].short}`, tone: 'warn' };
+    }
     el.runBadge.dataset.tone = state.tone;
     el.runBadge.textContent = state.label;
     if (!started) return;
@@ -1428,6 +1596,72 @@ Critérios de aceitação:
     paintSteps(stepsHtml(runSteps.map((step) => ({ step, isRunStep: true })), { run, si: -1 }));
   }
 
+  // Every token of a usage, each counted once: cached tokens are part of the
+  // input and reasoning tokens part of the output.
+  function totalTokens(u) {
+    return (u.input_tokens || 0) + (u.output_tokens || 0);
+  }
+
+  // Where the story's time went, and the review time people logged by hand.
+  function renderMetrics(st, si, run) {
+    const steps = st.steps || [];
+    const sum = (pick) => steps.reduce((t, s) => t + (pick(s) || 0), 0);
+    const queue = sum((s) => s.queue_ms);
+    const fixes = steps.filter((s) => s.kind === 'fix').length;
+    const verify = sum((s) => (s.checks?.length ? s.duration_ms : 0));
+    const reviewed = (st.human_review || []).reduce((t, h) => t + h.minutes + (h.rework_minutes || 0), 0);
+    const tokens = st.usage ? totalTokens(st.usage) : 0;
+    const parts = [];
+    if (queue) parts.push(`fila ${fmtDuration(queue)}`);
+    if (verify) parts.push(`verificação ${fmtDuration(verify)}`);
+    if (fixes) parts.push(`${fixes} rodada(s) de correção`);
+    if (tokens) parts.push(`${tokens.toLocaleString('pt-BR')} tokens`);
+    if (reviewed) parts.push(`${reviewed} min de revisão humana registrados`);
+    const done = ['done', 'warning', 'failed'].includes(st.status) && !run.running;
+    const form = done ? `
+      <form class="review-log" data-story="${si}">
+        <label>Revisão (min) <input type="number" name="minutes" min="0" max="1440" step="1"></label>
+        <label>Retrabalho (min) <input type="number" name="rework" min="0" max="1440" step="1"></label>
+        <label>Nota <input type="text" name="note" maxlength="500" autocomplete="off"></label>
+        <button class="btn btn-ghost btn-sm" type="submit">Registrar tempo</button>
+      </form>` : '';
+    if (!parts.length && !form) return '';
+    return `<details class="trace-all"><summary>Métricas${parts.length ? `: ${esc(parts.join(' · '))}` : ''}</summary>
+      <p class="note">O tempo de revisão humana só entra quando você registra aqui; nada é coletado sem você informar.</p>${form}</details>`;
+  }
+
+  // What the run spent: observed and estimated costs apart, unknown said so.
+  function renderUsage(u) {
+    if (!u?.calls) return '';
+    const tokens = totalTokens(u);
+    const parts = [`${u.calls} chamada(s)`, `${tokens.toLocaleString('pt-BR')} tokens informados`];
+    if (u.retries) parts.push(`${u.retries} nova(s) tentativa(s)`);
+    if (u.cost_observed_usd) parts.push(`custo informado US$ ${u.cost_observed_usd.toFixed(2)}`);
+    if (u.cost_estimated_usd) parts.push(`estimado US$ ${u.cost_estimated_usd.toFixed(2)} (${esc(u.prices_version || 'tabela da política')})`);
+    if (u.unknown_cost) parts.push(`${u.unknown_cost} sem custo conhecido`);
+    if (u.unreported) parts.push(`${u.unreported} sem contagem de tokens`);
+    const stop = u.stopped_by ? ` <span class="note" data-tone="warn">Parou no orçamento: ${esc(u.stopped_by)}.</span>` : '';
+    const b = snapshot?.workspace?.policy?.budget || {};
+    const limits = [
+      b.max_minutes && `${b.max_minutes} min`, b.max_calls && `${b.max_calls} chamadas`,
+      b.max_tokens && `${Number(b.max_tokens).toLocaleString('pt-BR')} tokens (conferido entre chamadas)`, b.max_retries && `${b.max_retries} novas tentativas`,
+    ].filter(Boolean);
+    const budget = limits.length ? ` Orçamento: ${esc(limits.join(', '))}.` : ' Sem orçamento definido.';
+    return `<p class="note">Consumo: ${parts.join(' · ')}.${stop}${budget}</p>`;
+  }
+
+  // The pull request a story went to, from its promotion.
+  function prLink(st) {
+    if (st.integration !== 'awaiting_review') return '';
+    const label = st.id || st.title;
+    const p = [...(snapshot?.run.promotions || [])].reverse().find((x) => x.pr && (x.stories || []).some((s) => s.startsWith(label)));
+    const url = p?.pr?.url || '';
+    return /^https:\/\//.test(url) ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Abrir PR</a>` : '';
+  }
+
+  // What proves each kind of change: see the pipeline's change.go.
+  const CHANGE_LABEL = { bug: 'Correção de bug', feature: 'Funcionalidade', refactor: 'Refatoração', trivial: 'Edição trivial' };
+
   function renderStory(run, si, runSteps) {
     const list = run.stories || [];
     const st = list[si];
@@ -1437,6 +1671,19 @@ Critérios de aceitação:
       : st.duration_ms ? `<span class="num">${esc(fmtDuration(st.duration_ms))}</span>` : '';
     const meta = [
       pill(status),
+      VALIDATION[st.validation] ? pill(VALIDATION[st.validation]) : '',
+      st.risk && st.risk.level !== 'baixo'
+        ? `<span title="${esc((st.risk.reasons || []).join('\n'))}">${pill({ label: `Risco ${st.risk.level.replace('medio', 'médio').replace('critico', 'crítico')}`, tone: st.risk.level === 'medio' ? 'neutral' : 'warn' })}</span>`
+        : '',
+      INTEGRATION[st.integration] ? `<span title="${esc(st.integration_note || '')}">${pill(INTEGRATION[st.integration])}</span>` : '',
+      prLink(st),
+      st.baseline && Object.keys(st.baseline.failing || {}).length
+        ? `<span title="${esc(`Já falhavam antes da US: ${Object.keys(st.baseline.failing).join(', ')}`)}">${pill({ label: 'Falhas preexistentes', tone: 'warn' })}</span>`
+        : '',
+      st.change ? `<span title="${esc(st.change_reason || '')}">${pill({ label: CHANGE_LABEL[st.change] || st.change, tone: 'neutral' })}</span>` : '',
+      st.reproduction
+        ? `<span title="${esc([st.reproduction.detail, ...(st.reproduction.failures || [])].filter(Boolean).join('\n'))}">${pill({ label: `Bug ${st.reproduction.status}`, tone: st.reproduction.status === 'reproduzida' ? 'success' : 'warn' })}</span>`
+        : '',
       st.branch ? `<code>${esc(st.branch)}</code>` : '',
       st.depends_on?.length ? `<span>Depende de ${esc(st.depends_on.join(', '))}</span>` : '',
       time,
@@ -1444,7 +1691,13 @@ Critérios de aceitação:
     const head = `
       <h2 id="storyTitle">${esc(st.title || 'User Story')}</h2>
       <div class="story-meta">${meta}</div>
+      ${renderReadiness(st, si, run.running)}
       ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
+      ${run.delivery ? `<p class="note">Pacote de entrega: <code>${esc(run.delivery.dir)}</code></p>` : ''}
+      ${renderUsage(run.usage)}
+      ${renderMetrics(st, si, run)}
+      ${renderSpecialties(st)}
+      ${renderAcceptance(st.acceptance)}
       ${renderCauses(st.causes)}`;
     if (el.storyHead.dataset.html !== head) {
       el.storyHead.innerHTML = head;
@@ -1712,6 +1965,10 @@ Critérios de aceitação:
     el.stopBtn.hidden = !running;
     const resume = running ? null : snapshot?.run.resume;
     el.resumeBtn.hidden = !resume;
+    const promotions = snapshot?.run.promotions || [];
+    const last = promotions[promotions.length - 1];
+    const awaiting = (snapshot?.run.stories || []).some((s) => s.integration === 'awaiting_review');
+    el.reconcileBtn.hidden = running || (last?.status !== 'partial' && !awaiting);
     el.resumeBtn.title = resume ? `Retoma em ${[resume.story_title, resume.title].filter(Boolean).join(' · ')}` : '';
     el.newRunLink.hidden = running;
     el.startLabel.textContent = running ? 'Execução em andamento…' : 'Iniciar execução';

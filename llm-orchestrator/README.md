@@ -2,7 +2,7 @@
 
 Servidor Go com dashboard web que conduz uma User Story por um pipeline de agentes LLM
 (Passo 0 → especificação EDD/TDD → arquitetura → frontend/backend em frentes paralelas →
-verificação executável → segurança → code review → E2E → documentação),
+verificação executável → segurança → code review → E2E → QA funcional → documentação),
 usando os CLIs **Claude Code**, **Codex** e **Gemini CLI** com failover automático quando um deles atinge o limite de uso.
 
 ## Repositório e discovery
@@ -14,7 +14,12 @@ diretório e um agente complementa com versões, comandos de build/teste, arquit
 
 O relatório é salvo em `~/.config/faztudo/discovery/` (um arquivo por repositório) e injetado como
 contexto em todos os agentes. As execuções seguintes, mesmo depois de reiniciar o servidor,
-**reutilizam o discovery** sem refazê-lo. Ele é refeito apenas ao clicar em **Refazer**.
+**reutilizam o discovery** enquanto ele vale: o relatório guarda o hash dos manifestos, lockfiles,
+instruções dos agentes (AGENTS.md, CLAUDE.md, constitution), contratos (OpenAPI, proto, GraphQL,
+Prisma) e documentos de arquitetura (ADR). Mudou só código, ele é reutilizado. Mudaram até 15 desses
+arquivos (sem remoção), o agente **atualiza** o discovery anterior lendo só eles. Mais que isso, arquivo
+removido, discovery simulado servindo execução real, relatório de versão anterior sem hash ou repositório
+com mais de 2.000 desses arquivos (o hash não cobre todos): discovery **completo**. O painel mostra origem, motivo e validade; **Refazer** continua forçando um novo.
 
 **Grafo do código.** Com o [graphify](https://github.com/safishamsi/graphify) instalado
 (`uv tool install graphifyy`), cada execução roda `graphify update .` no repositório antes do discovery
@@ -28,16 +33,38 @@ antes de varrer arquivos. Sem graphify, o pipeline segue sem o grafo (aviso no l
 chamada: arquivo alterado volta à cópia embutida. O prompt indica o caminho de cada `SKILL.md` e o agente
 o lê como arquivo, então Claude (com `--safe-mode`, `--add-dir` e escrita negada na pasta), Codex e Gemini
 (`--include-directories`) usam as mesmas versões, sem depender do que o usuário instalou. Etapas:
-especificação → `spec-driven-development`; arquiteto → `planning-and-task-breakdown`, `api-and-interface-design`;
-frontend/backend → `incremental-implementation`, `test-driven-development` e `frontend-ui-engineering`/
-`api-and-interface-design`; segurança → `security-and-hardening`; code review → `code-review-and-quality`,
-`code-simplification`, `structural-health`; docs → `documentation-and-adrs`; rodadas de correção →
+Passo 0 → `story-readiness`; especificação → `spec-driven-development`; ameaças → `security-and-hardening`;
+arquiteto → `planning-and-task-breakdown`, `api-and-interface-design`, `change-impact`; dados →
+`safe-migrations`; frontend/backend → `incremental-implementation`, `test-driven-development` e
+`frontend-ui-engineering`/`api-and-interface-design`; segurança → `security-and-hardening`; code review →
+`code-review-and-quality`, `code-simplification`, `structural-health`, `test-quality`; QA funcional →
+`functional-acceptance`; docs → `documentation-and-adrs`; rodadas de correção →
 `debugging-and-error-recovery`, `test-driven-development`. Com revisores em paralelo, cada lente lê só a
-sua (a lente Estrutura usa `structural-health`).
+sua (a lente Estrutura usa `structural-health`; a de Testes, `test-quality`).
+
+**Rastreio por chamada.** Cada chamada de agente grava, no passo, a versão do bundle, o hash de cada
+skill e perfil que o prompt indicou, o hash do prompt e do papel e os parâmetros (nível, só leitura,
+diagnóstico, `strict_commands`, limite de turnos, provider e modelo). Um resultado ruim leva às
+instruções exatas que o produziram.
+
+**Perfis de stack** (`profiles` na política, campo *Perfis de stack*). `go` e `angular-nestjs-postgres`
+trazem as convenções da stack para implementadores e revisores. São opcionais: o discovery sugere os que
+casam com as stacks encontradas, mas só valem depois de escolhidos.
+
+**Complemento do projeto.** `.faztudo/skills/<skill>.md` no repositório é acrescentado à skill de mesmo
+nome, com caminho e hash no rastreio da chamada. Ele adiciona convenções; o prompt diz que não reduz o
+que a skill, a política ou as permissões exigem, e as permissões nem passam pelo texto. O arquivo é
+protegido como os documentos de entrada: agente que o alterar tem a mudança desfeita.
+
+**Atualizar um playbook.** `internal/skills/testdata/playbooks.sha256` fixa o hash de cada skill e
+perfil. Mudar um deles faz `make test` falhar até que o fixture seja atualizado
+(`UPDATE_GOLDEN=1 go test ./internal/skills`), depois de comparar os relatórios da avaliação antes e
+depois da mudança (`go run . -eval`, veja [evals/README.md](evals/README.md)).
 
 As de [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) (MIT) ficam fixadas no commit de
 `bundle/AGENT_SKILLS_COMMIT`; `make update-skills` (ou `scripts/update-skills.sh <commit>`) atualiza.
-`structural-health` é nossa, adaptada de `untangle-codebase` ([caldoai/skills](https://github.com/caldoai/skills),
+`structural-health`, `story-readiness`, `change-impact`, `safe-migrations`, `test-quality` e
+`functional-acceptance` são nossas; `structural-health` foi adaptada de `untangle-codebase` ([caldoai/skills](https://github.com/caldoai/skills),
 MIT): na revisão de cada US procura ligações escondidas, ligações desnecessárias, sobras e casos especiais
 no que a US mudou e em quem depende disso.
 
@@ -61,7 +88,27 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    `develop`) antes da onda seguinte começar**: a próxima onda parte da base já com a anterior. Em
    sequência (uma US por onda, ou sem worktrees) o merge na base acontece ao fim de cada US, e o
    repositório termina na base. Se o merge na base falhar (a base mudou e conflita), a execução para
-   com a branch preservada para você resolver. Repositório que começa em uma branch `faztudo/`
+   com a branch preservada para você resolver.
+   **Só entra na base o que foi aprovado e verificado no estado final.** Uma regra única decide toda
+   promoção (sequencial, paralela ou retomada): US com validação reprovada ou inconclusiva nunca é
+   promovida; US *não avaliada* (nenhum comando executado) só com `promote_unverified` na política
+   (opção “Integrar na branch base US sem validação executada”). Antes do merge na base, os
+   comandos do projeto rodam no **candidato**: na branch de integração da onda, sempre, porque US que
+   passam isoladas podem quebrar juntas; na branch da US, quando algo mudou depois da última
+   verificação aprovada (a documentação, por exemplo). Se a base recebeu commits que o candidato não
+   tem, a promoção é bloqueada. Candidato bloqueado deixa a base intacta, a branch fica para revisão
+   (*Fora da base*, com o motivo) e as US que dependem dele, pela análise, não iniciam; as
+   independentes seguem. Sem conseguir criar a branch da US, a execução para em vez de desenvolver
+   na base.
+   **Dependências e repositórios aninhados.** Com branch base, uma US só começa quando cada US de
+   que depende já entrou na base; o commit de cada uma fica em `built_on`. Cada promoção registra,
+   por repositório (o principal e cada aninhado), o commit do candidato e onde a base estava antes e
+   depois. Git não tem transação entre repositórios: se o merge entrar em um aninhado e falhar no
+   principal, nada é desfeito, a promoção fica **parcial**, as dependentes não iniciam e a execução
+   para. **Reconciliar integração** (`POST /api/pipeline/reconcile`) completa o merge onde falta,
+   depois que você resolver o motivo; desfazer fica a seu critério. Em US paralelas, a falha de uma
+   US para só ela: as demais da onda terminam e são integradas, e a execução para pronta para
+   continuar da US que falhou. Sem provider capaz de rodar agentes, a onda inteira para. Repositório que começa em uma branch `faztudo/`
    (retomada) sem base configurada não é mergeado. Conflito entre US vai
    para um agente de **integração**, que resolve os marcadores e roda os testes; se não resolver, o
    merge é desfeito e a US fica *Com pendências* na própria branch. Falha numa US cancela as demais da
@@ -73,8 +120,14 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    só encerram processos pelo PID ou pela porta, nunca por nome (`pkill`/`killall`). O prompt vai pelo
    stdin do CLI, fora da linha de comando, para que um `pkill -f` não derrube o agente de outra US.
 1. **Discovery** (uma vez por repositório) → **Passo 0** (verifica o que o repositório já implementa,
-   critério a critério, e decide: `reuse` encerra a US sem implementar; `block` pula a US apontando a
-   dependência ou decisão que falta; `extend`/`refactor`/`implement` seguem, implementando só o delta)
+   critério a critério, cada um *existente*, *parcial*, *ausente* ou *ambíguo* com evidência, e decide:
+   `reuse` encerra a US sem implementar, mas só com todo critério existente e com evidência, e os
+   comandos do projeto ainda conferem (sem isso vira `extend`); `block` pula a US apontando a
+   dependência que falta; `extend`/`refactor`/`implement` seguem, implementando só o delta). Decisão de
+   produto que a US não responde deixa a US *Aguardando decisão*: as independentes seguem, as que
+   dependem dela esperam. Responda no painel (`POST /api/pipeline/answer`): a resposta fica registrada
+   à parte (a US não é reescrita), segue para todos os agentes e a US recomeça do Passo 0, junto com as
+   que esperavam por ela.
    → **Especificação** → **Arquiteto**. Essas etapas, a segurança e o code review
    rodam **somente leitura** (`--permission-mode plan` / `--sandbox read-only`): planejadores e
    revisores não conseguem alterar arquivos, independentemente do prompt.
@@ -86,19 +139,48 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    Implementadores e revisores seguem esse padrão e regras de clean code (nomes que revelam intenção,
    funções de uma responsabilidade com até ~20 linhas e 3 argumentos, guard clauses).
 3. **Frentes paralelas** — o arquiteto mapeia as atividades em `streams` (agente, arquivos,
-   dependências). Frentes sem dependência entre si e com arquivos disjuntos formam uma onda e rodam
-   em paralelo, cada uma em uma worktree git própria; no fim da onda são integradas por merge na
+   dependências). Frentes sem dependência entre si, com arquivos disjuntos e sem recurso compartilhado
+   (`resources`: contrato, migration, banco, serviço; com migration no plano, todas as frentes
+   compartilham o schema) formam uma onda e rodam em paralelo, cada uma em uma worktree git própria; no fim da onda são integradas por merge na
    branch da US. Frente que conflita com outra é refeita sobre o código integrado. Sem git as
-   frentes rodam em sequência. Sem nada a paralelizar, o fluxo segue
+   frentes rodam em sequência. O plano também registra o **impacto** (contratos, consumidores,
+   migrations, recursos compartilhados e como reverter), os **cenários de aceitação** com o método de
+   comprovação, definidos antes de implementar, e os **requisitos não funcionais** com SLO. O que
+   falta (nenhum cenário, migration sem reversão, desempenho sem SLO mensurável) aparece como
+   *lacuna* no plano e no log. Sem nada a paralelizar, o fluxo segue
    com frontend e backend como etapas comuns.
 4. **Segurança**, **code review** e **E2E** são portões de qualidade: devolvem um veredito JSON
    (`approved` / `changes_requested`) com os problemas e o agente responsável por cada um. Havendo
    falhas, o frontend e/ou backend recebem um prompt com exatamente o que corrigir e o mesmo portão
    roda de novo para verificar. Após 2 rodadas sem aprovação, a etapa fica *Com pendências* (listadas) e o pipeline segue para as
    próximas etapas e US, sem parar a execução.
+   O veredito é validado: status desconhecido, `changes_requested` sem problema descrito ou
+   `approved` com problema de severidade alta são rejeitados. Resposta sem veredito válido nunca
+   aprova: o portão é consultado de novo só pelo veredito (até 2 vezes, em leitura) e, persistindo,
+   a validação fica *inconclusiva*. Cada US e a execução mostram a **validação** (aprovada,
+   reprovada, inconclusiva ou não avaliada) separada do resultado: *concluída* diz que a execução
+   terminou, não que a entrega foi aprovada. Simulação nunca conta como aprovação.
+   Antes de uma execução real, os providers são conferidos contra a política (capacidades, versão
+   do CLI). Execução que nenhum provider instalado consegue atender não começa. Com
+   `strict_commands`, agentes que escrevem só rodam em CLI que restringe os comandos à lista (o
+   Codex não restringe), nem em failover. Detalhes em [docs/provedores.md](../docs/provedores.md);
+   CI e proteção de branch em [docs/ci.md](../docs/ci.md).
 5. O **code review** roda com revisores em paralelo, cada um com um foco: aderência à especificação,
    simplicidade e legibilidade, testes e — quando o frontend participa — interface e acessibilidade.
-   Os problemas são unificados em um único veredito.
+   Os problemas são unificados em um único veredito, proporcional ao que bloqueia:
+   - achados de revisores diferentes sobre a mesma causa (mesmo implementador e arquivo com linhas
+     próximas, ou mesma descrição) viram um só, com a maior severidade, todas as localizações e quem
+     apontou;
+   - achado de **estilo** (nomes, formatação, tamanho de função sem convenção do projeto) vira
+     *recomendação*, mostrada no passo sem rodada de correção, a menos que `style_blocking` esteja
+     ligado; severidade alta continua bloqueando;
+   - no máximo `max_parallel_reviews` revisores rodam juntos (padrão 3);
+   - `review_provider` (`claude`, `codex` ou `gemini`) tenta outro provider para as revisões, com o
+     failover de sempre. Fica desligado até a avaliação mostrar que ajuda.
+
+   Revisores não editam: além do modo só leitura do CLI, o que um revisor alterar é desfeito antes do
+   commit da etapa e registrado no passo. Correções vão sempre a um implementador e passam de novo pelos
+   comandos e pelo revisor.
 6. **Documentação do fluxo** (`docs`, quando o arquiteto julga necessária) roda por último:
    guia de uso para o cliente final e/ou fluxo, contratos e pontos de extensão para quem fará
    manutenção, no lugar onde o projeto já documenta (README, `docs/`, ADR) ou em `docs/<us>.md`.
@@ -118,10 +200,159 @@ worktrees. *Sequencial*: sem análise de dependências; uma US de cada vez, na o
 os agentes de cada US um após o outro. Nos dois modos cada US/onda é mergeada na branch base antes da
 seguinte.
 
+**Instrumentação.**
+- Cada execução tem um `id` que aparece em todo registro dela: chamadas (com US, etapa, tentativa e
+  commit), log de tokens (`tokens.jsonl`) e pacote de entrega.
+- Por US, `usage` guarda chamadas, tokens e custo informado e estimado.
+- O pacote ganha `metrics.json` e uma tabela no índice com duração, fila, tempo de agentes, de
+  verificação e de integração, rodadas de correção, pendências, tokens e revisão humana.
+- O tempo de revisão humana e de retrabalho entra só por registro manual: *Registrar tempo* em
+  *Métricas* na US, ou `POST /api/pipeline/review-log` com `story`, `minutes`, `rework_minutes` e
+  `note`. Nada é medido sem a pessoa informar.
+- Mensagens do log passam pela mesma remoção de segredos do pacote; `log_limit` (padrão 500) define
+  quantas ficam por execução.
+- Tudo funciona localmente, sem serviço externo de observabilidade.
+
+**Contexto e verificações.**
+- Cada etapa recebe só as etapas anteriores de que depende (`Inputs`), cada saída cortada em
+  `context_bytes` (padrão 4000) com a marca `[… conteúdo truncado]`. O registro da chamada conta os
+  cortes e o tamanho do prompt.
+- Os portões (revisão, segurança, QA) recebem a lista dos arquivos que a US alterou, cortada em 60 com
+  aviso, para olhar onde está a mudança; a revisão continua sendo da mudança inteira.
+- A verificação executável só é pulada quando nada mudou desde a última aprovação, ou quando o que mudou
+  tem o mesmo conteúdo (chave por conteúdo e comandos, nunca só por nome ou hora do arquivo).
+- Discovery e linha de base também ficam em cache por conteúdo (arquivos de que dependem; commit e
+  comandos).
+- Rodadas de correção rodam primeiro o que falhou, mas a aprovação sempre roda todos os comandos:
+  nenhum comando obrigatório é dispensado por um recorte do grafo.
+- Nada assume cache compartilhado entre providers.
+
+**Orçamento** (`budget` na política). `max_minutes`, `max_calls` e `max_tokens` são conferidos antes de
+cada chamada de agente: atingido um deles, nenhuma chamada nova começa, a etapa para com a classe
+`orçamento`, o trabalho feito fica salvo e a execução pode continuar depois de aumentar o limite. Os
+tokens são os que os CLIs informam ao fim de cada chamada, então uma chamada pode passar do limite:
+nenhum CLI aceita um teto rígido no meio da chamada. `max_retries` limita as novas tentativas de
+chamadas que falharam na execução inteira, e `max_retry_wait_s` limita a espera antes de cada uma.
+Orçamento esgotado ou falta de provider não são retentados.
+
+**Custo.** O custo informado pelo CLI é *observado*. Chamada que informa tokens sem custo é *estimada*
+pela tabela `prices` da política (US$ por milhão de tokens por modelo, por nome exato ou prefixo, com
+`prices_version` registrado), se houver preço: a entrada lida do cache custa `cached_input` (ou `input`,
+sem ele) e a saída, raciocínio incluído, custa `output`. Sem preço, o custo é *desconhecido*. Os tokens
+informados contam cada token uma vez: o cache é parte da entrada e o raciocínio, parte da saída. O painel e
+`usage` mostram os três separados, e o FazTudo não traz preço embutido. Cada etapa que falha ou fica
+pendente recebe uma classe: `orçamento`, `provider`, `infraestrutura`, `formato`, `comportamento`
+ou `cancelada`. Best-of-N continua opcional (`candidates`, padrão 1); só vale ligar quando a avaliação
+mostrar ganho, porque multiplica o consumo.
+
+**Limites de paralelismo.** Todas as chamadas de agente de uma execução passam por uma fila única com
+`max_parallel_agents` vagas (padrão 4): US paralelas, frentes, revisores e candidatos dividem o mesmo
+limite em vez de se multiplicar. A fila atende por ordem de chegada, então nenhuma chamada espera para
+sempre; parar a execução libera as vagas e mantém as branches. O tempo de espera aparece em cada etapa
+(*fila*) e a duração de cada integração fica na promoção. Comando de verificação com `resource` (ex.:
+`"resource": "postgres"`) só roda quando ninguém mais usa aquele recurso, nem outra US da onda nem outra
+janela do FazTudo; stacks de teste continuam com a vaga única da máquina.
+
 **Fluxo de agentes** (campo *Fluxo de agentes*, por repositório): `full` (padrão), `balanced` (sem
 segurança, E2E e docs), `fast` (Passo 0, especificação, arquiteto, devs e verificação), `audit`
-(verificação, segurança e review do código já desenvolvido, sem arquiteto nem devs; os achados viram
-pendências) e `custom` (`disabled_stages`). Etapas desligadas aparecem como *omitidas*.
+(verificação, segurança, review e QA funcional do código já desenvolvido, sem arquiteto nem devs; os
+achados viram pendências) e `custom` (`disabled_stages`). Etapas desligadas aparecem como *omitidas*.
+
+**QA funcional** (`acceptance`, depois do E2E; desligado só no `fast`). Só leitura, julga cada critério
+e cenário do plano, inclusive os negativos, pelos critérios originais da US. Recebe do orquestrador a
+evidência executada (status de cada caso da especificação, casos do relatório, como terminou cada comando
+do projeto na última verificação, reprodução do bug) e a interpreta, sem substituí-la:
+
+- cenário **aceito** precisa citar o ID de um caso **comprovado** por execução (ou o nome do caso
+  executado, que vale pelo próprio resultado); inspeção precisa de
+  `arquivo:linha`, e o QA fica como responsável; cenário que só o resultado de um comando do projeto
+  prova ("os testes e o lint passam") cita o comando, e vale o que ele deu na última verificação;
+- caso citado que falhou torna o cenário **recusado**, que volta para o implementador mesmo que o QA
+  tenha aprovado;
+- cada cenário do plano tem um ID (`AC-1`, `AC-2`, …) dado pelo orquestrador, e o QA responde por ele:
+  reescrever o critério com outras palavras não desfaz a ligação. Sem ID, vale o texto (a numeração que o
+  QA acrescenta é ignorada); cenário com ID que o plano não tem aparece como **fora do plano**;
+- cenário do plano que o QA não avaliou é pedido de novo, só ele, em leitura (até 2 vezes, cada uma uma
+  etapa *cenários faltantes*);
+- aceito sem essa evidência, ou cenário do plano que o QA não avaliou nem assim, fica **sem
+  evidência**: a validação da US fica inconclusiva;
+- código alterado depois da aceitação (por uma etapa posterior) **invalida** os cenários aceitos.
+
+A evidência guardada passa por remoção de dados sensíveis (senhas, tokens, e-mails, CPF, números de
+cartão); screenshots e traces do Playwright aparecem ligados ao cenário pelo caso que o comprova.
+
+**Política de risco** (`risk_rules`, por repositório). Cada regra tem nome, caminhos (globs sobre os
+arquivos alterados, `**` atravessa pastas), palavras-chave (no texto da US), nível (`baixo`, `medio`,
+`alto`, `critico`) e as etapas que passam a ser **obrigatórias**. Sem regras configuradas valem as
+padrão:
+
+| Regra | Dispara com | Nível | Exige |
+|---|---|---|---|
+| Autenticação e permissões | `**/auth/**`, `*auth*`, `*jwt*`…; “login”, “senha”, “permissão”, “MFA”… | alto | ameaças, segurança, review |
+| Pagamento e dados pessoais | “pagamento”, “pix”, “cartão”, “LGPD”, “CPF”… | crítico | ameaças, segurança, review |
+| Persistência e migrations | `**/migrations/**`, `**/*.sql`, `schema.prisma`; “migration”… | alto | dados, verificação das migrations, review |
+| Desempenho | “desempenho”, “latência”, “throughput”, “SLO”, “p95”… | médio | desempenho |
+| Infraestrutura e CI | `.github/workflows/**`, `Dockerfile`, `*.tf`, `k8s/`… | alto | segurança, review |
+| Contratos de API | `openapi*`, `*.proto`, `*.graphql`; “endpoint”… | médio | review |
+
+O risco é avaliado pelo texto da US e de novo pelo diff real antes de cada portão. Ele só sobe: uma
+correção que amplia o escopo pode exigir mais etapas, nunca menos. Nem o arquiteto nem o fluxo
+(`fast`, `balanced`) retiram uma etapa obrigatória; ela aparece com o motivo. Etapa obrigatória que
+não chega a um resultado deixa a validação da US *inconclusiva*. Lista vazia (`"risk_rules": []`)
+desliga as regras.
+
+**Especialidades.** Rodam só quando a política de risco exige ou o plano pede; nunca no plano padrão
+nem quando o arquiteto não responde. Cada uma tem papel, escopo, contrato de saída e evidência exigida:
+
+| Etapa | Quando | O que entrega | Evidência |
+|---|---|---|---|
+| Modelagem de ameaças (`threat-model`) | antes do arquiteto, em mudança sensível | ameaças STRIDE, controles e o teste negativo de cada um | contrato JSON; requisitos vão aos implementadores, à segurança e ao QA |
+| UX e protótipo (`ux`) | arquiteto escolhe: jornada visual nova ou ambígua | protótipo em texto: telas, estados, mensagens, foco | contrato JSON; requisitos vão ao frontend e ao QA |
+| Dados e migrations (`data`) | plano com migration | compatibilidade durante o deploy, integridade, volume, reversão | contrato JSON |
+| Verificação das migrations (`migrations`) | plano com migration | roda `migration_checks` em banco descartável; falha volta ao backend | comandos; sem eles, inconclusiva |
+| Desempenho (`performance`) | requisito não funcional de desempenho com meta | julga pelas medições de `benchmark_checks` | medição; meta não atingida volta ao implementador; sem medição, inconclusiva |
+
+**Benchmarks** (`benchmarks` na política). Cada um tem nome, comando, `workload` obrigatório (dados,
+concorrência, aquecimento), `stack` opcional (só roda se o discovery achou essa stack), `warmup`,
+`repeat` (padrão 3), `max_regression_pct` (padrão 10), `max_noise_pct` (padrão 15), `required` e
+`resource`. O comando imprime uma linha JSON com o que mede: `p50_ms`, `p95_ms`, `samples`,
+`throughput_rps`, `mem_mb`, `cpu_pct` ou `queries`. O FazTudo roda o benchmark numa worktree do commit em
+que a US começou e no candidato, alternando os dois depois do aquecimento, e compara as medianas:
+
+- percentil com menos de 20 amostras é descartado;
+- variação entre execuções acima do limite, métrica que só um lado tem ou comando que falha deixam o
+  resultado **inconclusivo**, nunca reprovado com precisão inventada;
+- piora acima do limite é **regressão**: num benchmark `required`, volta ao implementador como
+  problema bloqueante, e a correção passa pelos testes do projeto e é medida de novo;
+- benchmark `required` aciona o especialista de desempenho, que recebe a comparação com o ambiente
+  (sistema, arquitetura, CPUs) e deve propor correção só com profiling ou medição.
+
+Especialidade de planejamento só pode planejar antes do código: se o diff a torna obrigatória depois da
+sua vez, o log avisa e as verificações seguintes continuam julgando. Contrato não atendido (requisito sem
+verificação, nada exigido sem justificativa, resposta sem JSON) deixa a etapa e a US *inconclusivas*.
+
+**Linha de base.** Antes de qualquer agente mudar o código, os comandos do projeto rodam no snapshot em
+que a US começa (US da mesma onda, no mesmo commit, compartilham a mesma). Na verificação, cada
+falha vem marcada como **nova** (passava antes) ou **preexistente** (já falhava, com as mesmas
+falhas). Falha preexistente continua bloqueando a entrega; a marca só diz a quem corrige e a quem
+revisa que ela não foi introduzida pela US. Comando sem resultado na linha de base (tempo esgotado,
+ou não rodou porque uma camada anterior falhou) fica sem marca. `skip_baseline` desliga.
+
+**Tipo de mudança.** O Passo 0 classifica a US em correção de bug, funcionalidade, refatoração ou edição
+trivial (sem Passo 0, pelas palavras da US). Depois que os comandos passam, cada tipo pede sua prova:
+
+- **Bug** — os testes que a US alterou rodam numa worktree do commit em que a US começou, sem a
+  correção, e precisam falhar lá por comportamento. Sem teste alterado, ou com testes que também passam
+  antes da correção, a verificação devolve para o implementador. Falha só de build, de tempo esgotado ou
+  que a linha de base já tinha não demonstra o bug: a validação fica inconclusiva.
+- **Funcionalidade** — código alterado sem nenhum teste, num repositório que tem testes e sem casos
+  listados pela especificação, volta para o implementador.
+- **Refatoração** — todo arquivo de teste, ID de critério e caso que passava na linha de base continua
+  lá e passando (os casos dependem de relatório por caso).
+- **Edição trivial** — sem teste novo, desde que o Passo 0 diga por que não muda comportamento; sem
+  justificativa, vale como funcionalidade.
+
+Cada rodada de correção roda primeiro os comandos que falharam, mas a aprovação só vem com todos.
 
 **Pendências.** Ao fim de toda execução real, o que ficou sem solução é gravado em
 `~/.config/faztudo/pendencias/<repo>-<hash>.md` (fora do repositório, para não contar como alteração
@@ -156,7 +387,22 @@ pendente). Veja o [README da raiz](../README.md).
   `ng serve` esquecido) são encerrados juntos. Chamada que falha ou expira é refeita até 3 vezes, com
   espera crescente e aviso para o agente retomar de onde parou.
 - **Rastreabilidade** — IDs de casos de teste das tabelas de testes do documento (ex.: `UT-CART-01`,
-  `IT-08`) e os listados pela especificação precisam aparecer nos arquivos de teste.
+  `IT-08`) e os listados pela especificação precisam aparecer nos arquivos de teste. Só aparecer não
+  comprova: o critério fica **comprovado** quando um caso executado com o ID no nome passou e nenhum falhou.
+  Para isso o comando declara seu relatório, no formato `nome [formato:arquivo]: comando` em Portões de
+  qualidade (ou `report` na política):
+  - `go [go-json]: go test -json ./...` — a própria saída é o relatório;
+  - `web [junit:reports/junit.xml]: npm test` — JUnit XML gravado pelo comando;
+  - `e2e [playwright-json:reports/e2e.json]: npx playwright test` — reporter JSON do Playwright, com
+    screenshots e traces anexados ao caso.
+
+  Caso ignorado (`skip`) volta para o implementador. Relatório ausente, anterior ao comando ou ilegível
+  aparece como **sem relatório**; ID citado no arquivo sem caso executado, como **não executado**; sem
+  nenhum relatório configurado, como **só código de saída**: o comando passou, mas nenhum caso foi
+  vinculado ao critério. ID que os testes já usavam antes da US (uma especificação que repetiu o ID de
+  outra US) só é comprovado por caso novo ou que mudou de resultado; com só casos que já passavam antes,
+  aparece como **ID de antes da US**. Refatoração é a exceção: nela, os testes antigos passando são a
+  prova. O painel mostra o status, os casos e o commit de cada critério.
 - **Arquivos protegidos** — `US*.md`, `EDD*.md` e o `.md` aberto; se um agente alterar um deles, o
   conteúdo é restaurado e a etapa falha.
 - **Git** — uma branch `faztudo/<us>-<data>` por US e um commit por etapa, com diff no painel.
@@ -236,9 +482,76 @@ volta à tela. Se ela parou (falha, **Parar**, app fechado ou travado no meio), 
 etapas concluídas (`POST /api/pipeline/resume`). Só a janela que executou grava o arquivo, para uma
 janela ociosa no mesmo repositório não sobrescrever uma execução mais nova.
 
+**Pacote de entrega.** Ao fim de toda execução, o FazTudo grava em `entregas/<repo>/<data>/` (ao lado da
+configuração, fora do repositório) um pacote para quem revisa:
+
+- `README.md` lista as US e os conjuntos integrados;
+- `<US>.md` traz critérios do Passo 0, casos da especificação com os casos executados, aceitação
+  funcional, reprodução do bug, comandos da última verificação, pendências, commits (partida, último,
+  base de cada dependência), branch, integração e a configuração efetiva de cada etapa (status,
+  validação, provider e modelo), com o resumo do manifesto;
+- `<US>.json` traz a mesma evidência para leitura por máquina, com o registro de cada chamada;
+- `<US>.diff` traz o diff da US (até 2 MB);
+- `conjunto-NN.md` traz cada promoção, com o commit avaliado, o resultado por repositório e os comandos
+  do conjunto integrado.
+
+Tokens (GitHub, AWS, chaves `sk-`, Slack), chaves privadas, senha em URL e os dados pessoais da
+aceitação funcional são removidos. Pastas e arquivos ficam com permissão só do usuário. Ficam os
+`delivery_retention` pacotes mais novos por repositório (padrão 10). O pacote complementa os checks do
+CI; não é garantia por si só. A branch de cada US continua no repositório para revisão, com ou sem
+integração externa, e a documentação gerada pela US entra no candidato que é verificado antes da
+promoção.
+
+**Revisão externa (SCM).** Por padrão (`scm.mode` vazio ou `local`) nada sai da máquina: a US aprovada
+entra na branch base local, a branch dela fica para revisão e o pacote de entrega é gravado. Com
+`"scm": {"mode": "pr"}` (campo *Revisão externa*), a US aprovada não é integrada: o FazTudo publica a
+branch candidata e abre um pull request com a evidência, e a US fica *Aguardando revisão no PR*.
+
+- O PR traz o commit avaliado e a evidência de cada US, com a mesma remoção de segredos do pacote. O
+  texto diz que a evidência complementa os checks do CI e a revisão humana.
+- O merge fica com quem revisa, os checks e as regras do repositório. As US que dependem desta esperam.
+- `review_from` (`medio`, `alto`, `critico`) manda para PR só as US de risco igual ou maior; as demais
+  são integradas localmente. `draft` abre como rascunho.
+- O PR não é duplicado: a operação tem chave estável, e um PR já aberto a partir da branch é
+  reutilizado.
+- `GET /api/pipeline/reviews` lê do provedor o estado do PR (aberto, mergeado, fechado), os checks
+  (repositório sem CI aparece sem checks, não como erro), a decisão de revisão e se o PR ainda está no
+  commit avaliado (`stale`).
+- Depois do merge ou do fechamento no host, **Reconciliar integração** (ou `faztudo reconcile`) lê o
+  resultado: PR mergeado conta a US como *integrada*, com o commit do merge; fechado sem merge, como
+  *fora da base*, com a branch preservada. A base local não muda: traga o merge com o seu `git pull`.
+  O pacote de entrega é regravado com o resultado.
+- As US que esperavam o PR mergeado aparecem para **continuar** e recomeçam do Passo 0. Só começam
+  quando a base local já tem o commit avaliado do PR: sem o `git pull`, ficam paradas dizendo isso, e
+  continuar de novo depois do pull as desenvolve.
+
+GitHub (inclusive Enterprise) usa o `gh` autenticado na máquina, sem shell e com a descrição passada
+por arquivo; o FazTudo não vê token. Bitbucket é a subentrega FT-020b (Cloud e Server diferem; o
+ambiente real decide a ordem). PR com repositórios aninhados ainda não é suportado: a branch fica para
+revisão. Publicação que falha deixa a base intacta e a branch preservada.
+
+**Manifesto e retomada segura.** Cada execução grava um manifesto: hash do documento e de cada US, dos
+arquivos protegidos e de cada etapa (texto, contrato e skills), partes da política (comandos, fluxo,
+regras de risco, demais opções), versão do bundle de skills, perfis e complementos, versões dos CLIs, do
+app e o commit de partida. Nada de segredo: só hashes, nomes e versões. Ao continuar, o FazTudo compara
+com o presente e refaz só o que depende do que mudou:
+
+| Mudou | Refaz a partir de |
+|---|---|
+| documento de entrada, arquivo protegido, fluxo, regras de risco ou outra opção da política | início da US |
+| perfis de stack ou complementos do projeto | início da US |
+| comandos de verificação | verificação executável |
+| instruções de uma etapa (prompt, contrato ou skill) | essa etapa |
+| branch da US com commit feito fora da execução, ou reescrita | verificação executável |
+
+Os motivos aparecem no log e em `resume_checks`. Execução salva por uma versão anterior, sem manifesto,
+volta a rodar as verificações antes de qualquer promoção; o arquivo antigo fica como `.v0.bak`. Merge na
+base tem chave estável de operação: uma retomada que encontra a branch já integrada não repete o merge.
+O arquivo da execução é gravado com permissão só do usuário; arquivo ilegível é ignorado.
+
 ## Requisitos
 
-- Go 1.22+ (app desktop: CLI do Wails; Linux: libgtk-3-dev e libwebkit2gtk-4.1-dev)
+- Go 1.25+ (app desktop: CLI do Wails; Linux: libgtk-3-dev e libwebkit2gtk-4.1-dev)
 - Opcional, para execução real: [`claude`](https://docs.claude.com/claude-code) e/ou [`codex`](https://github.com/openai/codex) no `PATH`
 
 Sem os CLIs, a aplicação funciona em **modo simulação** (padrão), que percorre todo o fluxo sem consumir tokens.
@@ -324,6 +637,10 @@ as setas rolam a saída e Ctrl+L limpa a saída local.
 |---------|----------|
 | `status [--json]`, `logs [--level info,warn]` | Consulta a execução e seus eventos. |
 | `stop`, `resume`, `retry --story N --step ID` | Para, continua ou refaz uma etapa. |
+| `why --story N [--json]` | Diz, por etapa, se é obrigatória, exigida pelo risco, opcional ou não aplicável e por quê, com validação e classe da falha. |
+| `answer --story N --answers "a \| b"` | Responde as decisões de produto em aberto; a US recomeça do Passo 0. |
+| `reconcile` | Completa uma integração que ficou parcial, ou lê o resultado dos PRs abertos, sem desfazer nada. |
+| `review-log --story N --minutes M [--rework M] [--note TEXTO]` | Registra o tempo de revisão humana e de retrabalho. |
 | `stories parse --file US.md` | Mostra as US e o contexto comum identificados. |
 | `repo show/set/branches/base/discovery-reset` | Gerencia o repositório, as branches base e o discovery. |
 | `policy show/apply --file arquivo.json` | Consulta ou aplica todos os campos da política de qualidade. |
@@ -333,6 +650,10 @@ as setas rolam a saída e Ctrl+L limpa a saída local.
 | `commit show --id HASH` | Mostra o patch de um commit da execução. |
 | `health areas [--json]` | Sugere as 3 áreas que mais valem uma limpeza, sem chamar modelo. |
 | `health run --area CAMINHO [--comments] [--tests] [--rounds N] [--real]` | Limpa a estrutura da área numa branch própria (código 0 aprovada, 1 reprovada, 2 uso inválido). |
+
+Console, TUI e painel usam a mesma API, a mesma política e os mesmos contratos; o painel mostra os
+mesmos motivos de cada etapa, a classe da falha, o consumo com o custo desconhecido à parte e os limites
+do orçamento.
 
 As alterações de configuração passam pela mesma validação da API local e são salvas no mesmo
 `config.json` do painel. O processo de console ativo recebe comandos de outros terminais por arquivos

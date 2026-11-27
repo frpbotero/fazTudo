@@ -91,6 +91,41 @@ func TestParseVerdictReassignsUnknownAgents(t *testing.T) {
 	}
 }
 
+func TestReadVerdictRejectsInvalidOrContradictoryOutput(t *testing.T) {
+	plan := Plan{Agents: []string{"backend"}}
+	cases := []struct {
+		name, output string
+		valid        bool
+	}{
+		{"empty", "", false},
+		{"blank", "  \n ", false},
+		{"no json", "Revisão: tudo certo.", false},
+		{"truncated", "```json\n{\"status\": \"approved\", \"issues\": [\n```", false},
+		{"unknown status", fence(`{"status": "ok", "issues": []}`), false},
+		{"changes without issues", fence(`{"status": "changes_requested", "issues": []}`), false},
+		{"changes with blank issues", fence(`{"status": "changes_requested", "issues": [{"description": " "}]}`), false},
+		{"approved with blocking", fence(`{"status": "approved", "issues": [{"severity": "alta", "description": "SQL injection"}]}`), false},
+		{"approved with high", fence(`{"status": "approved", "issues": [{"severity": "High", "description": "x"}]}`), false},
+		{"approved", fence(`{"status": "Approved", "issues": []}`), true},
+		{"approved with minor note", fence(`{"status": "approved", "issues": [{"severity": "baixa", "description": "nome"}]}`), true},
+		{"changes requested", fence(`{"status": "changes_requested", "issues": [{"severity": "média", "description": "validar"}]}`), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v, problem := readVerdict(c.output, DefaultStages, plan)
+			if (problem == "") != c.valid {
+				t.Fatalf("problem = %q, verdict = %+v", problem, v)
+			}
+			if _, ok := parseVerdict(c.output, DefaultStages, plan); ok != c.valid {
+				t.Errorf("parseVerdict ok = %v", ok)
+			}
+			if !c.valid && (v.Status != "" || v.NeedsChanges()) {
+				t.Errorf("an invalid verdict must carry no decision: %+v", v)
+			}
+		})
+	}
+}
+
 func TestHeuristicPlan(t *testing.T) {
 	p := heuristicPlan("Ajustar o layout da tela de login", DefaultStages)
 	if strings.Join(p.Agents, ",") != "frontend,e2e" {
@@ -204,4 +239,52 @@ func indexOfRole(f *fakeExecutor, role string, nth int) int {
 		}
 	}
 	return -1
+}
+
+func TestPlanRecordsImpactAndItsGaps(t *testing.T) {
+	out := fence(`{"agents": ["frontend", "backend"],
+		"streams": [
+			{"id": "api", "agent": "backend", "files": ["api/"]},
+			{"id": "tela", "agent": "frontend", "files": ["web/"]}],
+		"impact": {"contracts": ["POST /pedidos"], "consumers": ["app mobile"], "migrations": ["002_pedidos.sql"]},
+		"non_functional": [{"kind": "Desempenho", "requirement": "listar pedidos rápido"}]}`)
+	plan, ok := parsePlan(out, DefaultStages)
+	if !ok || plan.Impact == nil || plan.Impact.Consumers[0] != "app mobile" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	want := []string{"cenário de aceitação", "reversão", "sem SLO"}
+	if len(plan.Gaps) != len(want) {
+		t.Fatalf("gaps = %q", plan.Gaps)
+	}
+	for i, w := range want {
+		if !strings.Contains(plan.Gaps[i], w) {
+			t.Errorf("gap %d = %q, want %q", i, plan.Gaps[i], w)
+		}
+	}
+	// Disjoint files, but one schema: the fronts do not run side by side.
+	if waves := plan.parallelWaves(); waves != nil {
+		t.Errorf("a migration serializes the fronts: %+v", waves)
+	}
+}
+
+func TestFrontsSharingAResourceRunInSeparateWaves(t *testing.T) {
+	streams := []Stream{
+		{ID: "a", Files: []string{"a/"}, Resources: []string{"contrato post /cart"}},
+		{ID: "b", Files: []string{"b/"}, Resources: []string{"contrato post /cart"}},
+		{ID: "c", Files: []string{"c/"}},
+	}
+	waves := streamWaves(streams)
+	if len(waves) != 2 || len(waves[0]) != 2 || waves[0][0].ID != "a" || waves[0][1].ID != "c" || waves[1][0].ID != "b" {
+		t.Errorf("waves = %+v", waves)
+	}
+}
+
+func TestCompletePlanHasNoGaps(t *testing.T) {
+	plan, _ := parsePlan(fence(`{"agents": ["backend"],
+		"impact": {"migrations": ["003.sql"], "rollback": "migration down 003"},
+		"acceptance": [{"criterion": "c1", "scenario": "dado X quando Y então Z", "method": "integração"}],
+		"non_functional": [{"kind": "desempenho", "requirement": "listar", "slo": "p95 < 200 ms"}]}`), DefaultStages)
+	if len(plan.Gaps) != 0 || len(plan.Acceptance) != 1 {
+		t.Errorf("plan = %+v", plan)
+	}
 }

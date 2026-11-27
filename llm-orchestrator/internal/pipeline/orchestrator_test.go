@@ -22,11 +22,13 @@ type fakeExecutor struct {
 	reqs    []provider.Request
 	roles   []string
 	dirs    []string
-	outputs map[string][]string             // scripted outputs per role, consumed in order
-	failAt  int                             // 1-based call index that fails; 0 = never
-	block   chan struct{}                   // when set, every call waits on it or ctx
-	onCall  func(req provider.Request)      // side effects in the repository, like a real agent
-	failIf  func(req provider.Request) bool // fails the call after its side effects
+	outputs map[string][]string               // scripted outputs per role, consumed in order
+	failAt  int                               // 1-based call index that fails; 0 = never
+	block   chan struct{}                     // when set, every call waits on it or ctx
+	onCall  func(req provider.Request)        // side effects in the repository, like a real agent
+	failIf  func(req provider.Request) bool   // fails the call after its side effects
+	answer  func(req provider.Request) string // when it returns text, that is the output
+	usage   *provider.Usage                   // reported by every call when set
 }
 
 func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf provider.Logf) (*provider.Response, error) {
@@ -55,12 +57,24 @@ func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf p
 		return nil, errors.New("boom")
 	}
 	f.mu.Lock()
-	out := "artifact-" + req.Role
+	// Unscripted calls answer like an agent that approves: gates need a
+	// valid verdict, and other stages ignore a block that is not theirs.
+	out := "artifact-" + req.Role + "\n\n" + fence(approved)
 	if q := f.outputs[req.Role]; len(q) > 0 {
 		out, f.outputs[req.Role] = q[0], q[1:]
 	}
+	if f.answer != nil {
+		if a := f.answer(req); a != "" {
+			out = a
+		}
+	}
 	f.mu.Unlock()
-	return &provider.Response{Output: out, Name: "Fake", Model: "m1"}, nil
+	var usage *provider.Usage
+	if f.usage != nil {
+		u := *f.usage
+		usage = &u
+	}
+	return &provider.Response{Output: out, Name: "Fake", Model: "m1", Usage: usage}, nil
 }
 
 func (f *fakeExecutor) SetDryRun(v bool) { f.dry = v }
@@ -75,6 +89,19 @@ func (f *fakeExecutor) count(role string) int {
 		}
 	}
 	return n
+}
+
+// promptsFor lists, in order, the prompts sent to role.
+func (f *fakeExecutor) promptsFor(role string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for i, r := range f.roles {
+		if r == role {
+			out = append(out, f.prompts[i])
+		}
+	}
+	return out
 }
 
 var testStages = []Stage{
@@ -399,4 +426,68 @@ func TestRunRefusedWhileAnotherWindowHoldsTheRepository(t *testing.T) {
 		t.Fatalf("a finished run must release the repository: %v", err)
 	}
 	unlock()
+}
+
+func TestDiscoveryFollowsTheFilesItDependsOn(t *testing.T) {
+	exec := &fakeExecutor{}
+	o, repo := newTest(t, exec)
+	policy := o.ws.Policy()
+	policy.Git = false
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, repo, "package.json", `{"name":"loja"}`)
+	writeFile(t, repo, "src/app.ts", "v1")
+	discoveries := func() []provider.Request {
+		var out []provider.Request
+		for _, r := range exec.reqs {
+			if r.Role == DiscoveryStage.Role {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+
+	_ = o.Start(one(false))
+	waitDone(t, o)
+	if d := o.ws.Discovery(); d == nil || d.Fingerprint == nil || d.Origin != workspace.OriginFull {
+		t.Fatalf("first discovery = %+v", d)
+	}
+
+	writeFile(t, repo, "src/app.ts", "v2") // code only: still valid
+	_ = o.Start(one(false))
+	run := waitDone(t, o)
+	if len(discoveries()) != 1 || run.Discovery.Status != StepSkipped {
+		t.Fatalf("a code change must keep the discovery: %d calls, %+v", len(discoveries()), run.Discovery)
+	}
+
+	writeFile(t, repo, "package.json", `{"name":"loja","dependencies":{"react":"19"}}`)
+	_ = o.Start(one(false))
+	waitDone(t, o)
+	calls := discoveries()
+	if len(calls) != 2 || !strings.Contains(calls[1].Prompt, "Atualização incremental") || !strings.Contains(calls[1].Prompt, "`package.json` (alterado)") {
+		t.Fatalf("a changed manifest must update the discovery incrementally: %d calls", len(calls))
+	}
+	if d := o.ws.Discovery(); d.Origin != workspace.OriginIncremental || !strings.Contains(d.Reason, "package.json") {
+		t.Errorf("report = %s %q", d.Origin, d.Reason)
+	}
+}
+
+func TestOldOrSimulatedDiscoveryIsRemadeForARealRun(t *testing.T) {
+	exec := &fakeExecutor{}
+	o, repo := newTest(t, exec)
+	policy := o.ws.Policy()
+	policy.Git = false
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	o.ws.Store(workspace.Report{Path: repo, Summary: "antigo", CreatedAt: time.Now()}) // older version: no fingerprint
+	_ = o.Start(one(false))
+	waitDone(t, o)
+	if exec.count(DiscoveryStage.Role) != 1 {
+		t.Fatal("a report without fingerprint must be remade")
+	}
+	if d := o.ws.Discovery(); d.Origin != workspace.OriginFull {
+		t.Errorf("without a trusted previous report the update is full: %s", d.Origin)
+	}
 }

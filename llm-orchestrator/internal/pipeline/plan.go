@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -17,10 +18,51 @@ type Plan struct {
 	// without dependencies between them run in parallel.
 	Streams []Stream `json:"streams,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
+	// Impact is what the change reaches beyond the files it edits.
+	Impact *Impact `json:"impact,omitempty"`
+	// Acceptance are the business scenarios and how each criterion will be
+	// proven, set before anything is built.
+	Acceptance []AcceptanceScenario `json:"acceptance,omitempty"`
+	// NonFunctional are requirements such as performance, with their SLO.
+	NonFunctional []NonFunctional `json:"non_functional,omitempty"`
+	// Gaps are what the orchestrator found missing in the plan: a migration
+	// without a way back, a performance requirement without SLO...
+	Gaps []string `json:"gaps,omitempty"`
 	// Source tells how the plan was obtained: "architect", "heuristic"
 	// (simulation) or "fallback" (architect output could not be parsed).
 	Source string `json:"source"`
 }
+
+// Impact is what a change reaches beyond the files it edits.
+type Impact struct {
+	Contracts       []string `json:"contracts,omitempty"`        // APIs, events, schemas changed or relied on
+	Consumers       []string `json:"consumers,omitempty"`        // who uses what changes
+	Migrations      []string `json:"migrations,omitempty"`       // schema or data changes
+	SharedResources []string `json:"shared_resources,omitempty"` // databases, queues, services, ports
+	Rollback        string   `json:"rollback,omitempty"`         // how to undo or recover
+}
+
+// AcceptanceScenario ties a criterion to a scenario and how it is proven.
+type AcceptanceScenario struct {
+	// ID (AC-1, AC-2, …) is given by the orchestrator, in plan order, so QA
+	// can name the scenario it judged whatever words it uses.
+	ID        string `json:"id,omitempty"`
+	Criterion string `json:"criterion"`
+	Scenario  string `json:"scenario"`
+	Method    string `json:"method,omitempty"` // e.g. "teste unitário", "e2e", "inspeção"
+	Negative  bool   `json:"negative,omitempty"`
+}
+
+// NonFunctional is a requirement such as performance, with its target.
+type NonFunctional struct {
+	Kind        string `json:"kind"` // "desempenho", "segurança", "disponibilidade"…
+	Requirement string `json:"requirement"`
+	SLO         string `json:"slo,omitempty"` // measurable target, e.g. "p95 < 200 ms com 50 req/s"
+}
+
+// migrationsResource is shared by every front of a plan that changes the
+// schema: migrations are state no isolated copy of the repository separates.
+const migrationsResource = "migrations"
 
 // Includes reports whether the plan selected the stage.
 func (p Plan) Includes(id string) bool { return slices.Contains(p.Agents, id) }
@@ -34,12 +76,19 @@ type Issue struct {
 	// Infra marks a failure no code change can fix, such as a command that ran
 	// out of time: it goes to the report, never to an implementer.
 	Infra bool `json:"infra,omitempty"`
+	// Origin tells a failing command's issue against the story's baseline:
+	// "preexistente" (it already failed before the story) or "nova".
+	Origin string `json:"origin,omitempty"`
 	// Class, Fingerprints, Titles and Files identify the failure behind the
 	// issue. Only the orchestrator's own checks set them.
 	Class        string   `json:"class,omitempty"`
 	Fingerprints []string `json:"fingerprints,omitempty"`
 	Titles       []string `json:"titles,omitempty"`
 	Files        []string `json:"files,omitempty"`
+	// Category is the reviewer's kind of problem ("estilo" is advice unless
+	// the project makes it binding); Sources are the reviewers that raised it.
+	Category string   `json:"category,omitempty"`
+	Sources  []string `json:"sources,omitempty"`
 }
 
 // Verdict is a quality gate's structured outcome.
@@ -56,6 +105,15 @@ const (
 // NeedsChanges reports whether the gate asked for fixes.
 func (v Verdict) NeedsChanges() bool {
 	return v.Status == VerdictChangesRequested && len(v.Issues) > 0
+}
+
+// blockingSeverities are the severities that forbid an approval: a gate that
+// approves while reporting one of them contradicts itself.
+var blockingSeverities = []string{"alta", "alto", "crítica", "critica", "crítico", "critico", "high", "critical", "blocker", "bloqueante"}
+
+// Blocking reports whether the issue's severity forbids an approval.
+func (is Issue) Blocking() bool {
+	return slices.Contains(blockingSeverities, strings.ToLower(strings.TrimSpace(is.Severity)))
 }
 
 var reFence = regexp.MustCompile("(?s)```(?:json|JSON)?[ \\t]*\\n(.*?)```")
@@ -87,6 +145,7 @@ func parsePlan(output string, stages []Stage) (Plan, bool) {
 		return Plan{}, false
 	}
 	plan := Plan{Reason: strings.TrimSpace(raw.Reason), Pattern: strings.TrimSpace(raw.Pattern), Source: "architect"}
+	plan.Impact, plan.Acceptance, plan.NonFunctional = cleanImpact(raw.Impact), cleanAcceptance(raw.Acceptance), cleanNonFunctional(raw.NonFunctional)
 	plan.Streams = validStreams(raw.Streams, stages)
 	requested := normalize(raw.Agents)
 	for _, st := range plan.Streams {
@@ -99,15 +158,118 @@ func parsePlan(output string, stages []Stage) (Plan, bool) {
 	}
 	plan = ensureImplementer(plan, stages)
 	plan.Streams = coverAgents(plan.Streams, plan, stages)
+	if plan.Impact != nil && len(plan.Impact.Migrations) > 0 {
+		for i := range plan.Streams {
+			plan.Streams[i].Resources = appendNew(plan.Streams[i].Resources, migrationsResource)
+		}
+	}
+	plan.Gaps = planGaps(plan)
 	return plan, true
 }
 
-// parseVerdict extracts a gate verdict. Issues are reassigned to a valid
-// implementer when the gate named an unknown or missing one.
+// planGaps lists what a plan leaves undefined that the delivery depends on.
+func planGaps(p Plan) []string {
+	var gaps []string
+	if len(p.Acceptance) == 0 {
+		gaps = append(gaps, "nenhum cenário de aceitação definido antes da implementação")
+	}
+	if p.Impact != nil && len(p.Impact.Migrations) > 0 && p.Impact.Rollback == "" {
+		gaps = append(gaps, "migration sem estratégia de reversão ou recuperação")
+	}
+	for _, n := range p.NonFunctional {
+		if isPerformance(n.Kind) && n.SLO == "" {
+			gaps = append(gaps, fmt.Sprintf("requisito de desempenho sem SLO mensurável (%s): defina a meta na US ou na política", n.Requirement))
+		}
+	}
+	return gaps
+}
+
+func isPerformance(kind string) bool {
+	k := strings.ToLower(kind)
+	return strings.Contains(k, "desempenho") || strings.Contains(k, "performance") || strings.Contains(k, "latência") || strings.Contains(k, "latencia")
+}
+
+func cleanImpact(in *Impact) *Impact {
+	if in == nil {
+		return nil
+	}
+	out := &Impact{
+		Contracts: trimmedList(in.Contracts), Consumers: trimmedList(in.Consumers),
+		Migrations: trimmedList(in.Migrations), SharedResources: trimmedList(in.SharedResources),
+		Rollback: strings.TrimSpace(in.Rollback),
+	}
+	if len(out.Contracts)+len(out.Consumers)+len(out.Migrations)+len(out.SharedResources) == 0 && out.Rollback == "" {
+		return nil
+	}
+	return out
+}
+
+func cleanAcceptance(in []AcceptanceScenario) []AcceptanceScenario {
+	var out []AcceptanceScenario
+	for _, a := range in {
+		a.Criterion, a.Scenario, a.Method = strings.TrimSpace(a.Criterion), strings.TrimSpace(a.Scenario), strings.TrimSpace(a.Method)
+		if a.Scenario != "" {
+			out = append(out, a)
+		}
+	}
+	numberScenarios(out)
+	return out
+}
+
+// numberScenarios gives each planned scenario its ID by position; whatever
+// ID the architect wrote is replaced.
+func numberScenarios(list []AcceptanceScenario) {
+	for i := range list {
+		list[i].ID = fmt.Sprintf("AC-%d", i+1)
+	}
+}
+
+func cleanNonFunctional(in []NonFunctional) []NonFunctional {
+	var out []NonFunctional
+	for _, n := range in {
+		n.Kind, n.Requirement, n.SLO = strings.TrimSpace(n.Kind), strings.TrimSpace(n.Requirement), strings.TrimSpace(n.SLO)
+		if n.Requirement != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func trimmedList(items []string) []string {
+	var out []string
+	for _, s := range items {
+		out = appendNew(out, strings.TrimSpace(s))
+	}
+	return out
+}
+
+func appendNew(list []string, s string) []string {
+	if s == "" || slices.Contains(list, s) {
+		return list
+	}
+	return append(list, s)
+}
+
+// parseVerdict extracts a gate verdict that honors the contract; see
+// readVerdict.
 func parseVerdict(output string, stages []Stage, plan Plan) (Verdict, bool) {
+	v, problem := readVerdict(output, stages, plan)
+	return v, problem == ""
+}
+
+// readVerdict extracts a gate verdict and checks it against the contract,
+// returning what is wrong with it (empty when valid). An unreadable or
+// contradictory verdict must never pass for an approval: an unknown status,
+// changes requested without any described issue, or an approval that reports
+// a blocking issue are all rejected. Issues are reassigned to a valid
+// implementer when the gate named an unknown or missing one.
+func readVerdict(output string, stages []Stage, plan Plan) (Verdict, string) {
 	v, ok := lastJSON(output, func(v Verdict) bool { return v.Status != "" })
 	if !ok {
-		return Verdict{}, false
+		if strings.TrimSpace(output) == "" {
+			return Verdict{}, "resposta vazia"
+		}
+		return Verdict{}, "nenhum bloco JSON válido com status"
 	}
 	v.Status = strings.ToLower(strings.TrimSpace(v.Status))
 	var issues []Issue
@@ -115,7 +277,8 @@ func parseVerdict(output string, stages []Stage, plan Plan) (Verdict, bool) {
 		if strings.TrimSpace(is.Description) == "" {
 			continue
 		}
-		is.Infra, is.Class, is.Fingerprints, is.Titles, is.Files = false, "", nil, nil, nil // not a model's to claim
+		is.Infra, is.Class, is.Fingerprints, is.Titles, is.Files, is.Origin = false, "", nil, nil, nil, "" // not a model's to claim
+		is.Sources = nil
 		is.Agent = strings.ToLower(strings.TrimSpace(is.Agent))
 		if !isImplementer(stages, is.Agent) {
 			is.Agent = defaultImplementer(stages, plan)
@@ -123,14 +286,26 @@ func parseVerdict(output string, stages []Stage, plan Plan) (Verdict, bool) {
 		issues = append(issues, is)
 	}
 	v.Issues = issues
-	return v, true
+	switch v.Status {
+	case VerdictApproved:
+		if slices.ContainsFunc(issues, Issue.Blocking) {
+			return Verdict{}, "status approved com problema de severidade bloqueante"
+		}
+	case VerdictChangesRequested:
+		if len(issues) == 0 {
+			return Verdict{}, "changes_requested sem nenhum problema descrito"
+		}
+	default:
+		return Verdict{}, fmt.Sprintf("status desconhecido %q", v.Status)
+	}
+	return v, ""
 }
 
 // fullPlan selects every delegable agent.
 func fullPlan(stages []Stage, source string) Plan {
 	p := Plan{Source: source}
 	for _, s := range stages {
-		if s.Selectable {
+		if s.Selectable && !s.Conditional {
 			p.Agents = append(p.Agents, s.ID)
 		}
 	}
@@ -224,8 +399,14 @@ func normalize(ids []string) []string {
 
 // Assessment is the Passo 0 decision about what the repository already does.
 type Assessment struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason,omitempty"`
+	Decision  string            `json:"decision"`
+	Reason    string            `json:"reason,omitempty"`
+	Criteria  []Criterion       `json:"criteria,omitempty"`
+	Decisions []PendingDecision `json:"pending_decisions,omitempty"`
+	// Change is the story's kind (bug, feature, refactor or trivial) and
+	// ChangeReason why, required for a trivial one.
+	Change       string `json:"change_type,omitempty"`
+	ChangeReason string `json:"change_reason,omitempty"`
 }
 
 // Passo 0 decisions.

@@ -8,6 +8,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231b6c80'/%3E%3Cpath d='M10 22V10h12M10 16h8' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="preload" href="fonts/plex-sans-400.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="app.css">
+  <script src="evidence.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -97,6 +98,9 @@
             <p class="subline" id="runMeta">Nenhuma execução nesta sessão.</p>
           </div>
           <div class="title-actions">
+            <button class="btn btn-ghost" id="reconcileBtn" type="button" hidden title="Completa nos repositórios que faltam a integração que ficou parcial, ou lê no host o resultado dos pull requests abertos (mergeado ou fechado), sem desfazer nada">
+              <svg class="icon"><use href="#i-rotate"/></svg><span>Reconciliar integração</span>
+            </button>
             <button class="btn btn-primary" id="resumeBtn" type="button" hidden>
               <svg class="icon"><use href="#i-play"/></svg><span>Continuar de onde parou</span>
             </button>
@@ -463,9 +467,30 @@
         <div id="qCustom" class="field">
           <label for="qChecks" class="sr-only">Comandos personalizados</label>
           <textarea id="qChecks" rows="5" spellcheck="false" placeholder="unitários: npm run test:unit&#10;e2e: npx playwright test"></textarea>
-          <p class="note">Um por linha, no formato <code>nome: comando</code>. Executados na raiz do repositório com <code>CI=1</code>.</p>
+          <p class="note">Um por linha, no formato <code>nome: comando</code>. Executados na raiz do repositório com <code>CI=1</code>.
+            Para ligar cada caso de teste aos critérios, diga onde está o relatório: <code>go [go-json]: go test -json ./...</code>,
+            <code>web [junit:reports/junit.xml]: npm test</code> ou <code>e2e [playwright-json:reports/e2e.json]: npx playwright test</code>.
+            Sem relatório, só o código de saída conta.</p>
         </div>
       </fieldset>
+
+      <div class="field">
+        <label for="qProfiles">Perfis de stack</label>
+        <input type="text" id="qProfiles" autocomplete="off" spellcheck="false" placeholder="go, angular-nestjs-postgres">
+        <p class="note" id="qProfilesNote">Convenções da stack para implementadores e revisores. Opcionais: só valem os listados aqui.</p>
+      </div>
+
+      <div class="field">
+        <label for="qMigrationChecks">Comandos de migration</label>
+        <textarea id="qMigrationChecks" rows="2" spellcheck="false" placeholder="migrate: make db-reset db-up db-check db-down db-up"></textarea>
+        <p class="note">Rodam quando o plano tem migration ou a política de risco pede: num banco descartável, aplicar, conferir integridade, reverter ou recuperar e aplicar de novo. Sem eles, a verificação das migrations fica inconclusiva.</p>
+      </div>
+
+      <div class="field">
+        <label for="qBenchmarkChecks">Comandos de benchmark</label>
+        <textarea id="qBenchmarkChecks" rows="2" spellcheck="false" placeholder="bench: k6 run bench/pedidos.js"></textarea>
+        <p class="note">Medem a carga de um requisito de desempenho; o especialista de desempenho julga pela saída deles. Sem medição, não há aprovação.</p>
+      </div>
 
       <div class="field">
         <label for="qProtected">Arquivos de entrada protegidos</label>
@@ -520,6 +545,7 @@
         <label class="check"><input type="checkbox" data-stage="security"> Segurança (OWASP)</label>
         <label class="check"><input type="checkbox" data-stage="review"> Code review</label>
         <label class="check"><input type="checkbox" data-stage="e2e"> QA E2E com Playwright</label>
+        <label class="check"><input type="checkbox" data-stage="acceptance"> QA funcional e aceitação</label>
         <label class="check"><input type="checkbox" data-stage="docs"> Documentação</label>
         <p class="note">O arquiteto e os desenvolvedores sempre rodam. Segurança, E2E e documentação ainda dependem do plano do arquiteto.</p>
       </fieldset>
@@ -533,6 +559,24 @@
           </div>
         </div>
         <p class="note">0 usa o padrão: 60 turnos para quem escreve, 30 para as etapas de leitura (sempre a metade, no mínimo 10). Vale para o Claude; Codex e Gemini não têm esse limite.</p>
+        <label class="check"><input type="checkbox" id="qStrictCommands"> Exigir provider que restrinja os agentes que escrevem aos comandos listados (o Codex não restringe: com esta opção ele não escreve código, nem em failover)</label>
+        <div class="field">
+          <label for="qScmMode">Revisão externa</label>
+          <select id="qScmMode">
+            <option value="">Local: integra na branch base e grava o pacote de entrega</option>
+            <option value="pr">Pull request: publica a branch e abre o PR com a evidência; não integra</option>
+          </select>
+          <label for="qScmReviewFrom" class="sr-only">Risco mínimo para PR</label>
+          <select id="qScmReviewFrom">
+            <option value="">Toda US vai para PR</option>
+            <option value="medio">Só US de risco médio ou maior</option>
+            <option value="alto">Só US de risco alto ou maior</option>
+            <option value="critico">Só US de risco crítico</option>
+          </select>
+          <label class="check"><input type="checkbox" id="qScmDraft"> Abrir como rascunho</label>
+          <p class="note">O modo PR usa o <code>gh</code> autenticado na máquina (GitHub; Bitbucket ainda não). O merge fica com quem revisa e com os checks do repositório.</p>
+        </div>
+        <label class="check"><input type="checkbox" id="qPromoteUnverified"> Integrar na branch base US sem validação executada (por padrão, sem comando de verificação aprovado a branch da US fica para revisão)</label>
         <label class="check"><input type="checkbox" id="qStopOnTurnLimit"> Parar a execução quando um agente esgotar os turnos (por padrão o trabalho parcial segue como pendência)</label>
         <div class="field">
           <label for="qAgentCommands">Comandos liberados aos agentes</label>

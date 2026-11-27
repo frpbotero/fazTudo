@@ -1,0 +1,123 @@
+package workspace
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func put(t *testing.T, root, rel, content string) {
+	t.Helper()
+	p := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFingerprintCoversWhatADiscoveryDependsOn(t *testing.T) {
+	root := t.TempDir()
+	for rel, want := range map[string]bool{
+		"package.json":                    true,
+		"api/go.mod":                      true,
+		"api/go.sum":                      true,
+		"web/pnpm-lock.yaml":              true,
+		"AGENTS.md":                       true,
+		".specify/memory/constitution.md": true,
+		"api/openapi.yaml":                true,
+		"proto/user.proto":                true,
+		"docs/adr/0001-banco.md":          true,
+		"requirements-dev.txt":            true,
+		"src/main.go":                     false,
+		"docs/guia.md":                    false,
+		"node_modules/x/package.json":     false,
+	} {
+		put(t, root, rel, rel)
+		if got := relevantFile(rel); got != want && rel != "node_modules/x/package.json" {
+			t.Errorf("relevantFile(%s) = %v", rel, got)
+		}
+	}
+	fp := TakeFingerprint(root)
+	if _, ok := fp.Files["node_modules/x/package.json"]; ok {
+		t.Error("dependency folders are skipped")
+	}
+	if _, ok := fp.Files["src/main.go"]; ok {
+		t.Error("code files do not invalidate a discovery")
+	}
+	if len(fp.Files) != 10 {
+		t.Errorf("files = %v", fp.Files)
+	}
+}
+
+func TestChangesAndStaleness(t *testing.T) {
+	root := t.TempDir()
+	put(t, root, "package.json", `{"name":"a"}`)
+	put(t, root, "go.mod", "module a")
+	put(t, root, "src/app.ts", "1")
+	before := TakeFingerprint(root)
+	report := Report{Path: root, Fingerprint: &before}
+
+	put(t, root, "src/app.ts", "2") // code only
+	if reason, _ := report.Staleness(TakeFingerprint(root), true); reason != "" {
+		t.Errorf("a code change keeps the discovery: %q", reason)
+	}
+
+	put(t, root, "package.json", `{"name":"b"}`)
+	put(t, root, "AGENTS.md", "regras")
+	os.Remove(filepath.Join(root, "go.mod"))
+	reason, changes := report.Staleness(TakeFingerprint(root), true)
+	if reason == "" || len(changes) != 3 {
+		t.Fatalf("reason %q, changes %+v", reason, changes)
+	}
+	want := map[string]string{"AGENTS.md": "novo", "go.mod": "removido", "package.json": "alterado"}
+	for _, c := range changes {
+		if want[c.Path] != c.Change {
+			t.Errorf("%s = %s, want %s", c.Path, c.Change, want[c.Path])
+		}
+	}
+
+	if reason, _ := (Report{}).Staleness(before, true); reason == "" {
+		t.Error("a report without fingerprint is never valid")
+	}
+	sim := Report{Fingerprint: &before, Simulated: true}
+	if reason, _ := sim.Staleness(before, true); reason == "" {
+		t.Error("a simulated report must not serve a real run")
+	}
+	if reason, _ := sim.Staleness(before, false); reason != "" {
+		t.Errorf("it serves another simulation: %q", reason)
+	}
+}
+
+func TestTruncatedFingerprintNeverKeepsTheDiscovery(t *testing.T) {
+	full := Fingerprint{Files: map[string]string{"go.mod": "1"}}
+	cut := Fingerprint{Files: map[string]string{"go.mod": "1"}, Truncated: true}
+	cases := map[string]struct{ cached, cur Fingerprint }{
+		"cached report truncated":    {cut, full},
+		"current walk truncated":     {full, cut},
+		"both truncated, same files": {cut, cut},
+	}
+	for name, c := range cases {
+		report := Report{Fingerprint: &c.cached}
+		reason, changes := report.Staleness(c.cur, true)
+		if reason == "" {
+			t.Errorf("%s: a truncated fingerprint kept the discovery", name)
+		}
+		if changes != nil {
+			t.Errorf("%s: changes %+v; a partial list must not drive an incremental update", name, changes)
+		}
+	}
+}
+
+func TestTakeFingerprintMarksATruncatedWalk(t *testing.T) {
+	root := t.TempDir()
+	for i := range maxFingerprintFiles + 1 {
+		put(t, root, fmt.Sprintf("adr/%04d.md", i), "x")
+	}
+	fp := TakeFingerprint(root)
+	if !fp.Truncated || len(fp.Files) != maxFingerprintFiles {
+		t.Fatalf("truncated %v with %d files, want true with %d", fp.Truncated, len(fp.Files), maxFingerprintFiles)
+	}
+}

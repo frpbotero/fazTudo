@@ -30,18 +30,31 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 	}
 	results := make([]result, len(lenses))
 	var wg sync.WaitGroup
+	slots := make(chan struct{}, reviewLimit(ss.policy))
 	for i, l := range lenses {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := o.executeRetrying(ctx, ref, provider.Request{
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				results[i] = result{nil, ctx.Err()}
+				return
+			}
+			req := provider.Request{
 				Role:     stage.Role + " · " + l.Title,
 				System:   stage.System,
-				Prompt:   buildPrompt(lensStage(stage, l), st.sc, ss.report, previous) + lensFocus(l),
+				Prompt:   buildPrompt(lensStage(stage, l), o.stageContext(ss, st, stage), ss.report, previous) + lensFocus(l),
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
-			})
+				Prefer:   reviewProvider(ss, stage),
+			}
+			resp, err := o.executeRetrying(ctx, ref, req)
+			if err == nil {
+				o.recordCall(ref, req, resp)
+			}
 			results[i] = result{resp, err}
 		}()
 	}
@@ -94,18 +107,20 @@ func lensTitles(lenses []Lens) string {
 
 // mergeReviews joins the lens reports and appends one verdict block: changes
 // are requested when any lens requested them, with duplicate issues dropped.
-// Without any parseable verdict the merged report carries none either.
+// An approval needs every lens to approve with a valid verdict: when one gave
+// none, the merged report carries no verdict either, so the gate recovers it
+// or ends inconclusive instead of approving what that lens never judged.
 func mergeReviews(lenses []Lens, responses []*provider.Response, stages []Stage, plan Plan) *provider.Response {
 	var b strings.Builder
 	merged := Verdict{Status: VerdictApproved, Issues: []Issue{}}
-	parsed := false
-	seen := map[string]bool{}
+	parsed, missing := false, false
 	simulated := false
 	for i, resp := range responses {
 		simulated = simulated || resp.Simulated
 		fmt.Fprintf(&b, "## Revisão: %s\n\n%s\n\n", lenses[i].Title, stripJSONBlocks(resp.Output))
 		v, ok := parseVerdict(resp.Output, stages, plan)
 		if !ok {
+			missing = missing || !resp.Simulated
 			continue
 		}
 		parsed = true
@@ -114,14 +129,12 @@ func mergeReviews(lenses []Lens, responses []*provider.Response, stages []Stage,
 		}
 		merged.Status = VerdictChangesRequested
 		for _, is := range v.Issues {
-			key := strings.ToLower(strings.TrimSpace(is.Location + "|" + is.Description))
-			if !seen[key] {
-				seen[key] = true
-				merged.Issues = append(merged.Issues, is)
-			}
+			is.Sources = []string{lenses[i].Title}
+			merged.Issues = append(merged.Issues, is)
 		}
 	}
-	if parsed {
+	merged.Issues = consolidateIssues(merged.Issues)
+	if parsed && (!missing || merged.NeedsChanges()) {
 		data, _ := json.MarshalIndent(merged, "", "  ")
 		fmt.Fprintf(&b, "```json\n%s\n```\n", data)
 	}

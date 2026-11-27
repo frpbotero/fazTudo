@@ -55,6 +55,14 @@ func renderPendencies(run Run) string {
 			addStep("", s)
 		}
 		count += writePendingCauses(&b, st.Causes)
+		if st.Integration == IntegrationBlocked {
+			count++
+			fmt.Fprintf(&b, "\nFora da branch base: %s", cmp.Or(st.IntegrationNote, "promoção bloqueada"))
+			if st.Branch != "" {
+				fmt.Fprintf(&b, " (branch `%s` mantida para revisão)", st.Branch)
+			}
+			b.WriteString("\n")
+		}
 		if reason := notDelivered(st); reason != "" {
 			if b.Len() == header {
 				count++
@@ -76,6 +84,9 @@ func renderPendencies(run Run) string {
 	var head strings.Builder
 	fmt.Fprintf(&head, "# Pendências da execução\n\n")
 	fmt.Fprintf(&head, "Resultado: **%s**", cmp.Or(string(run.Result), "indefinido"))
+	if run.Validation != "" {
+		fmt.Fprintf(&head, " · validação **%s**", run.Validation.Label())
+	}
 	if run.FinishedAt != nil {
 		fmt.Fprintf(&head, " · encerrada em %s", run.FinishedAt.Format("02/01/2006 15:04"))
 	}
@@ -124,6 +135,15 @@ func notDelivered(st StoryRun) string {
 	switch st.Status {
 	case StepFailed, StepCanceled:
 		return "execução interrompida antes de concluir"
+	case StepWaiting:
+		if st.Readiness != nil {
+			var qs []string
+			for _, d := range st.Readiness.Decisions {
+				qs = append(qs, d.Question)
+			}
+			return "aguarda decisão de produto: " + strings.Join(qs, " · ")
+		}
+		return "aguarda decisão de produto"
 	case StepSkipped:
 		for _, s := range st.Steps {
 			if strings.Contains(s.Note, "bloqueada") {

@@ -1,12 +1,15 @@
 package workspace
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"llm-orchestrator/internal/quality"
 )
 
 func write(t *testing.T, root, rel, content string) {
@@ -308,5 +311,160 @@ func TestReadInstructionsListsSpecKit(t *testing.T) {
 	}
 	if strings.Contains(got, "003-vazia") || strings.Contains(got, "T001") {
 		t.Errorf("only feature paths with artifacts belong in the prompt:\n%s", got)
+	}
+}
+
+func TestPolicyCheckReports(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	set := func(r *quality.ReportSpec) error {
+		p := m.Policy()
+		p.AutoChecks = false
+		p.Checks = []quality.Command{{Name: "go", Run: "go test -json ./...", Report: r}}
+		_, err := m.SetPolicy(p)
+		return err
+	}
+	for _, ok := range []*quality.ReportSpec{nil, {Format: " go-json "}, {Format: "junit", Path: "reports/junit.xml"}, {Format: "playwright-json", Path: "e2e.json"}} {
+		if err := set(ok); err != nil {
+			t.Errorf("%+v refused: %v", ok, err)
+		}
+	}
+	if got := m.Policy().Checks[0].Report; got == nil || got.Format != "playwright-json" {
+		t.Errorf("report not kept: %+v", got)
+	}
+	if err := set(&quality.ReportSpec{}); err != nil || m.Policy().Checks[0].Report != nil {
+		t.Errorf("an empty report means none: %v, %+v", err, m.Policy().Checks[0].Report)
+	}
+	for _, bad := range []*quality.ReportSpec{{Format: "tap"}, {Format: "junit"}, {Format: "junit", Path: "../x.xml"}, {Format: "junit", Path: "/tmp/x.xml"}} {
+		if err := set(bad); err == nil {
+			t.Errorf("%+v must be refused", bad)
+		}
+	}
+}
+
+func TestPolicyProfiles(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	p.Profiles = []string{" go ", "go", "angular-nestjs-postgres"}
+	got, err := m.SetPolicy(p)
+	if err != nil || !slices.Equal(got.Profiles, []string{"go", "angular-nestjs-postgres"}) {
+		t.Fatalf("profiles = %v, %v", got.Profiles, err)
+	}
+	p.Profiles = []string{"rails"}
+	if _, err := m.SetPolicy(p); err == nil {
+		t.Error("an unknown profile must be refused")
+	}
+	if got := SuggestProfiles([]Stack{{Name: "Go"}, {Name: "NestJS"}}); !slices.Equal(got, []string{"angular-nestjs-postgres", "go"}) {
+		t.Errorf("suggested = %v", got)
+	}
+	if got := SuggestProfiles([]Stack{{Name: "React"}}); len(got) != 0 {
+		t.Errorf("suggested = %v", got)
+	}
+}
+
+func TestPolicySCM(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	if p.SCM.Mode != "" {
+		t.Errorf("the default publishes nothing: %+v", p.SCM)
+	}
+	for _, ok := range []SCMPolicy{{}, {Mode: SCMLocal}, {Mode: SCMPullRequest, Draft: true, ReviewFrom: RiskHigh}} {
+		p.SCM = ok
+		if _, err := m.SetPolicy(p); err != nil {
+			t.Errorf("%+v refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []SCMPolicy{{Mode: "push"}, {Mode: SCMPullRequest, ReviewFrom: "altíssimo"}} {
+		p.SCM = bad
+		if _, err := m.SetPolicy(p); err == nil {
+			t.Errorf("%+v accepted", bad)
+		}
+	}
+}
+
+func TestPolicyParallelAgentsAndResources(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	p.AutoChecks = false
+	p.MaxParallelAgents = 2
+	p.Checks = []quality.Command{{Name: "db", Run: "make db", Resource: " Postgres "}}
+	got, err := m.SetPolicy(p)
+	if err != nil || got.Checks[0].Resource != "postgres" {
+		t.Fatalf("policy = %+v, %v", got.Checks, err)
+	}
+	for _, bad := range []func(*Policy){
+		func(p *Policy) { p.MaxParallelAgents = 17 },
+		func(p *Policy) { p.Checks[0].Resource = "banco de dados" },
+	} {
+		q := got
+		q.Checks = slices.Clone(got.Checks)
+		bad(&q)
+		if _, err := m.SetPolicy(q); err == nil {
+			t.Errorf("%+v accepted", q)
+		}
+	}
+}
+
+func TestPolicyBudgetAndPrices(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	p.Budget = Budget{MaxMinutes: 60, MaxCalls: 200, MaxTokens: 5_000_000, MaxRetries: 10, MaxRetryWaitS: 30}
+	p.Prices = map[string]Price{"claude-sonnet": {Input: 3, Output: 15}}
+	if _, err := m.SetPolicy(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []func(*Policy){
+		func(p *Policy) { p.Budget.MaxCalls = -1 },
+		func(p *Policy) { p.Prices = map[string]Price{"": {Input: 1}} },
+		func(p *Policy) { p.Prices = map[string]Price{"m": {Output: -1}} },
+	} {
+		q := p
+		bad(&q)
+		if _, err := m.SetPolicy(q); err == nil {
+			t.Errorf("%+v accepted", q.Budget)
+		}
+	}
+}
+
+func TestPolicyBenchmarks(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	p.Benchmarks = []Benchmark{{Name: "api", Run: "make bench", Workload: "1000 pedidos", Repeat: 5, Required: true}}
+	if _, err := m.SetPolicy(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []Benchmark{
+		{Name: "api", Run: "make bench"},                               // no workload
+		{Name: "api", Run: "make bench", Workload: "x", Repeat: 50},    // too many runs
+		{Name: "api", Run: "make bench", Workload: "x", Resource: "A"}, // bad resource
+	} {
+		p.Benchmarks = []Benchmark{bad}
+		if _, err := m.SetPolicy(p); err == nil {
+			t.Errorf("%+v accepted", bad)
+		}
+	}
+}
+
+// TestDocumentedExamplePoliciesAreValid keeps docs/exemplos in step with the
+// policy: every example decodes without unknown fields and passes validation.
+func TestDocumentedExamplePoliciesAreValid(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "docs", "exemplos", "politica-*.json"))
+	if err != nil || len(files) < 3 {
+		t.Fatalf("example policies = %v, %v", files, err)
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := DefaultPolicy()
+		dec := json.NewDecoder(strings.NewReader(string(data)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			t.Errorf("%s: %v", filepath.Base(f), err)
+			continue
+		}
+		if err := p.Normalize().Validate(); err != nil {
+			t.Errorf("%s: %v", filepath.Base(f), err)
+		}
 	}
 }

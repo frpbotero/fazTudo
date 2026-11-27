@@ -112,6 +112,10 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/pipeline/stop", s.handleStop)
 	mux.HandleFunc("POST /api/pipeline/retry", s.handleRetry)
 	mux.HandleFunc("POST /api/pipeline/resume", s.handleResume)
+	mux.HandleFunc("POST /api/pipeline/answer", s.handleAnswer)
+	mux.HandleFunc("POST /api/pipeline/reconcile", s.handleReconcile)
+	mux.HandleFunc("GET /api/pipeline/reviews", s.handleReviews)
+	mux.HandleFunc("POST /api/pipeline/review-log", s.handleReviewLog)
 	mux.HandleFunc("GET /api/health/areas", s.handleHealthAreas)
 	mux.HandleFunc("POST /api/health/start", s.handleHealthStart)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
@@ -436,6 +440,79 @@ func (s *Server) handleRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "retrying"})
+}
+
+// handleAnswer records the answers to the product decisions a story waits
+// on and develops it again from Passo 0.
+func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Story   int      `json:"story"`
+		Answers []string `json:"answers"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	if err := s.orch.AnswerDecisions(body.Story, body.Answers); err != nil {
+		status := http.StatusUnprocessableEntity
+		if isConflict(err) {
+			status = http.StatusConflict
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "answered"})
+}
+
+// handleReconcile completes a promotion that reached only some of the
+// repositories, without resetting any of them.
+func (s *Server) handleReconcile(w http.ResponseWriter, _ *http.Request) {
+	p, err := s.orch.Reconcile()
+	switch {
+	case errors.Is(err, pipeline.ErrNothingToReconcile):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	case isConflict(err):
+		writeError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, p)
+	}
+}
+
+// handleReviewLog records review and rework time a person spent on a story,
+// as they enter it.
+func (s *Server) handleReviewLog(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Story         int    `json:"story"`
+		Minutes       int    `json:"minutes"`
+		ReworkMinutes int    `json:"rework_minutes"`
+		Note          string `json:"note"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	err := s.orch.LogReview(body.Story, pipeline.HumanReview{Minutes: body.Minutes, ReworkMinutes: body.ReworkMinutes, Note: body.Note})
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "logged"})
+}
+
+// handleReviews reads, from the source host, the checks and review of the
+// pull requests the last run opened. It changes nothing.
+func (s *Server) handleReviews(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	list, err := s.orch.ReviewStatuses(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if list == nil {
+		list = []pipeline.ReviewStatus{}
+	}
+	writeJSON(w, http.StatusOK, list)
 }
 
 func (s *Server) handleGetWorkspace(w http.ResponseWriter, _ *http.Request) {

@@ -26,6 +26,9 @@ type Stream struct {
 	Scope     string   `json:"scope,omitempty"`
 	Files     []string `json:"files,omitempty"`
 	DependsOn []string `json:"depends_on,omitempty"`
+	// Resources are shared things two fronts cannot change at the same time
+	// even in separate copies: a contract, a migration, a database, a port.
+	Resources []string `json:"resources,omitempty"`
 }
 
 const streamCoveredNote = "Dividido em frentes paralelas"
@@ -49,6 +52,7 @@ func validStreams(raw []Stream, stages []Stage) []Stream {
 		s.Scope = strings.TrimSpace(s.Scope)
 		s.Files = trimmedPaths(s.Files)
 		s.DependsOn = slugs(s.DependsOn)
+		s.Resources = lowerAll(trimmedList(s.Resources))
 		streams = append(streams, s)
 	}
 	return pruneDependencies(streams)
@@ -152,7 +156,7 @@ func streamWaves(streams []Stream) [][]Stream {
 func nextWave(streams []Stream, done map[string]bool) (wave, rest []Stream) {
 	for _, s := range streams {
 		isReady := !slices.ContainsFunc(s.DependsOn, func(d string) bool { return !done[d] })
-		if isReady && !sharesFiles(s, wave) {
+		if isReady && !sharesFiles(s, wave) && !sharesResources(s, wave) {
 			wave = append(wave, s)
 		} else {
 			rest = append(rest, s)
@@ -166,6 +170,14 @@ func sharesFiles(s Stream, others []Stream) bool {
 		return slices.ContainsFunc(s.Files, func(a string) bool {
 			return slices.ContainsFunc(o.Files, func(b string) bool { return pathsOverlap(a, b) })
 		})
+	})
+}
+
+// sharesResources reports whether s claims a shared resource a front of the
+// wave already claims: disjoint files are not enough to run side by side.
+func sharesResources(s Stream, others []Stream) bool {
+	return slices.ContainsFunc(others, func(o Stream) bool {
+		return slices.ContainsFunc(s.Resources, func(r string) bool { return slices.Contains(o.Resources, r) })
 	})
 }
 

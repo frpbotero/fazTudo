@@ -30,13 +30,14 @@ type agentLimits struct {
 	readTurns  int
 	stop       bool     // a turn limit ends the run instead of leaving a pendency
 	commands   []string // shell commands writing agents may run
+	strict     bool     // writing agents need a provider that enforces commands
 }
 
 // useLimits derives the agent limits of a run from its policy: the project
 // checks, the tools to reproduce a failure and the policy's extra commands are
 // the only shell writers may run.
 func (o *Orchestrator) useLimits(policy workspace.Policy, checks []quality.Command) {
-	l := agentLimits{writeTurns: defaultWriteTurns, readTurns: defaultReadTurns, stop: policy.StopOnTurnLimit}
+	l := agentLimits{writeTurns: defaultWriteTurns, readTurns: defaultReadTurns, stop: policy.StopOnTurnLimit, strict: policy.StrictCommands}
 	if policy.MaxTurns > 0 {
 		l.writeTurns, l.readTurns = policy.MaxTurns, max(policy.MaxTurns/2, minReadTurns)
 	}
@@ -62,7 +63,7 @@ func (o *Orchestrator) limited(req provider.Request) provider.Request {
 		}
 		return req
 	}
-	req.MaxTurns, req.Commands = l.writeTurns, l.commands
+	req.MaxTurns, req.Commands, req.StrictCommands = l.writeTurns, l.commands, l.strict
 	return req
 }
 
@@ -95,6 +96,7 @@ func (o *Orchestrator) markTurnLimited(ref stepRef, resp *provider.Response, tur
 type UsageRecord struct {
 	Time        time.Time   `json:"time"`
 	Run         string      `json:"run"` // when the run started, RFC 3339
+	RunID       string      `json:"run_id,omitempty"`
 	Repo        string      `json:"repo"`
 	Story       string      `json:"story,omitempty"`
 	Task        string      `json:"task"` // step ID
@@ -131,6 +133,7 @@ func (o *Orchestrator) recordUsage(ref stepRef, req provider.Request, resp *prov
 	if o.run.StartedAt != nil {
 		rec.Run = o.run.StartedAt.Format(time.RFC3339)
 	}
+	rec.RunID = o.run.ID
 	if ref.story >= 0 && ref.story < len(o.run.Stories) {
 		rec.Story = o.run.Stories[ref.story].ID
 	}
@@ -228,5 +231,5 @@ func WriteUsageSummary(log io.Reader, w io.Writer) error {
 
 func writeUsageRow(w io.Writer, t *usageTotal) {
 	fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%.4f\t\n",
-		t.run, t.repo, t.calls, t.InputTokens, t.CachedTokens, t.OutputTokens+t.ReasoningTokens, t.CostUSD)
+		t.run, t.repo, t.calls, t.InputTokens, t.CachedTokens, t.OutputTokens, t.CostUSD)
 }

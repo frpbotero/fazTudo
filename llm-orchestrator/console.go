@@ -45,7 +45,11 @@ func runConsole(args []string, input io.Reader, out, errOut io.Writer) int {
   faztudo stories parse --file US.md [--detect-model --real]
   faztudo status [--repo DIR] [--json]
   faztudo logs [--repo DIR]
-  faztudo stop | resume | retry --story N --step ID [--repo DIR]
+    faztudo stop | resume | retry --story N --step ID [--repo DIR]
+  faztudo why --story N [--repo DIR] [--json]
+  faztudo answer --story N --answers "resposta 1 | resposta 2" [--repo DIR]
+  faztudo reconcile [--repo DIR]
+  faztudo review-log --story N --minutes M [--rework M] [--note TEXTO] [--repo DIR]
   faztudo repo show | set --path DIR | discovery-reset | branches | base --path . --id BRANCH
   faztudo policy show | apply --file POLITICA.json
   faztudo config show | apply --file CONFIG.json
@@ -304,7 +308,7 @@ func (c *consoleRuntime) waitRun(out, errOut io.Writer) int {
 			run := c.orch.Snapshot()
 			printNewLogs(out, run, seen)
 			for _, story := range run.Stories {
-				fmt.Fprintf(out, "%s: %s (%s)\n", story.ID, story.Title, story.Status)
+				printStoryLine(out, story)
 			}
 			if run.Kind == pipeline.RunCleanup {
 				printCleanup(out, run)
@@ -316,7 +320,7 @@ func (c *consoleRuntime) waitRun(out, errOut io.Writer) int {
 			switch run.Result {
 			case pipeline.ResultSucceeded:
 				if run.Kind != pipeline.RunCleanup {
-					fmt.Fprintf(out, "Execução concluída: %d User Story(s).\n", len(run.Stories))
+					fmt.Fprintf(out, "Execução concluída: %d User Story(s). Validação: %s.\n", len(run.Stories), run.Validation.Label())
 				}
 				return 0
 			case pipeline.ResultCanceled:

@@ -315,42 +315,19 @@ func (o *Orchestrator) runStoriesInPlace(ctx context.Context, ss *session, opts 
 		if o.storyFinished(si) {
 			continue
 		}
+		if reason := o.dependencyBlock(ctx, ss, si, opts.Stories); reason != "" {
+			o.skipStory(si, reason)
+			continue
+		}
 		st, startAt, fresh := o.storyTask(ss, opts, si, resume)
 		if !o.developStoryFrom(ctx, ss, st, startAt, fresh) {
 			return false
 		}
-		o.closeStory(st, len(opts.Stories))
-		if !o.mergeIntoBase(ctx, ss, opts.Stories[si].Title) {
+		o.closeStory(ss, st, len(opts.Stories))
+		if !o.promoteStory(ctx, ss, st) {
 			return false
 		}
 	}
-	return true
-}
-
-// mergeIntoBase merges what the current branch holds (the story's branch, or
-// the wave's integration branch) into the base branch of every repository, so
-// the next story or wave starts from the base with this one already in it.
-// A merge that fails stops the run: going on would build on code the base
-// does not have.
-func (o *Orchestrator) mergeIntoBase(ctx context.Context, ss *session, label string) bool {
-	if ss.git == nil || ss.bases["."] == "" {
-		return true
-	}
-	from := ss.git.Branch(ctx)
-	if from == "" || from == ss.bases["."] {
-		return true
-	}
-	conflicts, err := ss.git.MergeIntoBases(ctx, from, fmt.Sprintf("faztudo: integra %s na base", label), ss.bases)
-	if err != nil {
-		if len(conflicts) == 0 {
-			err = fmt.Errorf("merge de %s na branch base falhou: %w", label, err)
-		} else {
-			err = fmt.Errorf("merge de %s na branch base falhou (branch %s mantida): %w", label, from, err)
-		}
-		o.failRun(err)
-		return false
-	}
-	o.logf(LevelSuccess, "%s integrada na branch base (%s).", label, baseLabels(ctx, ss.git))
 	return true
 }
 
@@ -381,7 +358,7 @@ func (o *Orchestrator) storyFinished(si int) bool {
 }
 
 func isFinished(s StepStatus) bool {
-	return s == StepDone || s == StepWarning || s == StepSkipped
+	return s == StepDone || s == StepWarning || s == StepSkipped || s == StepWaiting
 }
 
 // newStoryContext places a story among the ones delivered in earlier waves
@@ -390,11 +367,15 @@ func (o *Orchestrator) newStoryContext(si int, opts StartOptions, ss *session) s
 	sc := storyContext{
 		Preamble: opts.Preamble, Story: opts.Stories[si], Position: si + 1, Total: len(opts.Stories),
 		Rules: ss.rules(), Instructions: ss.instructions,
-		Audit:       ss.policy.StageDisabled("arch"),
-		AuditNotice: o.texts.auditNotice,
+		Audit:         ss.policy.StageDisabled("arch"),
+		AuditNotice:   o.texts.auditNotice,
+		Profiles:      slices.Clone(ss.policy.Profiles),
+		ArtifactBytes: ss.policy.ContextBytes,
+		Overrides:     o.overrides(),
 	}
 	o.mu.RLock()
 	defer o.mu.RUnlock()
+	sc.Answers = slices.Clone(o.run.Stories[si].Answers)
 	wave := storyWave(o.run.Stories, si)
 	for i, s := range opts.Stories {
 		switch w := storyWave(o.run.Stories, i); {
@@ -440,23 +421,49 @@ func (o *Orchestrator) runStoriesInParallel(ctx context.Context, ss *session, op
 	o.logf(LevelInfo, "%d US em paralelo nesta onda.", len(lanes))
 	waveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	running := make([]int, len(lanes))
+	for i, l := range lanes {
+		running[i] = l.st.si
+	}
+	o.setLanes(running, true)
 	var wg sync.WaitGroup
 	for _, lane := range lanes {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if lane.ok = o.developStoryFrom(waveCtx, lane.ss, lane.st, lane.startAt, lane.fresh); lane.ok {
-				o.closeStory(lane.st, len(opts.Stories))
+				o.closeStory(lane.ss, lane.st, len(opts.Stories))
 				return
 			}
-			cancel()
+			if !o.Snapshot().Running {
+				cancel() // a global failure, or the run was stopped: the wave stops
+			}
 		}()
 	}
 	wg.Wait()
-	if slices.ContainsFunc(lanes, func(l *storyLane) bool { return !l.ok }) {
+	o.setLanes(running, false)
+	var failed []string
+	var done []int
+	for _, l := range lanes {
+		if l.ok {
+			done = append(done, l.st.si)
+		} else {
+			failed = append(failed, l.st.sc.Story.Title)
+		}
+	}
+	if len(failed) == 0 {
+		return o.integrateWave(ctx, ss, opts, wave)
+	}
+	if ctx.Err() != nil || !o.Snapshot().Running {
 		return false
 	}
-	return o.integrateWave(ctx, ss, opts, wave)
+	// A story's own failure: the others of the wave are integrated, then the
+	// run stops there, resumable from the failed story.
+	if !o.integrateWave(ctx, ss, opts, done) {
+		return false
+	}
+	o.finish(ResultFailed, LevelError, fmt.Sprintf("Falha em %s; as demais US da onda foram integradas. Continue de onde parou.", strings.Join(failed, ", ")))
+	return false
 }
 
 // openLanes gives each unfinished story of the wave its own worktree on its
@@ -489,6 +496,10 @@ func (o *Orchestrator) openLanes(ctx context.Context, ss *session, opts StartOpt
 	}
 	for _, si := range wave {
 		if o.storyFinished(si) {
+			continue
+		}
+		if reason := o.dependencyBlock(ctx, ss, si, opts.Stories); reason != "" {
+			o.skipStory(si, reason)
 			continue
 		}
 		lane := &storyLane{ss: ss}
@@ -572,16 +583,36 @@ func (ss *session) inWorktree(work string) *session {
 	return &c
 }
 
-// integrateWave merges the wave's story branches into a new integration
-// branch, which the next wave builds on.
+// integrateWave merges the wave's approved story branches into a new
+// integration branch and promotes it to the base only after the project
+// commands pass on the combination: stories that pass alone may still break
+// together. Stories that may not be promoted are left out of the candidate;
+// a candidate that fails keeps the base as it was.
 func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts StartOptions, wave []int) bool {
 	if ss.git == nil {
 		return true
 	}
-	var labels []string
+	var candidates []int
 	for _, si := range wave {
+		run := o.storyRun(si)
+		if run.Integration == IntegrationBlocked || run.Status == StepWaiting {
+			continue // already kept out by an unmet dependency, or not developed yet
+		}
+		if reason := promotable(run, ss.policy); reason != "" {
+			o.markIntegration(si, IntegrationBlocked, reason)
+			o.logf(LevelWarn, "%s fica fora da integração: %s. A branch %s fica para revisão.", run.Title, reason, run.Branch)
+			continue
+		}
+		candidates = append(candidates, si)
+	}
+	if len(candidates) == 0 {
+		return true
+	}
+	var labels []string
+	for _, si := range candidates {
 		labels = append(labels, storyLabel(opts.Stories[si]))
 	}
+	started := time.Now()
 	branch := vcs.BranchName("integra "+strings.Join(labels, " "), time.Now())
 	if err := ss.git.CreateBranch(ctx, branch); err != nil {
 		o.failRun(fmt.Errorf("criar a branch de integração %s: %w", branch, err))
@@ -591,14 +622,43 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 	o.run.Integrations = append(o.run.Integrations, branch)
 	o.mu.Unlock()
 	o.logf(LevelInfo, "Branch %s criada para integrar %s.", branch, strings.Join(labels, ", "))
-	for _, si := range wave {
+	tried := labels
+	var merged []int
+	labels = nil
+	for _, si := range candidates {
 		if !o.mergeStory(ctx, ss, opts, si) {
 			return false
 		}
+		if o.storyRun(si).Integration != IntegrationBlocked {
+			merged = append(merged, si)
+			labels = append(labels, storyLabel(opts.Stories[si]))
+		}
 	}
-	if !o.mergeIntoBase(ctx, ss, strings.Join(labels, ", ")) {
+	p := Promotion{Stories: labels, Branch: branch, started: started}
+	if len(merged) == 0 {
+		p.Stories = tried
+		return o.blockPromotion(ctx, ss, nil, p, "nenhuma US da onda pôde ser integrada")
+	}
+	checks, reason, alive := o.verifyCandidate(ctx, ss, strings.Join(labels, ", "))
+	if !alive {
 		return false
 	}
+	p.Checks = checks
+	if reason == "" {
+		reason = o.baseMoved(ctx, ss, branch)
+	}
+	p.Commit, _ = ss.git.Head(ctx)
+	if reason != "" {
+		return o.blockPromotion(ctx, ss, merged, p, "conjunto integrado: "+reason)
+	}
+	if o.needsReview(ss, merged) {
+		return o.openReview(ctx, ss, strings.Join(labels, ", "), &p, merged)
+	}
+	if !o.mergeIntoBase(ctx, ss, strings.Join(labels, ", "), &p, merged) {
+		return false
+	}
+	p.Status = IntegrationIntegrated
+	o.recordPromotion(p, merged)
 	o.updateGraph(ctx, ss) // the next wave sees the code just integrated
 	return true
 }
@@ -606,6 +666,10 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 func (o *Orchestrator) mergeStory(ctx context.Context, ss *session, opts StartOptions, si int) bool {
 	branch, story := o.storyBranch(si), opts.Stories[si]
 	if branch == "" {
+		return true
+	}
+	if sha, err := ss.git.Rev(ctx, branch); err == nil && ss.git.IsAncestor(ctx, sha, "HEAD") {
+		o.logf(LevelInfo, "%s já estava integrada; merge não repetido.", story.Title)
 		return true
 	}
 	conflicts, err := ss.git.StartMerge(ctx, branch, fmt.Sprintf("faztudo: integra %s", storyLabel(story)))
@@ -710,7 +774,7 @@ func buildIntegrationPrompt(sc storyContext, discovery *workspace.Report, confli
 
 // leaveUnintegrated marks a story whose branch could not be merged.
 func (o *Orchestrator) leaveUnintegrated(si int, reason string) {
-	o.updateStory(si, func(r *StoryRun) { r.Status = StepWarning })
+	o.markIntegration(si, IntegrationBlocked, reason)
 	o.logf(LevelWarn, "%s não integrada (%s); a branch %s fica para merge manual.", o.storyTitle(si), reason, o.storyBranch(si))
 }
 
