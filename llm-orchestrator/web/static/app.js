@@ -709,6 +709,7 @@ Critérios de aceitação:
       max_parallel_agents: snapshot?.workspace?.policy?.max_parallel_agents,
       context_bytes: snapshot?.workspace?.policy?.context_bytes,
       budget: snapshot?.workspace?.policy?.budget,
+      benchmarks: snapshot?.workspace?.policy?.benchmarks,
       prices: snapshot?.workspace?.policy?.prices,
       prices_version: snapshot?.workspace?.policy?.prices_version,
       max_parallel_reviews: snapshot?.workspace?.policy?.max_parallel_reviews,
@@ -1215,17 +1216,21 @@ Critérios de aceitação:
   function renderSpecialties(st) {
     const reports = Object.entries(st.specialties || {});
     const measures = st.measurements || [];
-    if (!reports.length && !measures.length) return '';
+    if (!reports.length && !measures.length && !st.performance?.length) return '';
     const items = reports.flatMap(([id, r]) => [
       ...(r.requirements || []).map((q) => `<tr><td><code>${esc(q.id)}</code> <span class="note">${esc(id)}</span></td><td>${esc(q.text)}</td><td>${esc(q.verification)}</td></tr>`),
       ...(r.problems || []).map((p) => `<tr><td><span class="note">${esc(id)}</span></td><td colspan="2"><span class="note" data-tone="warn">${esc(p)}</span></td></tr>`),
       ...(!r.requirements?.length && r.none_reason ? [`<tr><td><span class="note">${esc(id)}</span></td><td colspan="2">${esc(r.none_reason)}</td></tr>`] : []),
     ]);
+    const benches = (st.performance || []).flatMap((r) => [
+      `<tr><td><strong>${esc(r.name)}</strong> <span class="note">${esc(r.workload)}</span></td><td>${esc(r.env)}, ${r.repeat} medição(ões)</td><td><span class="note" data-tone="${r.verdict === 'aprovado' ? 'success' : r.verdict === 'regressão' ? 'danger' : 'warn'}">${esc(r.verdict)}</span> ${esc(r.detail || '')}</td></tr>`,
+      ...(r.metrics || []).map((m) => `<tr><td>${esc(m.name)}</td><td>${m.baseline.toFixed(2)} → ${m.candidate.toFixed(2)}</td><td>${m.change_pct >= 0 ? '+' : ''}${m.change_pct.toFixed(1)}% de piora, ruído ${m.noise_pct.toFixed(0)}%</td></tr>`),
+    ]);
     const rows = measures.map((m) => `<tr><td>${esc(m.metric)}</td><td>${esc(m.value)}${m.slo ? ` (meta ${esc(m.slo)})` : ''}</td><td><span class="note" data-tone="${m.met ? 'success' : 'danger'}">${m.met ? 'atingida' : 'não atingida'}</span></td></tr>`);
     return `
       <details class="trace-all">
         <summary>Especialidades: ${reports.length} relatório(s)${measures.length ? `, ${measures.length} medição(ões)` : ''}</summary>
-        <table>${items.join('')}${rows.join('')}</table>
+        <table>${items.join('')}${rows.join('')}${benches.join('')}</table>
       </details>`;
   }
 

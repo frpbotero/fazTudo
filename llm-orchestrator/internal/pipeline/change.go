@@ -171,22 +171,11 @@ func (o *Orchestrator) reproduce(ctx context.Context, ss *session, st *storyStat
 // runOnSnapshot copies files into a worktree at commit and runs the project
 // commands there, from the cheapest layer, stopping at the first that fails.
 func (o *Orchestrator) runOnSnapshot(ctx context.Context, ss *session, commit string, files []string) ([]quality.Result, error) {
-	prefix, err := ss.git.Prefix(ctx)
+	work, cleanup, err := o.snapshotDir(ctx, ss, commit)
 	if err != nil {
 		return nil, err
 	}
-	tmp, err := os.MkdirTemp("", "faztudo-repro-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tmp)
-	dir := filepath.Join(tmp, "repo")
-	if err := ss.git.AddWorktreeAt(ctx, dir, commit); err != nil {
-		return nil, fmt.Errorf("worktree do commit de partida: %w", err)
-	}
-	defer func() { _ = ss.git.RemoveWorktree(context.WithoutCancel(ctx), dir) }()
-	work := filepath.Join(dir, prefix)
-	linkDependencies(ss.repo, work, ss.git.Nested())
+	defer cleanup()
 	for _, f := range files {
 		data, err := os.ReadFile(filepath.Join(ss.repo, f))
 		if err != nil {

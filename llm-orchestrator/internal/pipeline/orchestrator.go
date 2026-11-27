@@ -167,6 +167,8 @@ type StoryRun struct {
 	Acceptance []ScenarioResult `json:"acceptance,omitempty"`
 	// Specialties are the planning specialties' reports, by stage.
 	Specialties map[string]SpecialistReport `json:"specialties,omitempty"`
+	// Performance are the benchmarks' baseline-against-candidate results.
+	Performance []BenchResult `json:"performance,omitempty"`
 	// Measurements are what the performance specialist read from the
 	// benchmarks.
 	Measurements []Measurement `json:"measurements,omitempty"`
@@ -769,8 +771,9 @@ type storyState struct {
 	acceptedAt time.Time
 	// measured tells whether a benchmark ran for the performance gate, and
 	// benchmarks is what it printed.
-	measured   bool
-	benchmarks string
+	measured     bool
+	benchmarks   string
+	benchResults []BenchResult
 	// stageAt is the index of the stage running; late lists the planning
 	// stages the risk required only after they had passed.
 	stageAt int
@@ -1245,6 +1248,14 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 					return evaluation{}, false
 				} else if ev != nil {
 					return *ev, true
+				}
+				if stage.Measured {
+					// The fix is judged on new measurements, not the old ones.
+					bench, alive := o.measure(ctx, ss, st)
+					if !alive {
+						return evaluation{}, false
+					}
+					st.benchmarks = bench
 				}
 				resp, ok := o.runStage(ctx, ref, provider.Request{
 					Role:     stage.Role,

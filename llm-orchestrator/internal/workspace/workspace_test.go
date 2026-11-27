@@ -423,3 +423,22 @@ func TestPolicyBudgetAndPrices(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyBenchmarks(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	p.Benchmarks = []Benchmark{{Name: "api", Run: "make bench", Workload: "1000 pedidos", Repeat: 5, Required: true}}
+	if _, err := m.SetPolicy(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []Benchmark{
+		{Name: "api", Run: "make bench"},                               // no workload
+		{Name: "api", Run: "make bench", Workload: "x", Repeat: 50},    // too many runs
+		{Name: "api", Run: "make bench", Workload: "x", Resource: "A"}, // bad resource
+	} {
+		p.Benchmarks = []Benchmark{bad}
+		if _, err := m.SetPolicy(p); err == nil {
+			t.Errorf("%+v accepted", bad)
+		}
+	}
+}
