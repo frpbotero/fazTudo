@@ -49,6 +49,9 @@ type Policy struct {
 	// MaxParallelAgents bounds the agent calls of a run at once, across
 	// stories, fronts, reviewers and candidates; 0 is 4.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty"`
+	// ContextBytes caps each earlier stage's output forwarded to the next
+	// ones; 0 is 4000. Cut outputs say so in the prompt.
+	ContextBytes int `json:"context_bytes,omitempty"`
 	// Budget bounds what a run may spend; zero values leave a bound off.
 	Budget Budget `json:"budget,omitempty"`
 	// Prices estimate the cost of calls whose CLI reports tokens but no cost,
@@ -314,6 +317,9 @@ func (p Policy) Validate() error {
 		if _, err := path.Match(s, ""); err != nil || len(s) > 200 || strings.Trim(s, "*?") == "" {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
+	}
+	if p.ContextBytes != 0 && (p.ContextBytes < 1000 || p.ContextBytes > 64000) {
+		return errors.New("o orçamento de contexto por artefato deve estar entre 1000 e 64000 bytes")
 	}
 	if err := validateBudget(p.Budget, p.Prices); err != nil {
 		return err

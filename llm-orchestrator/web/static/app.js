@@ -707,6 +707,7 @@ Critérios de aceitação:
       skip_baseline: snapshot?.workspace?.policy?.skip_baseline,
       style_blocking: snapshot?.workspace?.policy?.style_blocking,
       max_parallel_agents: snapshot?.workspace?.policy?.max_parallel_agents,
+      context_bytes: snapshot?.workspace?.policy?.context_bytes,
       budget: snapshot?.workspace?.policy?.budget,
       prices: snapshot?.workspace?.policy?.prices,
       prices_version: snapshot?.workspace?.policy?.prices_version,

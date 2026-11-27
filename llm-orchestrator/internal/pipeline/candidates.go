@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"llm-orchestrator/internal/provider"
-	"llm-orchestrator/internal/quality"
 	"llm-orchestrator/internal/vcs"
 )
 
@@ -224,7 +223,7 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 	}
 	if chosen.Passed {
 		// The repository now holds exactly what was just verified.
-		st.verifiedAt = quality.FileClock(ss.repo)
+		o.markVerified(ss, st)
 	}
 	return &provider.Response{Output: output, Name: chosen.Provider, Model: chosen.Model, Duration: elapsed}, true
 }
