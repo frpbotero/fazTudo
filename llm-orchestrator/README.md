@@ -200,6 +200,20 @@ worktrees. *Sequencial*: sem análise de dependências; uma US de cada vez, na o
 os agentes de cada US um após o outro. Nos dois modos cada US/onda é mergeada na branch base antes da
 seguinte.
 
+**Contexto e verificações.**
+- Cada etapa recebe só as etapas anteriores de que depende (`Inputs`), cada saída cortada em
+  `context_bytes` (padrão 4000) com a marca `[… conteúdo truncado]`. O registro da chamada conta os
+  cortes e o tamanho do prompt.
+- Os portões (revisão, segurança, QA) recebem a lista dos arquivos que a US alterou, cortada em 60 com
+  aviso, para olhar onde está a mudança; a revisão continua sendo da mudança inteira.
+- A verificação executável só é pulada quando nada mudou desde a última aprovação, ou quando o que mudou
+  tem o mesmo conteúdo (chave por conteúdo e comandos, nunca só por nome ou hora do arquivo).
+- Discovery e linha de base também ficam em cache por conteúdo (arquivos de que dependem; commit e
+  comandos).
+- Rodadas de correção rodam primeiro o que falhou, mas a aprovação sempre roda todos os comandos:
+  nenhum comando obrigatório é dispensado por um recorte do grafo.
+- Nada assume cache compartilhado entre providers.
+
 **Orçamento** (`budget` na política). `max_minutes`, `max_calls` e `max_tokens` são conferidos antes de
 cada chamada de agente: atingido um deles, nenhuma chamada nova começa, a etapa para com a classe
 `orçamento`, o trabalho feito fica salvo e a execução pode continuar depois de aumentar o limite. Os

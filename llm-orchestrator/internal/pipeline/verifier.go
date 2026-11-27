@@ -35,10 +35,10 @@ const sweepTimeout = 90 * time.Second
 // whose repository did not change since the last approval is skipped.
 func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storyState, stage Stage) bool {
 	ref := stepRef{st.si, stage.ID}
-	if !st.verifiedAt.IsZero() && len(o.changedFiles(ss, st.verifiedAt)) == 0 {
+	if note := o.stillVerified(ss, st); note != "" {
 		o.updateStep(ref, func(s *Step) {
 			s.Status = StepSkipped
-			s.Note = "Sem alterações desde a última verificação aprovada"
+			s.Note = note
 			s.Validation = ValidationPassed // the approval holds for unchanged code
 		})
 		return true
@@ -53,7 +53,7 @@ func (o *Orchestrator) runVerifier(ctx context.Context, ss *session, st *storySt
 	if !o.enforceGate(ctx, ss, st, stage, ev, recheck) {
 		return false
 	}
-	st.verifiedAt = quality.FileClock(ss.repo)
+	o.markVerified(ss, st)
 	return true
 }
 
@@ -74,7 +74,7 @@ func (o *Orchestrator) checkFixes(ctx context.Context, ss *session, st *storySta
 		return nil, false
 	}
 	if a.passed() {
-		st.verifiedAt = quality.FileClock(ss.repo)
+		o.markVerified(ss, st)
 		if len(a.traces) > 0 {
 			// The gate after this fix judges with the cases that just ran.
 			o.updateStory(st.si, func(r *StoryRun) { r.Trace = a.traces })
@@ -700,4 +700,31 @@ func clipRunes(s string, n int) string {
 		return string(r)
 	}
 	return string(r[:n]) + "…"
+}
+
+// markVerified remembers that the repository, as it is now, passed: when, and
+// what its changed files held, with the commands that judged them.
+func (o *Orchestrator) markVerified(ss *session, st *storyState) {
+	st.verifiedAt = quality.FileClock(ss.repo)
+	st.verifiedKey = o.verificationKey(ss, st)
+}
+
+// stillVerified tells why the last approval still holds, or "": nothing was
+// touched since, or what was touched holds the same content. The key covers
+// the content and the commands, never only the files' names or times.
+func (o *Orchestrator) stillVerified(ss *session, st *storyState) string {
+	if st.verifiedAt.IsZero() {
+		return ""
+	}
+	if len(o.changedFiles(ss, st.verifiedAt)) == 0 {
+		return "Sem alterações desde a última verificação aprovada"
+	}
+	if st.verifiedKey != "" && o.verificationKey(ss, st) == st.verifiedKey {
+		return "Arquivos regravados com o mesmo conteúdo da última verificação aprovada"
+	}
+	return ""
+}
+
+func (o *Orchestrator) verificationKey(ss *session, st *storyState) string {
+	return baselineKey(contentKey(ss.repo, o.changedFiles(ss, st.started)), ss.checks)
 }

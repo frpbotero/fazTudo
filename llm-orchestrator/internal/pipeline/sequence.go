@@ -367,10 +367,11 @@ func (o *Orchestrator) newStoryContext(si int, opts StartOptions, ss *session) s
 	sc := storyContext{
 		Preamble: opts.Preamble, Story: opts.Stories[si], Position: si + 1, Total: len(opts.Stories),
 		Rules: ss.rules(), Instructions: ss.instructions,
-		Audit:       ss.policy.StageDisabled("arch"),
-		AuditNotice: o.texts.auditNotice,
-		Profiles:    slices.Clone(ss.policy.Profiles),
-		Overrides:   o.overrides(),
+		Audit:         ss.policy.StageDisabled("arch"),
+		AuditNotice:   o.texts.auditNotice,
+		Profiles:      slices.Clone(ss.policy.Profiles),
+		ArtifactBytes: ss.policy.ContextBytes,
+		Overrides:     o.overrides(),
 	}
 	o.mu.RLock()
 	defer o.mu.RUnlock()

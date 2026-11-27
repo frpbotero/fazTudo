@@ -45,7 +45,7 @@ func (o *Orchestrator) runLenses(ctx context.Context, ss *session, st *storyStat
 			req := provider.Request{
 				Role:     stage.Role + " · " + l.Title,
 				System:   stage.System,
-				Prompt:   buildPrompt(lensStage(stage, l), st.sc, ss.report, previous) + lensFocus(l),
+				Prompt:   buildPrompt(lensStage(stage, l), o.stageContext(ss, st, stage), ss.report, previous) + lensFocus(l),
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,

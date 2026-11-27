@@ -745,8 +745,10 @@ type storyState struct {
 	planText   string
 	reqs       []quality.Requirement
 	verifiedAt time.Time // when a verifier last approved the repository
-	blocked    string    // Passo 0 reason when the story cannot be developed yet
-	pending    int       // issues a gate could not get fixed within its rounds
+	// verifiedKey is what the approved repository held (content and commands).
+	verifiedKey string
+	blocked     string // Passo 0 reason when the story cannot be developed yet
+	pending     int    // issues a gate could not get fixed within its rounds
 	// inconclusive counts gates that never produced a valid verdict.
 	inconclusive int
 	// risk is what the policy's risk rules found so far; it only grows.
@@ -1212,7 +1214,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			resp, ok = o.runStage(ctx, ref, provider.Request{
 				Role:     stage.Role,
 				System:   stage.System,
-				Prompt:   buildPrompt(stage, o.stageContext(st, stage), ss.report, o.stepsBefore(ref)),
+				Prompt:   buildPrompt(stage, o.stageContext(ss, st, stage), ss.report, o.stepsBefore(ref)),
 				Tier:     stage.Tier,
 				WorkDir:  ss.repo,
 				ReadOnly: stage.ReadOnly,
@@ -1247,7 +1249,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 				resp, ok := o.runStage(ctx, ref, provider.Request{
 					Role:     stage.Role,
 					System:   stage.System,
-					Prompt:   buildVerifyPrompt(o.texts.verifyTask, stage, o.stageContext(st, stage), ss.report, issues, fixes, round),
+					Prompt:   buildVerifyPrompt(o.texts.verifyTask, stage, o.stageContext(ss, st, stage), ss.report, issues, fixes, round),
 					Tier:     stage.Tier,
 					WorkDir:  ss.repo,
 					ReadOnly: stage.ReadOnly,
@@ -1268,8 +1270,11 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 
 // stageContext is the story's context as stage reads it: the functional QA
 // also gets the executed evidence.
-func (o *Orchestrator) stageContext(st *storyState, stage Stage) storyContext {
+func (o *Orchestrator) stageContext(ss *session, st *storyState, stage Stage) storyContext {
 	sc := st.sc
+	if stage.Gate && !ss.dry {
+		sc.Changed = o.changedFiles(ss, st.started)
+	}
 	switch {
 	case stage.Acceptor:
 		sc.Evidence = o.acceptanceEvidence(st)

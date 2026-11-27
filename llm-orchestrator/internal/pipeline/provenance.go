@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/skills"
@@ -60,6 +61,10 @@ type CallRecord struct {
 	MaxTurns  int        `json:"max_turns,omitempty"`
 	Provider  string     `json:"provider,omitempty"`
 	Model     string     `json:"model,omitempty"`
+	// PromptBytes is the prompt's size; Truncated counts the artifacts cut
+	// to fit the context budget.
+	PromptBytes int `json:"prompt_bytes"`
+	Truncated   int `json:"truncated,omitempty"`
 }
 
 // SkillRef is a playbook as a call read it: its bundled version and, when
@@ -87,6 +92,7 @@ func callRecord(req provider.Request, resp *provider.Response, overrides map[str
 	if req.System != "" {
 		r.SystemSHA = sha(req.System)
 	}
+	r.PromptBytes, r.Truncated = len(req.Prompt), strings.Count(req.Prompt, truncationMark)
 	if resp != nil {
 		r.Provider, r.Model = resp.Name, resp.Model
 	}

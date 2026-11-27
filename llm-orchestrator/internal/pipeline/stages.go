@@ -512,6 +512,32 @@ const auditNotice = "## Modo auditoria\n\nEsta US já foi desenvolvida: não há
 // maxArtifactBytes caps how much of each previous stage's output is forwarded.
 const maxArtifactBytes = 4_000
 
+// maxChangedListed bounds the changed files a gate's prompt lists.
+const maxChangedListed = 60
+
+func (sc storyContext) artifactBytes() int {
+	if sc.ArtifactBytes > 0 {
+		return sc.ArtifactBytes
+	}
+	return maxArtifactBytes
+}
+
+// writeChanged points a gate at what the story changed. A longer list is
+// cut and says so: the gate still reviews the whole change.
+func writeChanged(b *strings.Builder, files []string) {
+	if len(files) == 0 {
+		return
+	}
+	b.WriteString("## Arquivos alterados nesta US\n\n")
+	for _, f := range files[:min(len(files), maxChangedListed)] {
+		fmt.Fprintf(b, "- `%s`\n", f)
+	}
+	if len(files) > maxChangedListed {
+		fmt.Fprintf(b, "- … e mais %d (lista truncada; revise a mudança inteira)\n", len(files)-maxChangedListed)
+	}
+	b.WriteString("\n")
+}
+
 // maxPreambleBytes caps how much document context is forwarded to stages.
 const maxPreambleBytes = 2_000
 
@@ -573,6 +599,11 @@ type storyContext struct {
 	AuditNotice string
 	// Evidence is what the runner proved, given to the functional QA only.
 	Evidence string
+	// ArtifactBytes caps each earlier stage's output forwarded in the
+	// prompt; 0 is maxArtifactBytes. Changed are the files the story changed
+	// so far, given to the gates so they look where the change is.
+	ArtifactBytes int
+	Changed       []string
 	// Profiles are the stack profiles the repository chose; Overrides the
 	// project's own complements to bundled skills.
 	Profiles  []string
@@ -636,9 +667,10 @@ func buildPrompt(stage Stage, sc storyContext, discovery *workspace.Report, prev
 	if previous = stageInputs(stage, previous); len(previous) > 0 {
 		b.WriteString("## Etapas anteriores\n\n")
 		for _, s := range previous {
-			fmt.Fprintf(&b, "### %s (%s)\n\n%s\n\n", s.Title, s.Role, clip(strings.TrimSpace(s.Output), maxArtifactBytes))
+			fmt.Fprintf(&b, "### %s (%s)\n\n%s\n\n", s.Title, s.Role, clip(strings.TrimSpace(s.Output), sc.artifactBytes()))
 		}
 	}
+	writeChanged(&b, sc.Changed)
 	b.WriteString(sc.Evidence)
 	writeSkillsFor(&b, stage.Skills, sc)
 	b.WriteString("## Sua tarefa\n\n")
@@ -834,7 +866,7 @@ func buildFixPrompt(task string, gate Stage, sc storyContext, discovery *workspa
 		fmt.Fprintf(&b, "## Plano do arquiteto\n\n%s\n\n", clip(plan, maxArtifactBytes))
 	}
 	if report = strings.TrimSpace(stripJSONBlocks(report)); report != "" {
-		fmt.Fprintf(&b, "## Relatório de %s (rodada %d)\n\n%s\n\n", gate.Title, round, clip(report, maxArtifactBytes))
+		fmt.Fprintf(&b, "## Relatório de %s (rodada %d)\n\n%s\n\n", gate.Title, round, clip(report, sc.artifactBytes()))
 	}
 	writeSkillsFor(&b, fixSkills, sc)
 	if brief != "" {
@@ -858,8 +890,9 @@ func buildVerifyPrompt(task string, gate Stage, sc storyContext, discovery *work
 	writeIssues(&b, issues)
 	b.WriteString("\n## Correções aplicadas\n\n")
 	for _, f := range fixes {
-		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), maxArtifactBytes))
+		fmt.Fprintf(&b, "### %s\n\n%s\n\n", f.Title, clip(strings.TrimSpace(f.Output), sc.artifactBytes()))
 	}
+	writeChanged(&b, sc.Changed)
 	b.WriteString(sc.Evidence)
 	writeSkillsFor(&b, gate.Skills, sc)
 	fmt.Fprintf(&b, "## Sua tarefa\n\nVerificação, rodada %d: %s %s", round, task, gate.Task)
@@ -886,5 +919,8 @@ func clip(s string, n int) string {
 	for n > 0 && !utf8.RuneStart(s[n]) {
 		n--
 	}
-	return s[:n] + "\n\n[… conteúdo truncado]"
+	return s[:n] + "\n\n" + truncationMark
 }
+
+// truncationMark ends an artifact cut to fit the context budget.
+const truncationMark = "[… conteúdo truncado]"
