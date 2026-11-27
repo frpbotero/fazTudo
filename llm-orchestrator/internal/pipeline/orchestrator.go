@@ -113,6 +113,8 @@ type Step struct {
 	Calls []CallRecord `json:"calls,omitempty"`
 	// QueueMS is how long the step's agent calls waited for a slot.
 	QueueMS int64 `json:"queue_ms,omitempty"`
+	// FailureClass is what a failed or unsettled step ran into (Failure*).
+	FailureClass string `json:"failure_class,omitempty"`
 	// Advisory are a review's style remarks: reported, not demanded.
 	Advisory   []Issue    `json:"advisory,omitempty"`
 	Error      string     `json:"error,omitempty"`
@@ -221,10 +223,12 @@ type Run struct {
 	// ResumeChecks are why the last resume redid what it redid.
 	ResumeChecks []Invalidation `json:"resume_checks,omitempty"`
 	// Delivery is where the run's delivery package was written.
-	Delivery *Delivery  `json:"delivery,omitempty"`
-	Stories  []StoryRun `json:"stories"`
-	Current  int        `json:"current"` // index into Stories; -1 while discovering
-	Logs     []LogEntry `json:"logs"`
+	Delivery *Delivery `json:"delivery,omitempty"`
+	// Usage is what the run spent, as observed.
+	Usage   *RunUsage  `json:"usage,omitempty"`
+	Stories []StoryRun `json:"stories"`
+	Current int        `json:"current"` // index into Stories; -1 while discovering
+	Logs    []LogEntry `json:"logs"`
 	// Bases are the branches each repository started from (keyed "." and by
 	// nested path); every wave is merged into them before the next begins.
 	Bases map[string]string `json:"bases,omitempty"`
@@ -1699,6 +1703,11 @@ func (o *Orchestrator) settleGate(st *storyState, stepID string, gate Stage, iss
 		s.Error = msg + ". Pendências registradas; o pipeline segue."
 	})
 	o.setValidation(st, gate, ValidationFailed)
+	class := FailureBehavior
+	if len(issues) > 0 && !slices.ContainsFunc(issues, func(is Issue) bool { return !is.Infra }) {
+		class = FailureInfra // every issue is a time-out or another machine problem
+	}
+	o.updateStep(stepRef{st.si, stepID}, func(s *Step) { s.FailureClass = class })
 	st.pending += len(issues)
 	o.logf(LevelWarn, "%s: %s. Seguindo com as pendências registradas.", gate.Title, msg)
 	return true
@@ -1744,6 +1753,7 @@ func (o *Orchestrator) inconclusiveGate(st *storyState, stepID string, gate Stag
 	o.updateStep(stepRef{st.si, stepID}, func(s *Step) {
 		s.Status = StepWarning
 		s.Error = msg
+		s.FailureClass = FailureFormat
 	})
 	o.setValidation(st, gate, ValidationInconclusive)
 	st.inconclusive++
@@ -1970,10 +1980,14 @@ func (o *Orchestrator) executeRetrying(ctx context.Context, ref stepRef, req pro
 		if errors.Is(err, provider.ErrTurnLimit) {
 			return o.turnLimited(ref, req, resp, err)
 		}
-		if err == nil || ctx.Err() != nil || attempt >= o.attempts {
+		if err == nil || ctx.Err() != nil || attempt >= o.attempts || !retryable(err) {
 			return resp, err
 		}
-		wait := o.retryDelay * time.Duration(attempt)
+		wait, ok := o.mayRetry(o.ws.Policy(), attempt)
+		if !ok {
+			o.logf(LevelWarn, "%s falhou e o orçamento de tentativas acabou.", o.stepTitle(ref))
+			return resp, err
+		}
 		o.logf(LevelWarn, "%s falhou (tentativa %d de %d): %s. Nova tentativa em %s.",
 			o.stepTitle(ref), attempt, o.attempts, clipRunes(err.Error(), 300), wait)
 		o.updateStep(ref, func(s *Step) { s.Note = fmt.Sprintf("Tentativa %d de %d", attempt+1, o.attempts) })
@@ -2025,6 +2039,7 @@ func (o *Orchestrator) failStep(ref stepRef, elapsed time.Duration, err error) {
 	o.updateStep(ref, func(s *Step) {
 		s.Status = StepFailed
 		s.Error = err.Error()
+		s.FailureClass = classifyFailure(err)
 		if elapsed > 0 {
 			s.DurationMS = elapsed.Milliseconds()
 		}

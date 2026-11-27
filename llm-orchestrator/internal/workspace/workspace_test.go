@@ -402,3 +402,24 @@ func TestPolicyParallelAgentsAndResources(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyBudgetAndPrices(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	p.Budget = Budget{MaxMinutes: 60, MaxCalls: 200, MaxTokens: 5_000_000, MaxRetries: 10, MaxRetryWaitS: 30}
+	p.Prices = map[string]Price{"claude-sonnet": {Input: 3, Output: 15}}
+	if _, err := m.SetPolicy(p); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []func(*Policy){
+		func(p *Policy) { p.Budget.MaxCalls = -1 },
+		func(p *Policy) { p.Prices = map[string]Price{"": {Input: 1}} },
+		func(p *Policy) { p.Prices = map[string]Price{"m": {Output: -1}} },
+	} {
+		q := p
+		bad(&q)
+		if _, err := m.SetPolicy(q); err == nil {
+			t.Errorf("%+v accepted", q.Budget)
+		}
+	}
+}

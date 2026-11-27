@@ -200,6 +200,22 @@ worktrees. *Sequencial*: sem análise de dependências; uma US de cada vez, na o
 os agentes de cada US um após o outro. Nos dois modos cada US/onda é mergeada na branch base antes da
 seguinte.
 
+**Orçamento** (`budget` na política). `max_minutes`, `max_calls` e `max_tokens` são conferidos antes de
+cada chamada de agente: atingido um deles, nenhuma chamada nova começa, a etapa para com a classe
+`orçamento`, o trabalho feito fica salvo e a execução pode continuar depois de aumentar o limite. Os
+tokens são os que os CLIs informam ao fim de cada chamada, então uma chamada pode passar do limite:
+nenhum CLI aceita um teto rígido no meio da chamada. `max_retries` limita as novas tentativas de
+chamadas que falharam na execução inteira, e `max_retry_wait_s` limita a espera antes de cada uma.
+Orçamento esgotado ou falta de provider não são retentados.
+
+**Custo.** O custo informado pelo CLI é *observado*. Chamada que informa tokens sem custo é *estimada*
+pela tabela `prices` da política (US$ por milhão de tokens por modelo, por nome exato ou prefixo, com
+`prices_version` registrado), se houver preço. Sem preço, o custo é *desconhecido*. O painel e
+`usage` mostram os três separados, e o FazTudo não traz preço embutido. Cada etapa que falha ou fica
+pendente recebe uma classe: `orçamento`, `provider`, `infraestrutura`, `formato`, `comportamento`
+ou `cancelada`. Best-of-N continua opcional (`candidates`, padrão 1); só vale ligar quando a avaliação
+mostrar ganho, porque multiplica o consumo.
+
 **Limites de paralelismo.** Todas as chamadas de agente de uma execução passam por uma fila única com
 `max_parallel_agents` vagas (padrão 4): US paralelas, frentes, revisores e candidatos dividem o mesmo
 limite em vez de se multiplicar. A fila atende por ordem de chegada, então nenhuma chamada espera para

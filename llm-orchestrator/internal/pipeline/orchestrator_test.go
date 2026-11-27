@@ -28,6 +28,7 @@ type fakeExecutor struct {
 	onCall  func(req provider.Request)        // side effects in the repository, like a real agent
 	failIf  func(req provider.Request) bool   // fails the call after its side effects
 	answer  func(req provider.Request) string // when it returns text, that is the output
+	usage   *provider.Usage                   // reported by every call when set
 }
 
 func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf provider.Logf) (*provider.Response, error) {
@@ -68,7 +69,12 @@ func (f *fakeExecutor) Execute(ctx context.Context, req provider.Request, logf p
 		}
 	}
 	f.mu.Unlock()
-	return &provider.Response{Output: out, Name: "Fake", Model: "m1"}, nil
+	var usage *provider.Usage
+	if f.usage != nil {
+		u := *f.usage
+		usage = &u
+	}
+	return &provider.Response{Output: out, Name: "Fake", Model: "m1", Usage: usage}, nil
 }
 
 func (f *fakeExecutor) SetDryRun(v bool) { f.dry = v }
