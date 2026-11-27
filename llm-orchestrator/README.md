@@ -260,12 +260,13 @@ achados viram pendências) e `custom` (`disabled_stages`). Etapas desligadas apa
 
 **QA funcional** (`acceptance`, depois do E2E; desligado só no `fast`). Só leitura, julga cada critério
 e cenário do plano, inclusive os negativos, pelos critérios originais da US. Recebe do orquestrador a
-evidência executada (status de cada caso da especificação, casos do relatório, reprodução do bug) e a
-interpreta, sem substituí-la:
+evidência executada (status de cada caso da especificação, casos do relatório, como terminou cada comando
+do projeto na última verificação, reprodução do bug) e a interpreta, sem substituí-la:
 
 - cenário **aceito** precisa citar o ID de um caso **comprovado** por execução (ou o nome do caso
   executado, que vale pelo próprio resultado); inspeção precisa de
-  `arquivo:linha`, e o QA fica como responsável;
+  `arquivo:linha`, e o QA fica como responsável; cenário que só o resultado de um comando do projeto
+  prova ("os testes e o lint passam") cita o comando, e vale o que ele deu na última verificação;
 - caso citado que falhou torna o cenário **recusado**, que volta para o implementador mesmo que o QA
   tenha aprovado;
 - cada cenário do plano tem um ID (`AC-1`, `AC-2`, …) dado pelo orquestrador, e o QA responde por ele:
@@ -519,6 +520,10 @@ branch candidata e abre um pull request com a evidência, e a US fica *Aguardand
 - Depois do merge ou do fechamento no host, **Reconciliar integração** (ou `faztudo reconcile`) lê o
   resultado: PR mergeado conta a US como *integrada*, com o commit do merge; fechado sem merge, como
   *fora da base*, com a branch preservada. A base local não muda: traga o merge com o seu `git pull`.
+  O pacote de entrega é regravado com o resultado.
+- As US que esperavam o PR mergeado aparecem para **continuar** e recomeçam do Passo 0. Só começam
+  quando a base local já tem o commit avaliado do PR: sem o `git pull`, ficam paradas dizendo isso, e
+  continuar de novo depois do pull as desenvolve.
 
 GitHub (inclusive Enterprise) usa o `gh` autenticado na máquina, sem shell e com a descrição passada
 por arquivo; o FazTudo não vê token. Bitbucket é a subentrega FT-020b (Cloud e Server diferem; o

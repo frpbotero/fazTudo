@@ -280,3 +280,37 @@ func TestQAIsAskedOnlyForTheScenariosItLeftOut(t *testing.T) {
 		t.Errorf("the recovery is a step of its own: %+v", st.Steps)
 	}
 }
+
+func TestQASeesWhichCommandsRanAndHowTheyEnded(t *testing.T) {
+	run := StoryRun{Steps: []Step{{ID: "checks", Checks: []quality.Result{
+		{Name: "go", Command: "go test -json ./...", Passed: true, DurationMS: 800},
+		{Name: "lint", Command: "go vet ./...", Passed: false, ExitCode: 1, DurationMS: 120},
+	}}}}
+	got := executedEvidence(run)
+	for _, want := range []string{"Comandos do projeto na última verificação", "`go vet ./...` (lint): falhou (código 1)", "`go test -json ./...` (go): passou"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("evidence lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestScenarioProvenByAProjectCommand(t *testing.T) {
+	checks := []quality.Result{
+		{Name: "go", Command: "go test -json ./...", Passed: true},
+		{Name: "lint", Command: "go vet ./...", Passed: false, ExitCode: 1},
+	}
+	judge := func(s ScenarioResult) ScenarioResult { return checkScenarioWith(s, nil, checks) }
+	if got := judge(ScenarioResult{Criterion: "c", Method: "comando", Status: "aceito", Commands: []string{"go test -json ./..."}}); got.Status != ScenarioAccepted || got.Responsible == "" {
+		t.Errorf("a passed command proves it: %+v", got)
+	}
+	// QA wrote "inspeção" but cited the commands: the commands decide.
+	if got := judge(ScenarioResult{Criterion: "c", Method: "inspeção", Status: "aceito", Commands: []string{"`go`", "lint"}}); got.Status != ScenarioRejected {
+		t.Errorf("a failed command rejects it: %+v", got)
+	}
+	if got := judge(ScenarioResult{Criterion: "c", Method: "comando", Status: "aceito", Commands: []string{"npm test"}}); got.Status != ScenarioNoEvidence {
+		t.Errorf("a command that never ran proves nothing: %+v", got)
+	}
+	if got := judge(ScenarioResult{Criterion: "c", Method: "comando", Status: "aceito"}); got.Status != ScenarioNoEvidence {
+		t.Errorf("a command scenario must cite one: %+v", got)
+	}
+}

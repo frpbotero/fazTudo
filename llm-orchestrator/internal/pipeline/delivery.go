@@ -273,7 +273,7 @@ func renderStoryDelivery(run Run, st StoryRun) string {
 			case a.Extra:
 				label += " (fora do plano)"
 			}
-			fmt.Fprintf(&b, "- **%s** %s: %s — %s\n", a.Status, label, a.Scenario, joinNonEmpty(strings.Join(a.Tests, ", "), " ", a.Evidence))
+			fmt.Fprintf(&b, "- **%s** %s: %s — %s\n", a.Status, label, a.Scenario, joinNonEmpty(strings.Join(slices.Concat(a.Tests, a.Commands), ", "), " ", a.Evidence))
 		}
 	}
 	if r := st.Reproduction; r != nil {

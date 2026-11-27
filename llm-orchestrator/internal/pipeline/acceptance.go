@@ -25,8 +25,11 @@ type ScenarioResult struct {
 	Status    string `json:"status"` // Scenario* statuses
 	// Evidence is what QA cited, with sensitive data redacted; Tests are the
 	// test IDs it named, and Artifacts the runner's files for their cases.
-	Evidence  string   `json:"evidence,omitempty"`
-	Tests     []string `json:"tests,omitempty"`
+	Evidence string   `json:"evidence,omitempty"`
+	Tests    []string `json:"tests,omitempty"`
+	// Commands are the project commands QA cited for a scenario that only
+	// their result proves, such as "the tests and the linter pass".
+	Commands  []string `json:"commands,omitempty"`
 	Artifacts []string `json:"artifacts,omitempty"`
 	// Responsible is who vouches for a scenario only inspection can check.
 	Responsible string `json:"responsible,omitempty"`
@@ -47,16 +50,20 @@ const (
 // inspectionResponsible vouches for scenarios checked by reading, not running.
 const inspectionResponsible = "QA funcional (inspeção do código)"
 
+// commandResponsible vouches for scenarios the project commands prove.
+const commandResponsible = "verificação executável do orquestrador"
+
 const acceptanceInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"status\": \"approved\" | \"changes_requested\", \"issues\": [{\"agent\": \"frontend\" | \"backend\", \"severity\": \"alta\" | \"média\" | \"baixa\", " +
 	"\"description\": \"problema e correção\", \"location\": \"arquivo:linha\"}], " +
 	"\"scenarios\": [{\"id\": \"AC-n do plano\", \"criterion\": \"critério da US\", \"scenario\": \"dado/quando/então\", \"method\": \"teste unitário | integração | e2e | inspeção\", " +
 	"\"negative\": false, \"status\": \"aceito\" | \"recusado\" | \"sem evidência\", \"tests\": [\"ID do caso executado\"], " +
-	"\"evidence\": \"caso executado, comando ou arquivo:linha\"}]}\n```\n" +
+	"\"commands\": [\"comando do projeto\"], \"evidence\": \"caso executado, comando ou arquivo:linha\"}]}\n```\n" +
 	"Um item em scenarios por cenário de aceitação, inclusive os negativos, com o id do cenário do plano (AC-n); " +
 	"cenário que você acrescentar fora do plano vai sem id. aceito só com evidência: " +
-	"cenário testado cita em tests o ID de um caso comprovado por execução; inspeção cita arquivo:linha. " +
-	"Sem evidência, diga sem evidência; não deduza da descrição da implementação. " +
+	"cenário testado cita em tests o ID de um caso comprovado por execução; inspeção cita arquivo:linha; " +
+	"cenário que só o resultado de um comando do projeto prova (\"os testes passam\") usa method comando e cita em commands " +
+	"os comandos da última verificação. Sem evidência, diga sem evidência; não deduza da descrição da implementação. " +
 	"Cenário recusado vira issue com o agente que corrige."
 
 // acceptanceEvidence is what the runner proved, for QA to interpret: the
@@ -98,6 +105,12 @@ func executedEvidence(run StoryRun) string {
 		}
 		b.WriteString("\n")
 	}
+	if checks := lastChecks(run.Steps); len(checks) > 0 {
+		b.WriteString("\nComandos do projeto na última verificação:\n")
+		for _, c := range checks {
+			fmt.Fprintf(&b, "- `%s` (%s): %s\n", c.Command, c.Name, checkOutcome(c))
+		}
+	}
 	if r := run.Reproduction; r != nil {
 		fmt.Fprintf(&b, "\nReprodução do bug: %s. %s\n", r.Status, r.Detail)
 	}
@@ -109,10 +122,11 @@ func executedEvidence(run StoryRun) string {
 // for the planned scenarios it left out.
 const missingScenariosInstructions = "\n\nResposta: só o bloco ```json:\n" +
 	"```json\n{\"scenarios\": [{\"id\": \"AC-n\", \"criterion\": \"critério da US\", \"scenario\": \"dado/quando/então\", " +
-	"\"method\": \"teste unitário | integração | e2e | inspeção\", \"negative\": false, \"status\": \"aceito\" | \"recusado\" | \"sem evidência\", " +
-	"\"tests\": [\"ID do caso executado\"], \"evidence\": \"caso executado, comando ou arquivo:linha\"}]}\n```\n" +
+	"\"method\": \"teste unitário | integração | e2e | inspeção | comando\", \"negative\": false, \"status\": \"aceito\" | \"recusado\" | \"sem evidência\", " +
+	"\"tests\": [\"ID do caso executado\"], \"commands\": [\"comando do projeto\"], \"evidence\": \"caso executado, comando ou arquivo:linha\"}]}\n```\n" +
 	"Um item por cenário listado, com o id dele. aceito só com evidência: cenário testado cita em tests o ID de um caso " +
-	"comprovado por execução; inspeção cita arquivo:linha. Sem evidência, diga sem evidência."
+	"comprovado por execução; inspeção cita arquivo:linha; comando cita em commands os comandos da última verificação. " +
+	"Sem evidência, diga sem evidência."
 
 // buildMissingScenariosPrompt asks QA, read-only, only for the planned
 // scenarios its last answer left out, with the same executed evidence.
@@ -172,6 +186,17 @@ func (o *Orchestrator) recoverScenarios(ctx context.Context, ss *session, st *st
 	return ev, id, true
 }
 
+// checkOutcome is how a command ended, as QA reads it.
+func checkOutcome(c quality.Result) string {
+	switch {
+	case c.TimedOut:
+		return "excedeu o tempo"
+	case c.Passed:
+		return fmt.Sprintf("passou em %s", time.Duration(c.DurationMS)*time.Millisecond)
+	}
+	return fmt.Sprintf("falhou (código %d)", c.ExitCode)
+}
+
 // describeScenario is a planned scenario as QA reads it, ID first.
 func describeScenario(a AcceptanceScenario) string {
 	neg := ""
@@ -208,14 +233,15 @@ func qaScenarios(report string) []ScenarioResult {
 // one with an ID the plan lacks is extra. Every planned scenario QA left out
 // has no evidence and is listed in ev.missing, to be asked for again.
 func (o *Orchestrator) judgeScenarios(ss *session, st *storyState, ev evaluation) evaluation {
-	traces := o.storyRun(st.si).Trace
+	run := o.storyRun(st.si)
+	traces, checks := run.Trace, lastChecks(run.Steps)
 	planned := st.plan.Acceptance
 	results := make([]ScenarioResult, 0, len(ev.scenarios)+len(planned))
 	for _, s := range ev.scenarios {
 		if s.Criterion = strings.TrimSpace(s.Criterion); s.Criterion == "" {
 			continue
 		}
-		r := checkScenario(s, traces)
+		r := checkScenarioWith(s, traces, checks)
 		r.ID = strings.ToUpper(strings.TrimSpace(s.ID))
 		if r.ID != "" && !slices.ContainsFunc(planned, func(a AcceptanceScenario) bool { return a.ID == r.ID }) {
 			r.ID, r.Extra = "", true
@@ -277,6 +303,12 @@ func (o *Orchestrator) judgeScenarios(ss *session, st *storyState, ev evaluation
 // checkScenario holds one scenario to what ran. The model's status stands
 // only when the evidence agrees with it.
 func checkScenario(s ScenarioResult, traces []quality.Trace) ScenarioResult {
+	return checkScenarioWith(s, traces, nil)
+}
+
+// checkScenarioWith also holds a scenario QA proved by the project commands
+// to how they ended in the last verification (checks).
+func checkScenarioWith(s ScenarioResult, traces []quality.Trace, checks []quality.Result) ScenarioResult {
 	s.Scenario, s.Method = strings.TrimSpace(s.Scenario), strings.TrimSpace(s.Method)
 	s.Evidence = redact(strings.TrimSpace(s.Evidence))
 	s.Criterion, s.Scenario = redact(s.Criterion), redact(s.Scenario)
@@ -293,6 +325,9 @@ func checkScenario(s ScenarioResult, traces []quality.Trace) ScenarioResult {
 	s.Status = status
 	if status != ScenarioAccepted {
 		return s
+	}
+	if len(s.Commands) > 0 || isCommandMethod(s.Method) {
+		return judgeByCommands(s, checks)
 	}
 	if isInspection(s.Method) {
 		if !reLocation.MatchString(s.Evidence) {
@@ -358,6 +393,41 @@ var reEnumeration = regexp.MustCompile(`^\s*\d{1,3}[.)]\s+`)
 func sameCriterionText(a, b string) bool {
 	strip := func(s string) string { return normalizeQuestion(reEnumeration.ReplaceAllString(s, "")) }
 	return strip(a) == strip(b)
+}
+
+// judgeByCommands accepts a scenario only when every command it cites ran in
+// the last verification and passed; one that failed rejects it.
+func judgeByCommands(s ScenarioResult, checks []quality.Result) ScenarioResult {
+	var cited []string
+	for _, c := range s.Commands {
+		if c = strings.Trim(strings.TrimSpace(c), "`"); c != "" {
+			cited = append(cited, c)
+		}
+	}
+	s.Commands = cited
+	if len(cited) == 0 {
+		s.Status, s.Note = ScenarioNoEvidence, "cenário por comando sem comando citado"
+		return s
+	}
+	for _, c := range cited {
+		i := slices.IndexFunc(checks, func(r quality.Result) bool {
+			return strings.EqualFold(r.Name, c) || strings.EqualFold(strings.TrimSpace(r.Command), c)
+		})
+		switch {
+		case i < 0:
+			s.Status, s.Note = ScenarioNoEvidence, "o comando "+c+" não rodou na última verificação"
+			return s
+		case !checks[i].Passed:
+			s.Status, s.Note = ScenarioRejected, "o comando "+c+" falhou na última verificação"
+			return s
+		}
+	}
+	s.Responsible = commandResponsible
+	return s
+}
+
+func isCommandMethod(method string) bool {
+	return strings.Contains(strings.ToLower(method), "comando")
 }
 
 func isInspection(method string) bool {
