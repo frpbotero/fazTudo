@@ -139,6 +139,54 @@ type Result struct {
 	UnknownCost   int     `json:"unknown_cost,omitempty"`
 	// Ranked tells the result has the minimum evidence to be compared.
 	Ranked bool `json:"ranked"`
+	// Kind is the task's pilot label; ReviewMinutes and ReworkMinutes are
+	// what reviewers logged by hand in review.json, after the run.
+	Kind          string `json:"kind,omitempty"`
+	ReviewMinutes int    `json:"review_minutes,omitempty"`
+	ReworkMinutes int    `json:"rework_minutes,omitempty"`
+}
+
+// Review is the time a reviewer logged for one result, in review.json next
+// to results.json: keyed by "task__arm" (and "__N" for a repetition).
+type Review struct {
+	Minutes       int    `json:"minutes"`
+	ReworkMinutes int    `json:"rework_minutes,omitempty"`
+	Note          string `json:"note,omitempty"`
+}
+
+// resultKey names a result as its workdir does.
+func resultKey(r Result) string {
+	k := r.Task + "__" + r.Arm
+	if r.Repetition > 0 {
+		k += fmt.Sprintf("__%d", r.Repetition)
+	}
+	return k
+}
+
+// Rereport renders dir's report again from results.json and the reviewers'
+// review.json, if any: what people logged joins what was measured.
+func Rereport(dir string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "results.json"))
+	if err != nil {
+		return "", err
+	}
+	var results []Result
+	if err := json.Unmarshal(data, &results); err != nil {
+		return "", fmt.Errorf("results.json: %w", err)
+	}
+	reviews := map[string]Review{}
+	if data, err := os.ReadFile(filepath.Join(dir, "review.json")); err == nil {
+		if err := json.Unmarshal(data, &reviews); err != nil {
+			return "", fmt.Errorf("review.json: %w", err)
+		}
+	}
+	for i := range results {
+		if rv, ok := reviews[resultKey(results[i])]; ok {
+			results[i].ReviewMinutes, results[i].ReworkMinutes = rv.Minutes, rv.ReworkMinutes
+		}
+	}
+	report := Report(results)
+	return report, os.WriteFile(filepath.Join(dir, "report.md"), []byte(report), 0o644)
 }
 
 const defaultTimeout = 90 * time.Minute
@@ -257,7 +305,7 @@ func Run(ctx context.Context, s Suite, router *provider.Router, logger *slog.Log
 }
 
 func runOne(ctx context.Context, s Suite, task Task, arm Arm, router *provider.Router, dir string, logger *slog.Logger) Result {
-	res := Result{Task: task.Name, Arm: arm.Name, Workdir: dir, Outcome: "error"}
+	res := Result{Task: task.Name, Arm: arm.Name, Workdir: dir, Outcome: "error", Kind: task.Kind}
 	fail := func(err error) Result {
 		res.Error = err.Error()
 		return res
@@ -647,6 +695,7 @@ func Report(results []Result) string {
 				(time.Duration(r.DurationS) * time.Second).String(), cmp.Or(strings.Join(r.NotEvaluated, ", "), "—"))
 		}
 	}
+	writePilot(&b, results)
 	b.WriteString("\n## Limitações\n\nTempo de revisão humana e retrabalho entram por registro manual. " +
 		"Custo desconhecido não é zero. Uma suíte pequena não justifica mudar padrões: novos defaults exigem que nenhum critério obrigatório regrida.\n")
 	return b.String()
@@ -750,4 +799,48 @@ func copyTree(src, dst string, share bool) error {
 		}
 		return out.Close()
 	})
+}
+
+// writePilot compares the arms per kind of task: accepted changes, wrongly
+// accepted failures, time, human review and consumption. Only ranked
+// results count; human time is what reviewers logged.
+func writePilot(b *strings.Builder, results []Result) {
+	type cell struct {
+		runs, accepted, wrong, review int
+		duration                      float64
+		tokens                        int64
+	}
+	cells := map[[2]string]*cell{}
+	var keys [][2]string
+	for _, r := range results {
+		if r.Kind == "" || !r.Ranked {
+			continue
+		}
+		k := [2]string{r.Kind, r.Arm}
+		c := cells[k]
+		if c == nil {
+			c = &cell{}
+			cells[k] = c
+			keys = append(keys, k)
+		}
+		c.runs++
+		if r.Accepted {
+			c.accepted++
+		}
+		if r.WronglyAccepted {
+			c.wrong++
+		}
+		c.review += r.ReviewMinutes + r.ReworkMinutes
+		c.duration += r.DurationS
+		c.tokens += r.Tokens
+	}
+	if len(keys) == 0 {
+		return
+	}
+	b.WriteString("\n## Piloto por tipo de tarefa\n\n| Tipo | Braço | N | Aceitas | Falhas aceitas | Duração média | Revisão humana (min) | Tokens |\n|---|---|---:|---:|---:|---:|---:|---:|\n")
+	for _, k := range keys {
+		c := cells[k]
+		fmt.Fprintf(b, "| %s | %s | %d | %d | %d | %s | %d | %d |\n", k[0], k[1], c.runs, c.accepted, c.wrong,
+			(time.Duration(c.duration/float64(c.runs)) * time.Second).String(), c.review, c.tokens)
+	}
 }

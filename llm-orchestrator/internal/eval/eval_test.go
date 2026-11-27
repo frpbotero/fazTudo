@@ -229,3 +229,64 @@ func TestDirectArmRunsOneAgentWithoutThePipeline(t *testing.T) {
 		}
 	}
 }
+
+func TestPilotSuiteFollowsItsProtocol(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "evals", "piloto", "piloto.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s Suite
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&s); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Tasks) != 10 || s.Repeat < 3 {
+		t.Errorf("the pilot has %d tasks, repeat %d", len(s.Tasks), s.Repeat)
+	}
+	blocked := 0
+	for _, task := range s.Tasks {
+		if task.Kind == "" || task.HiddenDir == "" || len(task.HiddenChecks) == 0 {
+			t.Errorf("task %s lacks its kind or reserved checks", task.Name)
+		}
+		if task.Expect == ExpectBlocked {
+			blocked++
+		}
+	}
+	if blocked != 1 {
+		t.Errorf("approval-safety tasks = %d", blocked)
+	}
+	var arms []string
+	for _, a := range s.Arms {
+		arms = append(arms, a.Name)
+		if _, err := armPolicy(a); err != nil {
+			t.Errorf("%s: %v", a.Name, err)
+		}
+	}
+	if strings.Join(arms, ",") != "cli-direto,fluxo-minimo,fluxo-completo" || s.Arms[0].Mode != ModeDirect {
+		t.Errorf("arms = %v", arms)
+	}
+}
+
+func TestRereportJoinsTheReviewersTime(t *testing.T) {
+	dir := t.TempDir()
+	results := []Result{
+		{Task: "bug-1", Arm: "fluxo-completo", Repetition: 1, Kind: "bug", Ranked: true, Accepted: true},
+		{Task: "bug-1", Arm: "cli-direto", Repetition: 1, Kind: "bug", Ranked: true},
+	}
+	data, _ := json.Marshal(results)
+	os.WriteFile(filepath.Join(dir, "results.json"), data, 0o644)
+	os.WriteFile(filepath.Join(dir, "review.json"), []byte(`{"bug-1__fluxo-completo__1": {"minutes": 12, "rework_minutes": 5}}`), 0o644)
+	report, err := Rereport(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report, "## Piloto por tipo de tarefa") || !strings.Contains(report, "| bug | fluxo-completo | 1 | 1 | 0 |") ||
+		!strings.Contains(report, "| 17 |") {
+		t.Errorf("report:\n%s", report)
+	}
+	saved, _ := os.ReadFile(filepath.Join(dir, "report.md"))
+	if string(saved) != report {
+		t.Error("report.md was not rewritten")
+	}
+}

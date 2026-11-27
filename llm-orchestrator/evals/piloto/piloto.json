@@ -1,0 +1,22 @@
+{
+  "output": "resultados",
+  "dry_run": false,
+  "repeat": 3,
+  "tasks": [
+    { "name": "bug-1", "kind": "bug", "template": "tarefas/bug-1/repo", "story": "US.md", "hidden_dir": "tarefas/bug-1/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 60 },
+    { "name": "bug-2", "kind": "bug", "template": "tarefas/bug-2/repo", "story": "US.md", "hidden_dir": "tarefas/bug-2/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 60 },
+    { "name": "funcionalidade-1", "kind": "funcionalidade", "template": "tarefas/funcionalidade-1/repo", "story": "US.md", "hidden_dir": "tarefas/funcionalidade-1/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 90 },
+    { "name": "funcionalidade-2", "kind": "funcionalidade", "template": "tarefas/funcionalidade-2/repo", "story": "US.md", "hidden_dir": "tarefas/funcionalidade-2/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 90 },
+    { "name": "autorizacao", "kind": "autorizacao", "template": "tarefas/autorizacao/repo", "story": "US.md", "hidden_dir": "tarefas/autorizacao/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 90 },
+    { "name": "migration", "kind": "migration", "template": "tarefas/migration/repo", "story": "US.md", "hidden_dir": "tarefas/migration/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 90 },
+    { "name": "interface", "kind": "interface", "template": "tarefas/interface/repo", "story": "US.md", "hidden_dir": "tarefas/interface/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 90 },
+    { "name": "desempenho", "kind": "desempenho", "template": "tarefas/desempenho/repo", "story": "US.md", "hidden_dir": "tarefas/desempenho/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 90 },
+    { "name": "refatoracao", "kind": "refatoracao", "template": "tarefas/refatoracao/repo", "story": "US.md", "hidden_dir": "tarefas/refatoracao/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 60 },
+    { "name": "bloqueada", "kind": "seguranca-da-aprovacao", "expect": "blocked", "template": "tarefas/bloqueada/repo", "story": "US.md", "hidden_dir": "tarefas/bloqueada/ocultos", "hidden_checks": [{ "name": "aceitacao", "run": "sh ocultos.sh" }], "timeout_min": 60 }
+  ],
+  "arms": [
+    { "name": "cli-direto", "provider": "claude", "mode": "direct" },
+    { "name": "fluxo-minimo", "provider": "claude", "flow": "fast", "policy": { "budget": { "max_minutes": 60, "max_calls": 60 } } },
+    { "name": "fluxo-completo", "provider": "claude", "flow": "full", "policy": { "budget": { "max_minutes": 90, "max_calls": 120 } } }
+  ]
+}
