@@ -34,12 +34,12 @@ func TestParseCodexEvents(t *testing.T) {
 {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"parcial"}}
 {"type":"item.completed","item":{"id":"item_1","type":"command_execution","text":""}}
 {"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"final"}}
-{"type":"turn.completed","usage":{"input_tokens":18000,"cached_input_tokens":11000,"output_tokens":5,"reasoning_output_tokens":7}}`
+{"type":"turn.completed","usage":{"input_tokens":18000,"cached_input_tokens":11000,"output_tokens":50,"reasoning_output_tokens":7}}`
 	p, ok := parseCodex(out)
 	if !ok || p.Text != "final" {
 		t.Fatalf("parsed = %+v, %v", p, ok)
 	}
-	want := Usage{InputTokens: 18000, CachedTokens: 11000, OutputTokens: 5, ReasoningTokens: 7, Turns: 1}
+	want := Usage{InputTokens: 18000, CachedTokens: 11000, OutputTokens: 50, ReasoningTokens: 7, Turns: 1}
 	if *p.Usage != want {
 		t.Errorf("usage = %+v, want %+v", *p.Usage, want)
 	}
@@ -52,7 +52,8 @@ func TestParseGeminiOutput(t *testing.T) {
 	if !ok || p.Text != "pronto" {
 		t.Fatalf("parsed = %+v, %v", p, ok)
 	}
-	want := Usage{InputTokens: 900, CachedTokens: 300, OutputTokens: 40, ReasoningTokens: 12}
+	// Gemini reports thoughts apart from candidates; both are generated tokens.
+	want := Usage{InputTokens: 900, CachedTokens: 300, OutputTokens: 52, ReasoningTokens: 12}
 	if *p.Usage != want {
 		t.Errorf("usage = %+v, want %+v", *p.Usage, want)
 	}
@@ -129,5 +130,13 @@ func TestReadDirsAreReadableNotWritable(t *testing.T) {
 	}
 	if gemini := GeminiCLI.Args(inv); !containsSeq(gemini, "--include-directories", "/cache/skills") {
 		t.Errorf("gemini must read the skills dir: %v", gemini)
+	}
+}
+
+func TestTotalCountsCachedAndReasoningTokensOnce(t *testing.T) {
+	// Cached tokens are part of the input and reasoning tokens part of the output.
+	u := Usage{InputTokens: 1000, CachedTokens: 800, OutputTokens: 100, ReasoningTokens: 30}
+	if got := u.Total(); got != 1100 {
+		t.Errorf("total = %d, want 1100", got)
 	}
 }

@@ -231,5 +231,5 @@ func WriteUsageSummary(log io.Reader, w io.Writer) error {
 
 func writeUsageRow(w io.Writer, t *usageTotal) {
 	fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%.4f\t\n",
-		t.run, t.repo, t.calls, t.InputTokens, t.CachedTokens, t.OutputTokens+t.ReasoningTokens, t.CostUSD)
+		t.run, t.repo, t.calls, t.InputTokens, t.CachedTokens, t.OutputTokens, t.CostUSD)
 }

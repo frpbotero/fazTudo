@@ -1596,6 +1596,12 @@ Critérios de aceitação:
     paintSteps(stepsHtml(runSteps.map((step) => ({ step, isRunStep: true })), { run, si: -1 }));
   }
 
+  // Every token of a usage, each counted once: cached tokens are part of the
+  // input and reasoning tokens part of the output.
+  function totalTokens(u) {
+    return (u.input_tokens || 0) + (u.output_tokens || 0);
+  }
+
   // Where the story's time went, and the review time people logged by hand.
   function renderMetrics(st, si, run) {
     const steps = st.steps || [];
@@ -1604,7 +1610,7 @@ Critérios de aceitação:
     const fixes = steps.filter((s) => s.kind === 'fix').length;
     const verify = sum((s) => (s.checks?.length ? s.duration_ms : 0));
     const reviewed = (st.human_review || []).reduce((t, h) => t + h.minutes + (h.rework_minutes || 0), 0);
-    const tokens = st.usage ? (st.usage.input_tokens || 0) + (st.usage.cached_input_tokens || 0) + (st.usage.output_tokens || 0) + (st.usage.reasoning_tokens || 0) : 0;
+    const tokens = st.usage ? totalTokens(st.usage) : 0;
     const parts = [];
     if (queue) parts.push(`fila ${fmtDuration(queue)}`);
     if (verify) parts.push(`verificação ${fmtDuration(verify)}`);
@@ -1627,7 +1633,7 @@ Critérios de aceitação:
   // What the run spent: observed and estimated costs apart, unknown said so.
   function renderUsage(u) {
     if (!u?.calls) return '';
-    const tokens = (u.input_tokens || 0) + (u.cached_input_tokens || 0) + (u.output_tokens || 0) + (u.reasoning_tokens || 0);
+    const tokens = totalTokens(u);
     const parts = [`${u.calls} chamada(s)`, `${tokens.toLocaleString('pt-BR')} tokens informados`];
     if (u.retries) parts.push(`${u.retries} nova(s) tentativa(s)`);
     if (u.cost_observed_usd) parts.push(`custo informado US$ ${u.cost_observed_usd.toFixed(2)}`);

@@ -237,7 +237,9 @@ Orçamento esgotado ou falta de provider não são retentados.
 
 **Custo.** O custo informado pelo CLI é *observado*. Chamada que informa tokens sem custo é *estimada*
 pela tabela `prices` da política (US$ por milhão de tokens por modelo, por nome exato ou prefixo, com
-`prices_version` registrado), se houver preço. Sem preço, o custo é *desconhecido*. O painel e
+`prices_version` registrado), se houver preço: a entrada lida do cache custa `cached_input` (ou `input`,
+sem ele) e a saída, raciocínio incluído, custa `output`. Sem preço, o custo é *desconhecido*. Os tokens
+informados contam cada token uma vez: o cache é parte da entrada e o raciocínio, parte da saída. O painel e
 `usage` mostram os três separados, e o FazTudo não traz preço embutido. Cada etapa que falha ou fica
 pendente recebe uma classe: `orçamento`, `provider`, `infraestrutura`, `formato`, `comportamento`
 ou `cancelada`. Best-of-N continua opcional (`candidates`, padrão 1); só vale ligar quando a avaliação
