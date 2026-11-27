@@ -98,6 +98,22 @@ func (o *Orchestrator) writeDelivery(run Run) {
 			fmt.Fprintf(&index, "- [%s](%s.md): %s, %s\n", strings.Join(p.Stories, ", "), name, p.Status, cmp.Or(p.Reason, "sem ressalvas"))
 		}
 	}
+	if data, err := redactedJSON(struct {
+		RunID   string         `json:"run_id"`
+		Usage   *RunUsage      `json:"usage,omitempty"`
+		Stories []StoryMetrics `json:"stories"`
+	}{run.ID, run.Usage, run.Metrics()}); err == nil {
+		save("metrics.json", data)
+	}
+	index.WriteString("\n## Métricas\n\n| US | Duração | Fila | Agentes | Verificação | Integração | Rodadas de correção | Pendências | Tokens | Revisão humana |\n|---|---|---|---|---|---|---|---|---|---|\n")
+	for _, m := range run.Metrics() {
+		fmt.Fprintf(&index, "| %s | %s | %s | %s | %s | %s | %d | %d | %d | %d min |\n", m.Story, ms(m.DurationMS), ms(m.QueueMS), ms(m.AgentMS),
+			ms(m.VerifyMS), ms(m.IntegrationMS), m.FixRounds, m.Pending, m.Tokens, m.ReviewMinutes+m.ReworkMinutes)
+	}
+	if u := run.Usage; u != nil {
+		fmt.Fprintf(&index, "\nCusto informado US$ %.4f; estimado US$ %.4f (%s); %d chamada(s) sem custo conhecido. Execução `%s`.\n",
+			u.CostObservedUSD, u.CostEstimatedUSD, cmp.Or(u.PricesVersion, "sem tabela"), u.UnknownCost, run.ID)
+	}
 	write("README.md", index.String())
 	o.mu.Lock()
 	o.run.Delivery = &d
@@ -344,3 +360,5 @@ func redactTree(v any) any {
 	}
 	return v
 }
+
+func ms(v int64) string { return (time.Duration(v) * time.Millisecond).Round(time.Second).String() }

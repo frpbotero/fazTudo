@@ -228,6 +228,7 @@ func (o *Orchestrator) invalidateAcceptance(ss *session, st *storyState) bool {
 	}
 	st.acceptedAt = time.Time{}
 	o.updateStory(st.si, func(r *StoryRun) {
+		r.Acceptance = slices.Clone(r.Acceptance) // snapshots share the old one
 		for i := range r.Acceptance {
 			if r.Acceptance[i].Status == ScenarioAccepted {
 				r.Acceptance[i].Status = ScenarioInvalidated

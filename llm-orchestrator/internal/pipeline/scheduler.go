@@ -103,7 +103,7 @@ func (o *Orchestrator) callAgent(ctx context.Context, ref stepRef, req provider.
 	}
 	resp, err := o.exec.Execute(ctx, req, o.providerLog)
 	o.recordUsage(ref, req, resp, attempt)
-	o.account(resp, policy)
+	o.account(ref.story, resp, policy)
 	return resp, err
 }
 

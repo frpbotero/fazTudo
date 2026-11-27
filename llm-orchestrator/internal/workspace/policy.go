@@ -52,6 +52,8 @@ type Policy struct {
 	// MaxParallelAgents bounds the agent calls of a run at once, across
 	// stories, fronts, reviewers and candidates; 0 is 4.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty"`
+	// LogLimit is how many log entries a run keeps, the newest; 0 is 500.
+	LogLimit int `json:"log_limit,omitempty"`
 	// ContextBytes caps each earlier stage's output forwarded to the next
 	// ones; 0 is 4000. Cut outputs say so in the prompt.
 	ContextBytes int `json:"context_bytes,omitempty"`
@@ -320,6 +322,9 @@ func (p Policy) Validate() error {
 		if _, err := path.Match(s, ""); err != nil || len(s) > 200 || strings.Trim(s, "*?") == "" {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
+	}
+	if p.LogLimit != 0 && (p.LogLimit < 100 || p.LogLimit > 100000) {
+		return errors.New("o limite de logs deve estar entre 100 e 100000")
 	}
 	if p.ContextBytes != 0 && (p.ContextBytes < 1000 || p.ContextBytes > 64000) {
 		return errors.New("o orçamento de contexto por artefato deve estar entre 1000 e 64000 bytes")

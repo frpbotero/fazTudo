@@ -80,10 +80,10 @@ func TestCostIsObservedEstimatedOrUnknown(t *testing.T) {
 	o, _ := newTest(t, &fakeExecutor{})
 	prices := map[string]workspace.Price{"claude-sonnet": {Input: 3, Output: 15}}
 	policy := workspace.Policy{Prices: prices, PricesVersion: "tabela-2026-11"}
-	o.account(&provider.Response{Model: "claude-sonnet-5-5", Usage: &provider.Usage{InputTokens: 1_000_000, OutputTokens: 100_000}}, policy)
-	o.account(&provider.Response{Model: "x", Usage: &provider.Usage{InputTokens: 10, CostUSD: 0.25}}, policy)
-	o.account(&provider.Response{Model: "sem-preço", Usage: &provider.Usage{InputTokens: 10}}, policy)
-	o.account(&provider.Response{Model: "m"}, policy)
+	o.account(-1, &provider.Response{Model: "claude-sonnet-5-5", Usage: &provider.Usage{InputTokens: 1_000_000, OutputTokens: 100_000}}, policy)
+	o.account(-1, &provider.Response{Model: "x", Usage: &provider.Usage{InputTokens: 10, CostUSD: 0.25}}, policy)
+	o.account(-1, &provider.Response{Model: "sem-preço", Usage: &provider.Usage{InputTokens: 10}}, policy)
+	o.account(-1, &provider.Response{Model: "m"}, policy)
 	u := o.Snapshot().Usage
 	if u.CostObservedUSD != 0.25 || u.CostEstimatedUSD != 4.5 || u.EstimatedCalls != 1 || u.PricesVersion != "tabela-2026-11" {
 		t.Errorf("costs = %+v", u)

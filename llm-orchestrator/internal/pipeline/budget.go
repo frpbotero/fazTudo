@@ -40,15 +40,18 @@ func (u RunUsage) Tokens() int64 {
 	return u.InputTokens + u.CachedTokens + u.OutputTokens + u.ReasoningTokens
 }
 
-// account adds a finished call to the run's usage.
-func (o *Orchestrator) account(resp *provider.Response, policy workspace.Policy) {
+// account adds a finished call to the run's usage and to its story's.
+func (o *Orchestrator) account(story int, resp *provider.Response, policy workspace.Policy) {
 	if resp == nil || resp.Simulated {
 		return
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	// Copy on write: snapshots share the pointer and are read unlocked.
+	// Copy on write: snapshots share the pointers and are read unlocked.
 	o.run.Usage = withUsage(o.run.Usage, func(u *RunUsage) { addUsage(u, resp, policy) })
+	if story >= 0 && story < len(o.run.Stories) {
+		o.run.Stories[story].Usage = withUsage(o.run.Stories[story].Usage, func(u *RunUsage) { addUsage(u, resp, policy) })
+	}
 }
 
 // withUsage returns a changed copy of u, which is never written in place.

@@ -200,6 +200,19 @@ worktrees. *Sequencial*: sem análise de dependências; uma US de cada vez, na o
 os agentes de cada US um após o outro. Nos dois modos cada US/onda é mergeada na branch base antes da
 seguinte.
 
+**Instrumentação.**
+- Cada execução tem um `id` que aparece em todo registro dela: chamadas (com US, etapa, tentativa e
+  commit), log de tokens (`tokens.jsonl`) e pacote de entrega.
+- Por US, `usage` guarda chamadas, tokens e custo informado e estimado.
+- O pacote ganha `metrics.json` e uma tabela no índice com duração, fila, tempo de agentes, de
+  verificação e de integração, rodadas de correção, pendências, tokens e revisão humana.
+- O tempo de revisão humana e de retrabalho entra só por registro manual: *Registrar tempo* em
+  *Métricas* na US, ou `POST /api/pipeline/review-log` com `story`, `minutes`, `rework_minutes` e
+  `note`. Nada é medido sem a pessoa informar.
+- Mensagens do log passam pela mesma remoção de segredos do pacote; `log_limit` (padrão 500) define
+  quantas ficam por execução.
+- Tudo funciona localmente, sem serviço externo de observabilidade.
+
 **Contexto e verificações.**
 - Cada etapa recebe só as etapas anteriores de que depende (`Inputs`), cada saída cortada em
   `context_bytes` (padrão 4000) com a marca `[… conteúdo truncado]`. O registro da chamada conta os

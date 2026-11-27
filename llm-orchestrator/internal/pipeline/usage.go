@@ -96,6 +96,7 @@ func (o *Orchestrator) markTurnLimited(ref stepRef, resp *provider.Response, tur
 type UsageRecord struct {
 	Time        time.Time   `json:"time"`
 	Run         string      `json:"run"` // when the run started, RFC 3339
+	RunID       string      `json:"run_id,omitempty"`
 	Repo        string      `json:"repo"`
 	Story       string      `json:"story,omitempty"`
 	Task        string      `json:"task"` // step ID
@@ -132,6 +133,7 @@ func (o *Orchestrator) recordUsage(ref stepRef, req provider.Request, resp *prov
 	if o.run.StartedAt != nil {
 		rec.Run = o.run.StartedAt.Format(time.RFC3339)
 	}
+	rec.RunID = o.run.ID
 	if ref.story >= 0 && ref.story < len(o.run.Stories) {
 		rec.Story = o.run.Stories[ref.story].ID
 	}
