@@ -161,6 +161,10 @@ type StoryRun struct {
 	// Head is the last commit the run made on the story's branch: a resume
 	// that finds the branch elsewhere knows its results judged other code.
 	Head string `json:"head,omitempty"`
+	// Usage is what the story's calls spent; HumanReview the review and
+	// rework time people logged for it.
+	Usage       *RunUsage     `json:"usage,omitempty"`
+	HumanReview []HumanReview `json:"human_review,omitempty"`
 	// Reproduction is a bug fix's proof that its tests fail before the fix.
 	Reproduction *Reproduction `json:"reproduction,omitempty"`
 	// Acceptance is the functional QA's judgment of each scenario.
@@ -227,7 +231,9 @@ type Run struct {
 	// Delivery is where the run's delivery package was written.
 	Delivery *Delivery `json:"delivery,omitempty"`
 	// Usage is what the run spent, as observed.
-	Usage   *RunUsage  `json:"usage,omitempty"`
+	Usage *RunUsage `json:"usage,omitempty"`
+	// ID correlates everything the run recorded.
+	ID      string     `json:"id,omitempty"`
 	Stories []StoryRun `json:"stories"`
 	Current int        `json:"current"` // index into Stories; -1 while discovering
 	Logs    []LogEntry `json:"logs"`
@@ -487,6 +493,7 @@ func (o *Orchestrator) Start(opts StartOptions) error {
 		Stories:    runs,
 		Current:    -1,
 		Manifest:   &manifest,
+		ID:         newRunID(now),
 	}
 	if len(runs) > 1 {
 		analysis := newStep(AnalysisStage)
@@ -2236,9 +2243,15 @@ func (o *Orchestrator) updateStory(i int, fn func(*StoryRun)) {
 }
 
 func (o *Orchestrator) logf(level, format string, args ...any) {
+	limit := maxLogs
+	if o.ws != nil {
+		if l := o.ws.Policy().LogLimit; l > 0 {
+			limit = l
+		}
+	}
 	o.mu.Lock()
-	o.run.Logs = append(o.run.Logs, LogEntry{Time: time.Now(), Level: level, Message: fmt.Sprintf(format, args...)})
-	if over := len(o.run.Logs) - maxLogs; over > 0 {
+	o.run.Logs = append(o.run.Logs, LogEntry{Time: time.Now(), Level: level, Message: redactSecrets(fmt.Sprintf(format, args...))})
+	if over := len(o.run.Logs) - limit; over > 0 {
 		o.run.Logs = slices.Delete(o.run.Logs, 0, over)
 	}
 	o.mu.Unlock()

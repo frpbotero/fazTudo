@@ -708,6 +708,7 @@ Critérios de aceitação:
       style_blocking: snapshot?.workspace?.policy?.style_blocking,
       max_parallel_agents: snapshot?.workspace?.policy?.max_parallel_agents,
       context_bytes: snapshot?.workspace?.policy?.context_bytes,
+      log_limit: snapshot?.workspace?.policy?.log_limit,
       budget: snapshot?.workspace?.policy?.budget,
       benchmarks: snapshot?.workspace?.policy?.benchmarks,
       prices: snapshot?.workspace?.policy?.prices,
@@ -1262,6 +1263,24 @@ Critérios de aceitação:
   }
 
   el.storyHead.addEventListener('submit', async (e) => {
+    const review = e.target.closest('form.review-log');
+    if (review) {
+      e.preventDefault();
+      const field = (n) => review.querySelector(`[name="${n}"]`);
+      try {
+        await api('POST', '/api/pipeline/review-log', {
+          story: Number(review.dataset.story),
+          minutes: Number(field('minutes').value) || 0,
+          rework_minutes: Number(field('rework').value) || 0,
+          note: field('note').value.trim(),
+        });
+        toast('Tempo de revisão registrado.', 'success');
+        review.reset();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+      return;
+    }
     const form = e.target.closest('form.decisions');
     if (!form) return;
     e.preventDefault();
@@ -1647,6 +1666,34 @@ Critérios de aceitação:
     paintSteps(stepsHtml(runSteps.map((step) => ({ step, isRunStep: true })), { run, si: -1 }));
   }
 
+  // Where the story's time went, and the review time people logged by hand.
+  function renderMetrics(st, si, run) {
+    const steps = st.steps || [];
+    const sum = (pick) => steps.reduce((t, s) => t + (pick(s) || 0), 0);
+    const queue = sum((s) => s.queue_ms);
+    const fixes = steps.filter((s) => s.kind === 'fix').length;
+    const verify = sum((s) => (s.checks?.length ? s.duration_ms : 0));
+    const reviewed = (st.human_review || []).reduce((t, h) => t + h.minutes + (h.rework_minutes || 0), 0);
+    const tokens = st.usage ? (st.usage.input_tokens || 0) + (st.usage.cached_input_tokens || 0) + (st.usage.output_tokens || 0) + (st.usage.reasoning_tokens || 0) : 0;
+    const parts = [];
+    if (queue) parts.push(`fila ${fmtDuration(queue)}`);
+    if (verify) parts.push(`verificação ${fmtDuration(verify)}`);
+    if (fixes) parts.push(`${fixes} rodada(s) de correção`);
+    if (tokens) parts.push(`${tokens.toLocaleString('pt-BR')} tokens`);
+    if (reviewed) parts.push(`${reviewed} min de revisão humana registrados`);
+    const done = ['done', 'warning', 'failed'].includes(st.status) && !run.running;
+    const form = done ? `
+      <form class="review-log" data-story="${si}">
+        <label>Revisão (min) <input type="number" name="minutes" min="0" max="1440" step="1"></label>
+        <label>Retrabalho (min) <input type="number" name="rework" min="0" max="1440" step="1"></label>
+        <label>Nota <input type="text" name="note" maxlength="500" autocomplete="off"></label>
+        <button class="btn btn-ghost btn-sm" type="submit">Registrar tempo</button>
+      </form>` : '';
+    if (!parts.length && !form) return '';
+    return `<details class="trace-all"><summary>Métricas${parts.length ? `: ${esc(parts.join(' · '))}` : ''}</summary>
+      <p class="note">O tempo de revisão humana só entra quando você registra aqui; nada é coletado sem você informar.</p>${form}</details>`;
+  }
+
   // What the run spent: observed and estimated costs apart, unknown said so.
   function renderUsage(u) {
     if (!u?.calls) return '';
@@ -1706,6 +1753,7 @@ Critérios de aceitação:
       ${renderPlan(st.plan, st.steps || [], `plan:${si}`)}
       ${run.delivery ? `<p class="note">Pacote de entrega: <code>${esc(run.delivery.dir)}</code></p>` : ''}
       ${renderUsage(run.usage)}
+      ${renderMetrics(st, si, run)}
       ${renderSpecialties(st)}
       ${renderAcceptance(st.acceptance)}
       ${renderCauses(st.causes)}`;

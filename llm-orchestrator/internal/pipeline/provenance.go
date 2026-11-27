@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/skills"
@@ -65,6 +66,14 @@ type CallRecord struct {
 	// to fit the context budget.
 	PromptBytes int `json:"prompt_bytes"`
 	Truncated   int `json:"truncated,omitempty"`
+	// RunID, Story, Step, Attempt and Commit correlate the call with the
+	// rest of the run's records; At is when it ended.
+	RunID   string    `json:"run_id,omitempty"`
+	Story   string    `json:"story,omitempty"`
+	Step    string    `json:"step"`
+	Attempt int       `json:"attempt,omitempty"`
+	Commit  string    `json:"commit,omitempty"`
+	At      time.Time `json:"at"`
 }
 
 // SkillRef is a playbook as a call read it: its bundled version and, when
@@ -117,7 +126,17 @@ func sha(s string) string {
 // recordCall adds a call's record to its step.
 func (o *Orchestrator) recordCall(ref stepRef, req provider.Request, resp *provider.Response) {
 	rec := callRecord(o.limited(req), resp, o.overrides())
-	o.updateStep(ref, func(s *Step) { s.Calls = append(s.Calls, rec) })
+	rec.Step, rec.At = ref.id, time.Now()
+	o.mu.RLock()
+	rec.RunID = o.run.ID
+	if ref.story >= 0 && ref.story < len(o.run.Stories) {
+		rec.Story, rec.Commit = o.run.Stories[ref.story].ID, o.run.Stories[ref.story].Head
+	}
+	o.mu.RUnlock()
+	o.updateStep(ref, func(s *Step) {
+		rec.Attempt = len(s.Calls) + 1
+		s.Calls = append(s.Calls, rec)
+	})
 }
 
 // overrides are the complements of the repository being run.

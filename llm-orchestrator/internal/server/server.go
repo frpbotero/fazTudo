@@ -115,6 +115,7 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/pipeline/answer", s.handleAnswer)
 	mux.HandleFunc("POST /api/pipeline/reconcile", s.handleReconcile)
 	mux.HandleFunc("GET /api/pipeline/reviews", s.handleReviews)
+	mux.HandleFunc("POST /api/pipeline/review-log", s.handleReviewLog)
 	mux.HandleFunc("GET /api/health/areas", s.handleHealthAreas)
 	mux.HandleFunc("POST /api/health/start", s.handleHealthStart)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
@@ -476,6 +477,26 @@ func (s *Server) handleReconcile(w http.ResponseWriter, _ *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, p)
 	}
+}
+
+// handleReviewLog records review and rework time a person spent on a story,
+// as they enter it.
+func (s *Server) handleReviewLog(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Story         int    `json:"story"`
+		Minutes       int    `json:"minutes"`
+		ReworkMinutes int    `json:"rework_minutes"`
+		Note          string `json:"note"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	err := s.orch.LogReview(body.Story, pipeline.HumanReview{Minutes: body.Minutes, ReworkMinutes: body.ReworkMinutes, Note: body.Note})
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "logged"})
 }
 
 // handleReviews reads, from the source host, the checks and review of the
