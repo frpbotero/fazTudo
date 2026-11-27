@@ -127,3 +127,22 @@ func TestFinishedRunWritesItsPackage(t *testing.T) {
 		t.Error("a simulated run's package must say nothing in it is evidence")
 	}
 }
+
+func TestStoryDeliveryReadsCleanly(t *testing.T) {
+	st := StoryRun{
+		ID: "US-1", Branch: "faztudo/us-1-20261127-071408",
+		Risk:      &workspace.Risk{Level: "baixo"},
+		Readiness: &Readiness{Criteria: []Criterion{{Text: "Complete marca a tarefa", Status: CriterionMissing, Evidence: "não há método Complete"}, {Text: "sem evidência", Status: CriterionAmbiguous}}},
+	}
+	md := redactSecrets(renderStoryDelivery(Run{}, st))
+	for _, want := range []string{
+		"| Risco | baixo |",
+		"`faztudo/us-1-20261127-071408`",
+		"- Complete marca a tarefa — " + CriterionMissing + ": não há método Complete\n",
+		"- sem evidência — " + CriterionAmbiguous + "\n",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("US-1.md lacks %q:\n%s", want, md)
+		}
+	}
+}
