@@ -424,6 +424,26 @@ CI; não é garantia por si só. A branch de cada US continua no repositório pa
 integração externa, e a documentação gerada pela US entra no candidato que é verificado antes da
 promoção.
 
+**Revisão externa (SCM).** Por padrão (`scm.mode` vazio ou `local`) nada sai da máquina: a US aprovada
+entra na branch base local, a branch dela fica para revisão e o pacote de entrega é gravado. Com
+`"scm": {"mode": "pr"}` (campo *Revisão externa*), a US aprovada não é integrada: o FazTudo publica a
+branch candidata e abre um pull request com a evidência, e a US fica *Aguardando revisão no PR*.
+
+- O PR traz o commit avaliado e a evidência de cada US, com a mesma remoção de segredos do pacote. O
+  texto diz que a evidência complementa os checks do CI e a revisão humana.
+- O merge fica com quem revisa, os checks e as regras do repositório. As US que dependem desta esperam.
+- `review_from` (`medio`, `alto`, `critico`) manda para PR só as US de risco igual ou maior; as demais
+  são integradas localmente. `draft` abre como rascunho.
+- O PR não é duplicado: a operação tem chave estável, e um PR já aberto a partir da branch é
+  reutilizado.
+- `GET /api/pipeline/reviews` lê do provedor os checks, a decisão de revisão e se o PR ainda está no
+  commit avaliado (`stale`).
+
+GitHub (inclusive Enterprise) usa o `gh` autenticado na máquina, sem shell e com a descrição passada
+por arquivo; o FazTudo não vê token. Bitbucket é a subentrega FT-020b (Cloud e Server diferem; o
+ambiente real decide a ordem). PR com repositórios aninhados ainda não é suportado: a branch fica para
+revisão. Publicação que falha deixa a base intacta e a branch preservada.
+
 **Manifesto e retomada segura.** Cada execução grava um manifesto: hash do documento e de cada US, dos
 arquivos protegidos e de cada etapa (texto, contrato e skills), partes da política (comandos, fluxo,
 regras de risco, demais opções), versão do bundle de skills, perfis e complementos, versões dos CLIs, do

@@ -42,6 +42,9 @@ type Policy struct {
 	// DeliveryRetention is how many delivery packages a repository keeps;
 	// 0 is 10.
 	DeliveryRetention int `json:"delivery_retention,omitempty"`
+	// SCM decides how a story reaches the base: merged locally (default) or
+	// through a pull request a human reviews.
+	SCM SCMPolicy `json:"scm,omitempty"`
 	// Protected are glob patterns (base name or relative path) of input files
 	// agents must not modify.
 	Protected []string `json:"protected"`
@@ -301,6 +304,9 @@ func (p Policy) Validate() error {
 			return fmt.Errorf("padrão de stack inválido: %q", s)
 		}
 	}
+	if err := validateSCM(p.SCM); err != nil {
+		return err
+	}
 	if p.DeliveryRetention < 0 || p.DeliveryRetention > 100 {
 		return errors.New("a retenção de pacotes de entrega deve estar entre 0 e 100")
 	}
@@ -373,4 +379,32 @@ func normalizeCommands(list []quality.Command) []quality.Command {
 		checks = append(checks, c)
 	}
 	return checks
+}
+
+// SCMPolicy is the external review. Publishing to the host happens only in
+// SCMPullRequest mode, which the user sets: the default changes nothing
+// outside the machine.
+type SCMPolicy struct {
+	Mode string `json:"mode,omitempty"` // SCMLocal (default) or SCMPullRequest
+	// Draft opens the pull requests as drafts.
+	Draft bool `json:"draft,omitempty"`
+	// ReviewFrom is the lowest risk level that goes through a pull request;
+	// empty sends every story. Below it, stories merge locally as usual.
+	ReviewFrom string `json:"review_from,omitempty"`
+}
+
+// SCM modes.
+const (
+	SCMLocal       = "local"
+	SCMPullRequest = "pr"
+)
+
+func validateSCM(s SCMPolicy) error {
+	if !slices.Contains([]string{"", SCMLocal, SCMPullRequest}, s.Mode) {
+		return fmt.Errorf("modo de SCM desconhecido: %q (use local ou pr)", s.Mode)
+	}
+	if s.ReviewFrom != "" && !slices.Contains(riskLevels, s.ReviewFrom) {
+		return fmt.Errorf("nível de risco desconhecido em review_from: %q", s.ReviewFrom)
+	}
+	return nil
 }

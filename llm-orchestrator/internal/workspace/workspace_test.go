@@ -359,3 +359,23 @@ func TestPolicyProfiles(t *testing.T) {
 		t.Errorf("suggested = %v", got)
 	}
 }
+
+func TestPolicySCM(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	if p.SCM.Mode != "" {
+		t.Errorf("the default publishes nothing: %+v", p.SCM)
+	}
+	for _, ok := range []SCMPolicy{{}, {Mode: SCMLocal}, {Mode: SCMPullRequest, Draft: true, ReviewFrom: RiskHigh}} {
+		p.SCM = ok
+		if _, err := m.SetPolicy(p); err != nil {
+			t.Errorf("%+v refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []SCMPolicy{{Mode: "push"}, {Mode: SCMPullRequest, ReviewFrom: "altíssimo"}} {
+		p.SCM = bad
+		if _, err := m.SetPolicy(p); err == nil {
+			t.Errorf("%+v accepted", bad)
+		}
+	}
+}

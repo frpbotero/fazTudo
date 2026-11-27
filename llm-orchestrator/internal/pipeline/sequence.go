@@ -649,6 +649,9 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 	if reason != "" {
 		return o.blockPromotion(ctx, ss, merged, p, "conjunto integrado: "+reason)
 	}
+	if o.needsReview(ss, merged) {
+		return o.openReview(ctx, ss, strings.Join(labels, ", "), &p, merged)
+	}
 	if !o.mergeIntoBase(ctx, ss, strings.Join(labels, ", "), &p, merged) {
 		return false
 	}

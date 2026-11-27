@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"llm-orchestrator/internal/quality"
+	"llm-orchestrator/internal/scm"
 	"llm-orchestrator/internal/stories"
 	"llm-orchestrator/internal/vcs"
 	"llm-orchestrator/internal/workspace"
@@ -54,7 +55,9 @@ type Promotion struct {
 	Checks []quality.Result `json:"checks,omitempty"`
 	// Repos are the promotion per repository (the parent and each nested one).
 	Repos []RepoPromotion `json:"repos,omitempty"`
-	At    time.Time       `json:"at"`
+	// PR is the pull request the candidate went to, in review mode.
+	PR *scm.PullRequest `json:"pr,omitempty"`
+	At time.Time        `json:"at"`
 }
 
 // promotable is the single rule every route to the base goes through,
@@ -171,6 +174,9 @@ func (o *Orchestrator) promoteStory(ctx context.Context, ss *session, st *storyS
 	if reason != "" {
 		return o.blockPromotion(ctx, ss, []int{st.si}, p, reason)
 	}
+	if o.needsReview(ss, []int{st.si}) {
+		return o.openReview(ctx, ss, st.sc.Story.Title, &p, []int{st.si})
+	}
 	if !o.mergeIntoBase(ctx, ss, st.sc.Story.Title, &p, []int{st.si}) {
 		return false
 	}
@@ -242,6 +248,8 @@ func (o *Orchestrator) unmetDependency(si int, list []stories.Story) string {
 		switch {
 		case dep.Status == StepWaiting:
 			return fmt.Sprintf("%s %s, que aguarda decisão de produto", dependsPrefix, name)
+		case dep.Integration == IntegrationAwaitingReview:
+			return fmt.Sprintf("%s %s, que aguarda revisão no pull request", dependsPrefix, name)
 		case dep.Integration == IntegrationPartial:
 			return fmt.Sprintf("%s %s, cuja integração ficou parcial", dependsPrefix, name)
 		case dep.Integration == IntegrationBlocked || dep.Status == StepSkipped:
