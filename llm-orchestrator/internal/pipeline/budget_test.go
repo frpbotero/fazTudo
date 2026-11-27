@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,30 @@ func TestCostIsObservedEstimatedOrUnknown(t *testing.T) {
 	}
 	if u.UnknownCost != 2 || u.Unreported != 1 || u.Calls != 4 {
 		t.Errorf("unknown = %d, unreported = %d, calls = %d", u.UnknownCost, u.Unreported, u.Calls)
+	}
+}
+
+func TestCachedTokensAreCountedAndPricedOnce(t *testing.T) {
+	o, _ := newTest(t, &fakeExecutor{})
+	prices := map[string]workspace.Price{"cached": {Input: 3, CachedInput: 0.3, Output: 15}, "plain": {Input: 3, Output: 15}}
+	policy := workspace.Policy{Prices: prices}
+	// 800k of the 1M input tokens came from the cache; 30k of the output was reasoning.
+	usage := &provider.Usage{InputTokens: 1_000_000, CachedTokens: 800_000, OutputTokens: 100_000, ReasoningTokens: 30_000}
+	o.account(-1, &provider.Response{Model: "cached", Usage: usage}, policy)
+	u := o.Snapshot().Usage
+	if got := u.Tokens(); got != 1_100_000 {
+		t.Errorf("tokens = %d, want 1100000", got)
+	}
+	// 0.2M fresh x 3 + 0.8M cached x 0.3 + 0.1M output x 15.
+	if got := u.CostEstimatedUSD; math.Abs(got-2.34) > 1e-9 {
+		t.Errorf("estimated cost = %v, want 2.34", got)
+	}
+
+	o, _ = newTest(t, &fakeExecutor{})
+	o.account(-1, &provider.Response{Model: "plain", Usage: usage}, policy)
+	// Without a cached price the cache read costs the input price: 1M x 3 + 0.1M x 15.
+	if got := o.Snapshot().Usage.CostEstimatedUSD; math.Abs(got-4.5) > 1e-9 {
+		t.Errorf("estimated cost without a cached price = %v, want 4.5", got)
 	}
 }
 

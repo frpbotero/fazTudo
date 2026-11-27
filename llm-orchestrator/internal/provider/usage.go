@@ -7,9 +7,13 @@ import (
 	"strings"
 )
 
-// Usage is the token accounting a CLI reports for one run. InputTokens counts
-// every prompt token, cached or not, so totals compare across CLIs; Claude
-// reports fresh, cache-write and cache-read tokens apart and they are summed.
+// Usage is the token accounting a CLI reports for one run, normalized so
+// totals compare across CLIs. InputTokens counts every prompt token, cached or
+// not (Claude reports fresh, cache-write and cache-read tokens apart and they
+// are summed); CachedTokens is the part of it read from the cache.
+// OutputTokens counts every generated token, reasoning included (Gemini
+// reports thoughts apart and they are added); ReasoningTokens is the part of
+// it spent reasoning.
 type Usage struct {
 	InputTokens     int64   `json:"input_tokens"`
 	CachedTokens    int64   `json:"cached_input_tokens"`
@@ -18,6 +22,9 @@ type Usage struct {
 	CostUSD         float64 `json:"cost_usd,omitempty"`
 	Turns           int     `json:"turns,omitempty"`
 }
+
+// Total is every token of the call, each counted once.
+func (u Usage) Total() int64 { return u.InputTokens + u.OutputTokens }
 
 // ErrTurnLimit means the agent used every turn it was given (--max-turns)
 // before finishing. The response that comes with it holds the partial work.
@@ -141,7 +148,7 @@ func parseGemini(out string) (parsed, bool) {
 		for _, m := range r.Stats.Models {
 			p.Usage.InputTokens += m.Tokens.Prompt
 			p.Usage.CachedTokens += m.Tokens.Cached
-			p.Usage.OutputTokens += m.Tokens.Candidates
+			p.Usage.OutputTokens += m.Tokens.Candidates + m.Tokens.Thoughts
 			p.Usage.ReasoningTokens += m.Tokens.Thoughts
 		}
 	}

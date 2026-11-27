@@ -7,7 +7,7 @@ window.FazTudoEvidence = ({ esc }) => {
   // What each trace status proves; only "comprovado" is a pass.
   const TRACE_TONE = {
     'comprovado': 'success', 'falhou': 'danger', 'ignorado': 'warn', 'sem teste': 'warn',
-    'sem relatório': 'warn', 'não executado': 'warn', 'só código de saída': '',
+    'sem relatório': 'warn', 'não executado': 'warn', 'ID de antes da US': 'warn', 'só código de saída': '',
   };
   const traceStatus = (t) => t.status || (t.files?.length ? 'só código de saída' : 'sem teste');
 

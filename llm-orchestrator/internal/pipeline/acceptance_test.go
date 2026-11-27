@@ -167,3 +167,46 @@ func TestPlannedScenarioQALeftOutHasNoEvidence(t *testing.T) {
 		t.Errorf("validation = %s", st.Validation)
 	}
 }
+
+func TestRedactRemovesOnlyCardShapedNumbers(t *testing.T) {
+	for _, card := range []string{"4111 1111 1111 1111", "4111-1111-1111-1111", "4111111111111111", "3782 822463 10005"} {
+		if out := redact("cartão " + card); strings.Contains(out, card) {
+			t.Errorf("%q survived: %s", card, out)
+		}
+	}
+	// Branch names, run IDs and timestamps carry long digit runs that are not
+	// cards, even when the digits happen to pass the Luhn check.
+	for _, keep := range []string{"faztudo/us-1-20261127-071408", "20261127T071345-b9c3ee27", "pedido 4111 1111 1111 1112", "1-2026-1127-0714-08"} {
+		if out := redact(keep); out != keep {
+			t.Errorf("%q became %q", keep, out)
+		}
+	}
+}
+
+func TestScenarioMayCiteTheExecutedCaseByName(t *testing.T) {
+	traces := []quality.Trace{{Requirement: quality.Requirement{ID: "UT-TASK-01"}, Status: quality.TraceProven, Cases: []quality.CaseRef{
+		{Name: "TestRemove/UT-TASK-01_removes_middle", Status: quality.CasePassed},
+		{Name: "TestRemove/UT-TASK-01_bad_input", Status: quality.CaseFailed},
+	}}}
+	cited := func(name string) ScenarioResult {
+		return checkScenario(ScenarioResult{Criterion: "c", Method: "teste unitário", Status: "aceito", Tests: []string{name}}, traces)
+	}
+	if got := cited("TestRemove/UT-TASK-01_removes_middle").Status; got != ScenarioAccepted {
+		t.Errorf("a passed case cited by name = %s", got)
+	}
+	if got := cited("TestRemove/UT-TASK-01_bad_input").Status; got != ScenarioRejected {
+		t.Errorf("a failed case cited by name = %s", got)
+	}
+	if got := cited("TestRemove/other").Status; got != ScenarioNoEvidence {
+		t.Errorf("an unknown case = %s", got)
+	}
+}
+
+func TestNumberedCriterionMatchesThePlannedScenario(t *testing.T) {
+	if !sameCriterionText("1. Remove tira a tarefa", "Remove tira a tarefa") || !sameCriterionText("2) Remove", "remove") {
+		t.Error("the numbering QA adds must not hide the planned scenario")
+	}
+	if sameCriterionText("10 tarefas no máximo", "tarefas no máximo") {
+		t.Error("a number that is part of the criterion must stay")
+	}
+}

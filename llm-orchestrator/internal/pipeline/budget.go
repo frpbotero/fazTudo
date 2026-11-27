@@ -35,10 +35,8 @@ type RunUsage struct {
 	StoppedBy string `json:"stopped_by,omitempty"`
 }
 
-// Tokens is every token the CLIs reported.
-func (u RunUsage) Tokens() int64 {
-	return u.InputTokens + u.CachedTokens + u.OutputTokens + u.ReasoningTokens
-}
+// Tokens is every token the CLIs reported, each counted once.
+func (u RunUsage) Tokens() int64 { return u.Usage.Total() }
 
 // account adds a finished call to the run's usage and to its story's.
 func (o *Orchestrator) account(story int, resp *provider.Response, policy workspace.Policy) {
@@ -81,13 +79,23 @@ func addUsage(u *RunUsage, resp *provider.Response, policy workspace.Policy) {
 	case r.CostUSD > 0:
 		u.CostObservedUSD += r.CostUSD
 	case ok:
-		u.CostEstimatedUSD += (float64(r.InputTokens)*price.Input + float64(r.CachedTokens)*price.CachedInput +
-			float64(r.OutputTokens+r.ReasoningTokens)*price.Output) / 1e6
+		u.CostEstimatedUSD += estimateCost(r, price)
 		u.EstimatedCalls++
 		u.PricesVersion = policy.PricesVersion
 	default:
 		u.UnknownCost++
 	}
+}
+
+// estimateCost prices one call in US$. The cached part of the input costs the
+// cached price, or the input price when the table has none.
+func estimateCost(u provider.Usage, price workspace.Price) float64 {
+	cached := price.CachedInput
+	if cached == 0 {
+		cached = price.Input
+	}
+	fresh := max(u.InputTokens-u.CachedTokens, 0)
+	return (float64(fresh)*price.Input + float64(u.CachedTokens)*cached + float64(u.OutputTokens)*price.Output) / 1e6
 }
 
 // priceFor finds the model's price: an exact name, else the longest prefix.

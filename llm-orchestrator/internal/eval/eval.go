@@ -458,7 +458,7 @@ func runDirect(ctx context.Context, s Suite, task Task, arm Arm, router *provide
 		res.AgentCalls = 1
 		if resp.Usage != nil {
 			u := *resp.Usage
-			res.Tokens = u.InputTokens + u.CachedTokens + u.OutputTokens + u.ReasoningTokens
+			res.Tokens = u.Total()
 			if u.CostUSD > 0 {
 				res.CostObserved = u.CostUSD
 			} else {

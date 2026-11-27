@@ -46,6 +46,9 @@ const (
 	TraceNoReport = "sem relatório"      // a configured report was missing or unreadable
 	TraceExitOnly = "só código de saída" // no command has a report: only the commands are proven
 	TraceMissing  = "sem teste"          // no test file names it
+	// TraceReused: the tests named the ID before the story, and only cases
+	// that already passed then carry it. They prove the old behavior.
+	TraceReused = "ID de antes da US"
 )
 
 // Proven reports whether executed evidence shows the requirement holds.
@@ -230,6 +233,33 @@ func LinkResults(traces []Trace, results []Result) []Trace {
 			}
 		}
 		t.Status = traceStatus(t, reported, broken)
+		out[i] = t
+	}
+	return out
+}
+
+// DiscountPreexisting keeps old tests from proving a story: from each trace
+// whose ID the tests named before the story (idsBefore), it drops the cases
+// that already passed then. A trace left with no case is TraceReused. The
+// input is not changed.
+func DiscountPreexisting(traces []Trace, idsBefore []string, passedBefore func(CaseRef) bool) []Trace {
+	out := slices.Clone(traces)
+	for i, t := range out {
+		if !slices.ContainsFunc(idsBefore, func(id string) bool {
+			return strings.EqualFold(id, t.ID) || (shortID(t.ID) != "" && strings.EqualFold(id, shortID(t.ID)))
+		}) {
+			continue
+		}
+		cases := slices.DeleteFunc(slices.Clone(t.Cases), passedBefore)
+		if len(cases) == len(t.Cases) {
+			continue
+		}
+		t.Cases = cases
+		if len(cases) == 0 {
+			t.Status = TraceReused
+		} else {
+			t.Status = traceStatus(t, true, false)
+		}
 		out[i] = t
 	}
 	return out

@@ -237,7 +237,9 @@ Orçamento esgotado ou falta de provider não são retentados.
 
 **Custo.** O custo informado pelo CLI é *observado*. Chamada que informa tokens sem custo é *estimada*
 pela tabela `prices` da política (US$ por milhão de tokens por modelo, por nome exato ou prefixo, com
-`prices_version` registrado), se houver preço. Sem preço, o custo é *desconhecido*. O painel e
+`prices_version` registrado), se houver preço: a entrada lida do cache custa `cached_input` (ou `input`,
+sem ele) e a saída, raciocínio incluído, custa `output`. Sem preço, o custo é *desconhecido*. Os tokens
+informados contam cada token uma vez: o cache é parte da entrada e o raciocínio, parte da saída. O painel e
 `usage` mostram os três separados, e o FazTudo não traz preço embutido. Cada etapa que falha ou fica
 pendente recebe uma classe: `orçamento`, `provider`, `infraestrutura`, `formato`, `comportamento`
 ou `cancelada`. Best-of-N continua opcional (`candidates`, padrão 1); só vale ligar quando a avaliação
@@ -261,7 +263,8 @@ e cenário do plano, inclusive os negativos, pelos critérios originais da US. R
 evidência executada (status de cada caso da especificação, casos do relatório, reprodução do bug) e a
 interpreta, sem substituí-la:
 
-- cenário **aceito** precisa citar o ID de um caso **comprovado** por execução; inspeção precisa de
+- cenário **aceito** precisa citar o ID de um caso **comprovado** por execução (ou o nome do caso
+  executado, que vale pelo próprio resultado); inspeção precisa de
   `arquivo:linha`, e o QA fica como responsável;
 - caso citado que falhou torna o cenário **recusado**, que volta para o implementador mesmo que o QA
   tenha aprovado;
@@ -390,7 +393,10 @@ pendente). Veja o [README da raiz](../README.md).
   Caso ignorado (`skip`) volta para o implementador. Relatório ausente, anterior ao comando ou ilegível
   aparece como **sem relatório**; ID citado no arquivo sem caso executado, como **não executado**; sem
   nenhum relatório configurado, como **só código de saída**: o comando passou, mas nenhum caso foi
-  vinculado ao critério. O painel mostra o status, os casos e o commit de cada critério.
+  vinculado ao critério. ID que os testes já usavam antes da US (uma especificação que repetiu o ID de
+  outra US) só é comprovado por caso novo ou que mudou de resultado; com só casos que já passavam antes,
+  aparece como **ID de antes da US**. Refatoração é a exceção: nela, os testes antigos passando são a
+  prova. O painel mostra o status, os casos e o commit de cada critério.
 - **Arquivos protegidos** — `US*.md`, `EDD*.md` e o `.md` aberto; se um agente alterar um deles, o
   conteúdo é restaurado e a etapa falha.
 - **Git** — uma branch `faztudo/<us>-<data>` por US e um commit por etapa, com diff no painel.

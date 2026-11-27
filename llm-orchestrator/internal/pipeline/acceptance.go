@@ -116,7 +116,7 @@ func (o *Orchestrator) judgeAcceptance(ss *session, st *storyState, ev evaluatio
 	}
 	for _, a := range st.plan.Acceptance {
 		judged := slices.ContainsFunc(results, func(r ScenarioResult) bool {
-			return normalizeQuestion(r.Criterion) == normalizeQuestion(a.Criterion) &&
+			return sameCriterionText(r.Criterion, a.Criterion) &&
 				(r.Scenario == "" || a.Scenario == "" || normalizeQuestion(r.Scenario) == normalizeQuestion(a.Scenario) || r.Negative == a.Negative)
 		})
 		if !judged {
@@ -187,8 +187,20 @@ func checkScenario(s ScenarioResult, traces []quality.Trace) ScenarioResult {
 	}
 	proven := false
 	for _, id := range s.Tests {
-		i := slices.IndexFunc(traces, func(t quality.Trace) bool { return strings.EqualFold(t.ID, strings.TrimSpace(id)) })
+		id = strings.TrimSpace(id)
+		i := slices.IndexFunc(traces, func(t quality.Trace) bool { return strings.EqualFold(t.ID, id) })
 		if i < 0 {
+			// QA may cite the executed case instead of the spec's ID: that
+			// case's own result is the evidence.
+			switch c, ok := citedCase(traces, id); {
+			case !ok:
+			case c.Status == quality.CaseFailed:
+				s.Status, s.Note = ScenarioRejected, "o caso "+c.Name+" falhou na execução"
+				return s
+			case c.Status == quality.CasePassed:
+				s.Artifacts = append(s.Artifacts, c.Attachments...)
+				proven = true
+			}
 			continue
 		}
 		t := traces[i]
@@ -207,6 +219,28 @@ func checkScenario(s ScenarioResult, traces []quality.Trace) ScenarioResult {
 		s.Status, s.Note = ScenarioNoEvidence, "nenhum caso citado foi comprovado por execução"
 	}
 	return s
+}
+
+// citedCase finds an executed case, linked to a trace, by its full name.
+func citedCase(traces []quality.Trace, name string) (quality.CaseRef, bool) {
+	for _, t := range traces {
+		for _, c := range t.Cases {
+			if strings.EqualFold(c.Name, name) {
+				return c, true
+			}
+		}
+	}
+	return quality.CaseRef{}, false
+}
+
+// reEnumeration is the numbering QA may put before a criterion ("1. ", "2) ").
+var reEnumeration = regexp.MustCompile(`^\s*\d{1,3}[.)]\s+`)
+
+// sameCriterionText compares a criterion QA judged to a planned one, ignoring
+// case, spacing and the numbering QA adds.
+func sameCriterionText(a, b string) bool {
+	strip := func(s string) string { return normalizeQuestion(reEnumeration.ReplaceAllString(s, "")) }
+	return strip(a) == strip(b)
 }
 
 func isInspection(method string) bool {
@@ -257,13 +291,41 @@ var redactions = []struct {
 	{regexp.MustCompile(`\beyJ[\w-]+\.[\w-]+\.[\w-]+`), "[jwt removido]"},
 	{regexp.MustCompile(`[\w.+-]+@[\w-]+\.[\w.-]+`), "[e-mail removido]"},
 	{regexp.MustCompile(`\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b`), "[cpf removido]"},
-	{regexp.MustCompile(`\b\d(?:[ -]?\d){12,18}\b`), "[número removido]"},
 }
+
+// cardNumber matches the ways card numbers are written: 13 to 19 digits in a
+// row, four groups of four (plus a short tail), or the 4-6-5 of Amex. Other
+// digit runs, such as the date and time in a branch name, are left alone.
+var cardNumber = regexp.MustCompile(`\b(?:\d{13,19}|\d{4}(?:[ -]\d{4}){3}(?:[ -]\d{1,3})?|\d{4}[ -]\d{6}[ -]\d{5})\b`)
 
 // redact removes sensitive data from text kept in the run's record.
 func redact(s string) string {
 	for _, r := range redactions {
 		s = r.re.ReplaceAllString(s, r.with)
 	}
-	return s
+	return cardNumber.ReplaceAllStringFunc(s, func(m string) string {
+		if luhn(m) {
+			return "[número removido]"
+		}
+		return m
+	})
+}
+
+// luhn reports whether the digits in s pass the Luhn check every card number
+// passes; separators are skipped.
+func luhn(s string) bool {
+	sum, double := 0, false
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] < '0' || s[i] > '9' {
+			continue
+		}
+		d := int(s[i] - '0')
+		if double {
+			if d *= 2; d > 9 {
+				d -= 9
+			}
+		}
+		sum, double = sum+d, !double
+	}
+	return sum%10 == 0
 }

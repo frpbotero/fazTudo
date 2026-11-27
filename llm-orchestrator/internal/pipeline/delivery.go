@@ -210,16 +210,33 @@ func pendingIssues(steps []Step) []Issue {
 	return out
 }
 
+// withReason is the value followed by its reason in parentheses, or the value
+// alone when there is no reason.
+func withReason(value, reason string) string {
+	if reason == "" {
+		return value
+	}
+	return value + " (" + reason + ")"
+}
+
+// joinNonEmpty joins a and b with sep, or returns a when b is empty.
+func joinNonEmpty(a, sep, b string) string {
+	if b = strings.TrimSpace(b); b == "" {
+		return a
+	}
+	return a + sep + b
+}
+
 func renderStoryDelivery(run Run, st StoryRun) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", cmp.Or(st.Title, st.ID))
-	fmt.Fprintf(&b, "| | |\n|---|---|\n| Status | %s |\n| Validação | %s |\n| Integração | %s %s |\n", st.Status,
-		cmpValidation(st.Validation).Label(), cmp.Or(string(st.Integration), "não integrada"), st.IntegrationNote)
+	fmt.Fprintf(&b, "| | |\n|---|---|\n| Status | %s |\n| Validação | %s |\n| Integração | %s |\n", st.Status,
+		cmpValidation(st.Validation).Label(), joinNonEmpty(cmp.Or(string(st.Integration), "não integrada"), ": ", st.IntegrationNote))
 	if st.Change != "" {
-		fmt.Fprintf(&b, "| Tipo de mudança | %s %s |\n", changeLabel(st.Change), st.ChangeReason)
+		fmt.Fprintf(&b, "| Tipo de mudança | %s |\n", joinNonEmpty(changeLabel(st.Change), " ", st.ChangeReason))
 	}
 	if st.Risk != nil {
-		fmt.Fprintf(&b, "| Risco | %s (%s) |\n", st.Risk.Level, strings.Join(st.Risk.Reasons, "; "))
+		fmt.Fprintf(&b, "| Risco | %s |\n", withReason(st.Risk.Level, strings.Join(st.Risk.Reasons, "; ")))
 	}
 	fmt.Fprintf(&b, "| Branch | `%s` |\n| Commit de partida | `%s` |\n| Último commit | `%s` |\n", st.Branch, st.StartCommit, st.Head)
 	for dep, sha := range st.BuiltOn {
@@ -229,7 +246,7 @@ func renderStoryDelivery(run Run, st StoryRun) string {
 	if r := st.Readiness; r != nil && len(r.Criteria) > 0 {
 		b.WriteString("\n## Critérios (Passo 0)\n\n")
 		for _, c := range r.Criteria {
-			fmt.Fprintf(&b, "- %s — %s %s\n", c.Text, c.Status, c.Evidence)
+			fmt.Fprintf(&b, "- %s — %s\n", c.Text, joinNonEmpty(c.Status, ": ", c.Evidence))
 		}
 	}
 	if len(st.Trace) > 0 {
@@ -284,7 +301,7 @@ func renderStoryDelivery(run Run, st StoryRun) string {
 
 func renderPromotionDelivery(p Promotion) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Conjunto: %s\n\n- Branch: `%s`\n- Commit avaliado: `%s`\n- Resultado: %s %s\n", strings.Join(p.Stories, ", "), p.Branch, p.Commit, p.Status, p.Reason)
+	fmt.Fprintf(&b, "# Conjunto: %s\n\n- Branch: `%s`\n- Commit avaliado: `%s`\n- Resultado: %s\n", strings.Join(p.Stories, ", "), p.Branch, p.Commit, joinNonEmpty(string(p.Status), ": ", p.Reason))
 	if len(p.Repos) > 0 {
 		b.WriteString("\n| Repositório | Base | Candidato | Antes | Depois | Status |\n|---|---|---|---|---|---|\n")
 		for _, r := range p.Repos {

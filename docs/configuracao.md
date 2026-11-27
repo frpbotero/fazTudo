@@ -43,7 +43,7 @@ opcional: o que faltar usa o padrão. Exemplos prontos em [exemplos/](exemplos/)
 | `max_parallel_agents` | `0` (4) | chamadas de agente ao mesmo tempo, na execução inteira |
 | `candidates` | `1` | best-of-N; só com avaliação mostrando ganho |
 | `budget` | — | `{max_minutes, max_calls, max_tokens, max_retries, max_retry_wait_s}` |
-| `prices`, `prices_version` | — | US$ por milhão de tokens por modelo, para estimar custo |
+| `prices`, `prices_version` | — | US$ por milhão de tokens por modelo (`input`, `cached_input`, `output`), para estimar custo; sem `cached_input`, a entrada lida do cache custa o preço de `input` |
 | `context_bytes` | `0` (4000) | tamanho de cada artefato repassado entre etapas |
 | `log_limit` | `0` (500) | mensagens de log guardadas por execução |
 
