@@ -265,7 +265,8 @@ do projeto na última verificação, reprodução do bug) e a interpreta, sem su
 
 - cenário **aceito** precisa citar o ID de um caso **comprovado** por execução (ou o nome do caso
   executado, que vale pelo próprio resultado); inspeção precisa de
-  `arquivo:linha`, e o QA fica como responsável;
+  `arquivo:linha`, e o QA fica como responsável; cenário que só o resultado de um comando do projeto
+  prova ("os testes e o lint passam") cita o comando, e vale o que ele deu na última verificação;
 - caso citado que falhou torna o cenário **recusado**, que volta para o implementador mesmo que o QA
   tenha aprovado;
 - cada cenário do plano tem um ID (`AC-1`, `AC-2`, …) dado pelo orquestrador, e o QA responde por ele:
