@@ -379,3 +379,26 @@ func TestPolicySCM(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyParallelAgentsAndResources(t *testing.T) {
+	m, _ := NewManager(t.TempDir())
+	p := m.Policy()
+	p.AutoChecks = false
+	p.MaxParallelAgents = 2
+	p.Checks = []quality.Command{{Name: "db", Run: "make db", Resource: " Postgres "}}
+	got, err := m.SetPolicy(p)
+	if err != nil || got.Checks[0].Resource != "postgres" {
+		t.Fatalf("policy = %+v, %v", got.Checks, err)
+	}
+	for _, bad := range []func(*Policy){
+		func(p *Policy) { p.MaxParallelAgents = 17 },
+		func(p *Policy) { p.Checks[0].Resource = "banco de dados" },
+	} {
+		q := got
+		q.Checks = slices.Clone(got.Checks)
+		bad(&q)
+		if _, err := m.SetPolicy(q); err == nil {
+			t.Errorf("%+v accepted", q)
+		}
+	}
+}

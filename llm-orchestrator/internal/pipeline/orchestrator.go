@@ -111,6 +111,8 @@ type Step struct {
 	Commit *vcs.Commit `json:"commit,omitempty"`
 	// Calls record what each agent call of the step ran with.
 	Calls []CallRecord `json:"calls,omitempty"`
+	// QueueMS is how long the step's agent calls waited for a slot.
+	QueueMS int64 `json:"queue_ms,omitempty"`
 	// Advisory are a review's style remarks: reported, not demanded.
 	Advisory   []Issue    `json:"advisory,omitempty"`
 	Error      string     `json:"error,omitempty"`
@@ -296,6 +298,8 @@ type Orchestrator struct {
 	appVersion string
 	// scmFor finds the source host of a repository, for review mode.
 	scmFor func(ctx context.Context, dir string) (scm.Provider, error)
+	// agentSlots bound the run's agent calls at once.
+	agentSlots *fairSlots
 	// lanes are the stories running side by side: a failure of one of them
 	// stops that story, not the run, unless it is global.
 	lanes    map[int]bool
@@ -306,7 +310,9 @@ type Orchestrator struct {
 	logger   *slog.Logger
 	runCheck func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
 	// sweepStacks and lockStackSlot keep disposable test stacks in check.
-	sweepStacks   func(ctx context.Context, roots, patterns []string) ([]string, error)
+	sweepStacks func(ctx context.Context, roots, patterns []string) ([]string, error)
+	// lockResource holds a named shared resource across processes and lanes.
+	lockResource  func(ctx context.Context, name string, onWait func()) (func(), error)
 	lockStackSlot func(ctx context.Context, onWait func()) (func(), error)
 	// attempts and retryDelay control how failing agent calls are retried.
 	attempts   int
@@ -350,7 +356,7 @@ var (
 func New(exec Executor, ws *workspace.Manager, stages []Stage, onChange func(), logger *slog.Logger) *Orchestrator {
 	o := &Orchestrator{exec: exec, ws: ws, baseStages: stages, stages: resolveStages(stages, nil), texts: resolveTexts(nil),
 		onChange: onChange, logger: logger, runCheck: quality.Run,
-		sweepStacks: defaultSweepStacks, lockStackSlot: defaultLockStackSlot,
+		sweepStacks: defaultSweepStacks, lockStackSlot: defaultLockStackSlot, lockResource: workspace.LockResource,
 		attempts: agentAttempts, retryDelay: agentRetryDelay,
 		scmFor: func(ctx context.Context, dir string) (scm.Provider, error) {
 			return scm.Detect(ctx, dir, scm.ExecRunner)
@@ -923,6 +929,7 @@ func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts Start
 	policy := o.ws.Policy()
 	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
 	o.useLimits(policy, ss.checks)
+	o.useSlots(policy)
 	ss.patterns = protectedPatterns(policy, opts)
 	ss.guard = quality.NewGuard(repo, ss.patterns)
 	if !opts.DryRun && policy.Git {
@@ -1013,6 +1020,7 @@ func (o *Orchestrator) prepare(ctx context.Context, repo string, opts StartOptio
 	policy := o.ws.Policy()
 	ss := &session{repo: repo, dry: opts.DryRun, policy: policy, checks: o.ws.Checks(), instructions: workspace.ReadInstructions(repo)}
 	o.useLimits(policy, ss.checks)
+	o.useSlots(policy)
 	if ss.instructions != "" {
 		o.logf(LevelInfo, "Instruções do projeto (AGENTS.md/CLAUDE.md/Spec Kit) repassadas a todos os agentes.")
 	}
@@ -1958,8 +1966,7 @@ func (o *Orchestrator) executeRetrying(ctx context.Context, ref stepRef, req pro
 	req = o.limited(req)
 	prompt := req.Prompt
 	for attempt := 1; ; attempt++ {
-		resp, err := o.exec.Execute(ctx, req, o.providerLog)
-		o.recordUsage(ref, req, resp, attempt)
+		resp, err := o.callAgent(ctx, ref, req, attempt)
 		if errors.Is(err, provider.ErrTurnLimit) {
 			return o.turnLimited(ref, req, resp, err)
 		}

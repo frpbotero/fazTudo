@@ -348,6 +348,17 @@ func failureTitle(f quality.Failure) string {
 // Stories running side by side may each have an agent using a stack, so there
 // only the run's ends sweep.
 func (o *Orchestrator) runGated(ctx context.Context, ss *session, dir string, c quality.Command, timeout time.Duration) quality.Result {
+	if c.Resource != "" {
+		release, err := o.lockResource(ctx, c.Resource, func() { o.logf(LevelInfo, "%s aguarda o recurso %s.", c.Name, c.Resource) })
+		if err != nil {
+			if ctx.Err() != nil {
+				return quality.Result{Name: c.Name, Command: c.Run, ExitCode: -1, Output: err.Error()}
+			}
+			o.logf(LevelWarn, "Trava do recurso %s indisponível (%v); seguindo sem ela.", c.Resource, err)
+		} else {
+			defer release()
+		}
+	}
 	if !quality.Heavy(c) {
 		return o.runCheck(ctx, dir, c, timeout)
 	}

@@ -43,3 +43,12 @@ func stackSlotFile() (string, error) {
 	}
 	return filepath.Join(dir, "stack-slot.lock"), nil
 }
+
+// resourceFile is the machine-wide lock of a named shared resource.
+func resourceFile(name string) (string, error) {
+	dir, err := lockDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "resource-"+name+".lock"), nil
+}

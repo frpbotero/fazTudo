@@ -611,6 +611,7 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 	for _, si := range candidates {
 		labels = append(labels, storyLabel(opts.Stories[si]))
 	}
+	started := time.Now()
 	branch := vcs.BranchName("integra "+strings.Join(labels, " "), time.Now())
 	if err := ss.git.CreateBranch(ctx, branch); err != nil {
 		o.failRun(fmt.Errorf("criar a branch de integração %s: %w", branch, err))
@@ -632,7 +633,7 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 			labels = append(labels, storyLabel(opts.Stories[si]))
 		}
 	}
-	p := Promotion{Stories: labels, Branch: branch}
+	p := Promotion{Stories: labels, Branch: branch, started: started}
 	if len(merged) == 0 {
 		p.Stories = tried
 		return o.blockPromotion(ctx, ss, nil, p, "nenhuma US da onda pôde ser integrada")

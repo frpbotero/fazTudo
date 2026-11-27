@@ -136,8 +136,7 @@ func (o *Orchestrator) runCandidates(ctx context.Context, ss *session, st *story
 				Tier:    stage.Tier,
 				WorkDir: c.work,
 			})
-			resp, err := o.exec.Execute(ctx, req, o.providerLog)
-			o.recordUsage(ref, req, resp, 1)
+			resp, err := o.callAgent(ctx, ref, req, 1)
 			if errors.Is(err, provider.ErrTurnLimit) {
 				resp, err = o.turnLimited(ref, req, resp, err)
 			}
@@ -279,8 +278,7 @@ func (o *Orchestrator) chooseCandidate(ctx context.Context, ss *session, base st
 		Role: SelectorStage.Role, System: o.texts.selector.System, Prompt: b.String(),
 		Tier: SelectorStage.Tier, WorkDir: ss.repo, ReadOnly: true,
 	})
-	resp, err := o.exec.Execute(ctx, req, o.providerLog)
-	o.recordUsage(stepRef{-1, SelectorStage.ID}, req, resp, 1)
+	resp, err := o.callAgent(ctx, stepRef{-1, SelectorStage.ID}, req, 1)
 	if err != nil {
 		o.logf(LevelWarn, "Seletor indisponível (%v); usando o candidato %s.", err, tied[0].ID)
 		return tied[0], reason

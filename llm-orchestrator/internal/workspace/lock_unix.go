@@ -25,6 +25,20 @@ func LockStackSlot(ctx context.Context, onWait func()) (unlock func(), err error
 	return waitForLock(ctx, path, stackSlotPoll, onWait)
 }
 
+// resourcePoll is how often a waiting command retries a resource lock.
+const resourcePoll = time.Second
+
+// LockResource waits for the named resource (a database, a port range, a
+// service) across FazTudo processes and the stories of a run, until ctx
+// ends. Commands that declare the same resource never run at once.
+func LockResource(ctx context.Context, name string, onWait func()) (unlock func(), err error) {
+	path, err := resourceFile(name)
+	if err != nil {
+		return nil, err
+	}
+	return waitForLock(ctx, path, resourcePoll, onWait)
+}
+
 func waitForLock(ctx context.Context, path string, poll time.Duration, onWait func()) (func(), error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
