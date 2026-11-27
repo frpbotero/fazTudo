@@ -257,13 +257,41 @@ var redactions = []struct {
 	{regexp.MustCompile(`\beyJ[\w-]+\.[\w-]+\.[\w-]+`), "[jwt removido]"},
 	{regexp.MustCompile(`[\w.+-]+@[\w-]+\.[\w.-]+`), "[e-mail removido]"},
 	{regexp.MustCompile(`\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b`), "[cpf removido]"},
-	{regexp.MustCompile(`\b\d(?:[ -]?\d){12,18}\b`), "[número removido]"},
 }
+
+// cardNumber matches the ways card numbers are written: 13 to 19 digits in a
+// row, four groups of four (plus a short tail), or the 4-6-5 of Amex. Other
+// digit runs, such as the date and time in a branch name, are left alone.
+var cardNumber = regexp.MustCompile(`\b(?:\d{13,19}|\d{4}(?:[ -]\d{4}){3}(?:[ -]\d{1,3})?|\d{4}[ -]\d{6}[ -]\d{5})\b`)
 
 // redact removes sensitive data from text kept in the run's record.
 func redact(s string) string {
 	for _, r := range redactions {
 		s = r.re.ReplaceAllString(s, r.with)
 	}
-	return s
+	return cardNumber.ReplaceAllStringFunc(s, func(m string) string {
+		if luhn(m) {
+			return "[número removido]"
+		}
+		return m
+	})
+}
+
+// luhn reports whether the digits in s pass the Luhn check every card number
+// passes; separators are skipped.
+func luhn(s string) bool {
+	sum, double := 0, false
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] < '0' || s[i] > '9' {
+			continue
+		}
+		d := int(s[i] - '0')
+		if double {
+			if d *= 2; d > 9 {
+				d -= 9
+			}
+		}
+		sum, double = sum+d, !double
+	}
+	return sum%10 == 0
 }

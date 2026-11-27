@@ -167,3 +167,18 @@ func TestPlannedScenarioQALeftOutHasNoEvidence(t *testing.T) {
 		t.Errorf("validation = %s", st.Validation)
 	}
 }
+
+func TestRedactRemovesOnlyCardShapedNumbers(t *testing.T) {
+	for _, card := range []string{"4111 1111 1111 1111", "4111-1111-1111-1111", "4111111111111111", "3782 822463 10005"} {
+		if out := redact("cartão " + card); strings.Contains(out, card) {
+			t.Errorf("%q survived: %s", card, out)
+		}
+	}
+	// Branch names, run IDs and timestamps carry long digit runs that are not
+	// cards, even when the digits happen to pass the Luhn check.
+	for _, keep := range []string{"faztudo/us-1-20261127-071408", "20261127T071345-b9c3ee27", "pedido 4111 1111 1111 1112", "1-2026-1127-0714-08"} {
+		if out := redact(keep); out != keep {
+			t.Errorf("%q became %q", keep, out)
+		}
+	}
+}
