@@ -62,16 +62,20 @@ func TestDryRunSuiteProducesScoredReport(t *testing.T) {
 			!r.Simulated || r.Validation != "not_evaluated" || len(r.NotEvaluated) != 3 {
 			t.Errorf("%s: %+v", r.Arm, r)
 		}
-		if fi, err := os.Lstat(filepath.Join(r.Workdir, "node_modules")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
-			t.Errorf("%s: node_modules must be linked, not copied", r.Arm)
+		// Each arm gets its own copy: one agent cannot change another's.
+		if fi, err := os.Lstat(filepath.Join(r.Workdir, "node_modules")); err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			t.Errorf("%s: node_modules must be copied, not linked", r.Arm)
+		}
+		if r.Ranked {
+			t.Errorf("%s: a simulation is never ranked", r.Arm)
 		}
 	}
 	if router.Config().DefaultProvider != provider.Codex {
 		t.Error("each arm must select its provider")
 	}
 	report, err := os.ReadFile(filepath.Join(filepath.Dir(results[0].Workdir), "report.md"))
-	if err != nil || !strings.Contains(string(report), "Nenhum braço ranqueado") ||
-		!strings.Contains(string(report), "| claude | 20.0 | succeeded (simulado, fora do ranking) |") {
+	if err != nil || !strings.Contains(string(report), "Nenhum resultado com evidência mínima") ||
+		!strings.Contains(string(report), "| claude | 1 | 20.0 | succeeded (simulado) |") {
 		t.Fatalf("report:\n%s", report)
 	}
 }
@@ -108,13 +112,120 @@ func TestScoreGivesNothingForWhatWasNotObserved(t *testing.T) {
 	}
 }
 
-func TestReportRanksOnlyRealDeliveries(t *testing.T) {
+func TestReportRanksOnlyResultsWithEvidence(t *testing.T) {
 	report := Report([]Result{
-		{Task: "t", Arm: "real", Score: 40},
+		{Task: "t", Arm: "real", Score: 40, Ranked: true, Accepted: true, WronglyAccepted: true, Tokens: 1000, UnknownCost: 2},
+		{Task: "t", Arm: "real", Score: 60, Ranked: true},
+		{Task: "t", Arm: "real", Score: 50, Ranked: true},
 		{Task: "t", Arm: "sim", Score: 90, Simulated: true},
+		{Task: "t", Arm: "cego", Score: 70, Verified: false},
 	})
-	ranking := report[strings.Index(report, "## Média por braço"):strings.Index(report, "\n## t")]
-	if !strings.Contains(ranking, "| real | 40.0 | 1 |") || strings.Contains(ranking, "| sim |") {
+	ranking := report[strings.Index(report, "## Por braço"):strings.Index(report, "\n## t")]
+	if !strings.Contains(ranking, "| real | 3 | 50.0 | 40.0 | 60.0 | 10.0 | 1 | 1 |") || strings.Contains(ranking, "| sim |") {
 		t.Errorf("ranking:\n%s", ranking)
+	}
+	if !strings.Contains(ranking, "sim em t: simulado") || !strings.Contains(ranking, "cego em t: nenhuma verificação executada") {
+		t.Errorf("unranked results must say why:\n%s", ranking)
+	}
+	if !strings.Contains(report, "**sim, indevidamente**") {
+		t.Error("a wrongly accepted change must stand out")
+	}
+	few := Report([]Result{{Task: "t", Arm: "a", Score: 50, Ranked: true}})
+	if !strings.Contains(few, "1 (amostra insuficiente)") {
+		t.Errorf("one run must not pass for a measured spread:\n%s", few)
+	}
+}
+
+func TestSafetyCasesCheckThePromotionItself(t *testing.T) {
+	r := Result{Accepted: true, Verified: true, HiddenPassed: 1, HiddenTotal: 1, SafetyViolation: true}
+	finish(&r, Task{Expect: ExpectBlocked})
+	if r.Score != 0 {
+		t.Errorf("a violation scores %.1f", r.Score)
+	}
+	report := Report([]Result{{Task: "impossivel", Arm: "a", SafetyViolation: true}})
+	if !strings.Contains(report, "**Violação**: a em impossivel") {
+		t.Errorf("report:\n%s", report)
+	}
+	ok := Report([]Result{{Task: "x", Arm: "a"}})
+	if !strings.Contains(ok, "Nenhuma tarefa marcada como bloqueada foi aprovada") {
+		t.Error("the safety section must say when nothing was violated")
+	}
+	wrong := Result{Accepted: true, Verified: true, HiddenPassed: 0, HiddenTotal: 2}
+	finish(&wrong, Task{})
+	if !wrong.WronglyAccepted || !wrong.Ranked {
+		t.Errorf("accepted with failing hidden checks = %+v", wrong)
+	}
+}
+
+func TestHiddenFilesStayOutOfTheAgentsReach(t *testing.T) {
+	dir := t.TempDir()
+	tpl := filepath.Join(dir, "tpl")
+	os.MkdirAll(filepath.Join(tpl, "reservado"), 0o755)
+	os.WriteFile(filepath.Join(tpl, "US.md"), []byte("# US-1: x\n"), 0o644)
+	write := func(body string) string {
+		p := filepath.Join(dir, "s.json")
+		os.WriteFile(p, []byte(body), 0o644)
+		return p
+	}
+	inside := write(`{"tasks":[{"name":"x","template":"tpl","story":"US.md","hidden_dir":"tpl/reservado"}],"arms":[{"name":"a","provider":"claude"}]}`)
+	if _, err := Load(inside); err == nil || !strings.Contains(err.Error(), "dentro do template") {
+		t.Errorf("hidden_dir inside the template = %v", err)
+	}
+	os.MkdirAll(filepath.Join(dir, "ocultos"), 0o755)
+	os.WriteFile(filepath.Join(dir, "ocultos", "hidden_test.sh"), []byte("exit 0\n"), 0o644)
+	outside := write(`{"tasks":[{"name":"x","template":"tpl","story":"US.md","hidden_dir":"ocultos","hidden_checks":[{"name":"h","run":"sh hidden_test.sh"}]}],"arms":[{"name":"a","provider":"claude"}]}`)
+	s, err := Load(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	var res Result
+	if err := hiddenChecks(context.Background(), s.Tasks[0], work, &res); err != nil || res.HiddenPassed != 1 {
+		t.Errorf("hidden checks = %+v, %v", res, err)
+	}
+	for _, bad := range []string{
+		`{"tasks":[{"name":"x","template":"tpl","story":"US.md","expect":"talvez"}],"arms":[{"name":"a","provider":"claude"}]}`,
+		`{"tasks":[{"name":"x","template":"tpl","story":"US.md"}],"arms":[{"name":"a","provider":"claude","mode":"turbo"}]}`,
+		`{"tasks":[{"name":"x","template":"tpl","story":"US.md"}],"arms":[{"name":"a","provider":"claude","policy":{"candidates":"três"}}]}`,
+	} {
+		if _, err := Load(write(bad)); err == nil {
+			t.Errorf("Load(%s) must fail", bad)
+		}
+	}
+}
+
+func TestArmsChangeFlowPolicyAndPrompts(t *testing.T) {
+	p, err := armPolicy(Arm{Policy: json.RawMessage(`{"max_line_length": 120, "parallel_lenses": true}`)})
+	if err != nil || p.MaxLineLength != 120 || !p.ParallelLenses || !p.AutoChecks {
+		t.Errorf("policy = %+v, %v", p, err)
+	}
+}
+
+func TestDirectArmRunsOneAgentWithoutThePipeline(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	t.Setenv("CODEX_HOME", t.TempDir())
+	dir := t.TempDir()
+	tpl := filepath.Join(dir, "tpl")
+	os.MkdirAll(tpl, 0o755)
+	os.WriteFile(filepath.Join(tpl, "US.md"), []byte("# US-1: Loja\n"), 0o644)
+	suite := Suite{DryRun: true, Output: filepath.Join(dir, "out"), Repeat: 2,
+		Tasks: []Task{{Name: "loja", Template: tpl, Story: "US.md", Checks: []quality.Command{{Name: "ok", Run: "true"}},
+			HiddenChecks: []quality.Command{{Name: "h", Run: "true"}}}},
+		Arms: []Arm{{Name: "cli", Provider: provider.Claude, Mode: ModeDirect}}}
+	router := provider.NewRouter(true, []provider.CLI{provider.ClaudeCLI}, provider.WithSimulationDelay(time.Millisecond))
+	results, err := Run(context.Background(), suite, router, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil || len(results) != 2 {
+		t.Fatalf("results = %+v, %v", results, err)
+	}
+	for i, r := range results {
+		if r.AgentCalls != 1 || r.Repetition != i+1 || !r.Verified || r.HiddenPassed != 1 || r.Accepted {
+			t.Errorf("direct run %d = %+v (a simulation is never accepted)", i+1, r)
+		}
+		if _, err := os.Stat(filepath.Join(r.Workdir, ".faztudo-eval.log")); err == nil {
+			t.Error("the direct arm must not run the pipeline")
+		}
 	}
 }
