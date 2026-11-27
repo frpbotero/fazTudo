@@ -248,6 +248,10 @@ func (o *Orchestrator) storyRun(si int) StoryRun {
 func (o *Orchestrator) unmetDependency(si int, list []stories.Story) string {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
+	return o.unmetDependencyLocked(si, list)
+}
+
+func (o *Orchestrator) unmetDependencyLocked(si int, list []stories.Story) string {
 	deps := o.dependenciesLocked(si, list)
 	for _, d := range deps {
 		dep := o.run.Stories[d]
@@ -401,4 +405,44 @@ func repoPromotions(bases, cands, before, after map[string]string) []RepoPromoti
 		out = append(out, r)
 	}
 	return out
+}
+
+// dependencyBlock tells why story si cannot start yet: an unmet dependency,
+// or one merged on the host whose merge the local base does not have.
+func (o *Orchestrator) dependencyBlock(ctx context.Context, ss *session, si int, list []stories.Story) string {
+	if reason := o.unmetDependency(si, list); reason != "" {
+		return reason
+	}
+	return o.hostMergeMissing(ctx, ss, si, list)
+}
+
+// hostMergeMissing tells, for a story whose dependency entered the base
+// through a pull request merged on the host, that the local base the story
+// builds on does not have that merge yet.
+func (o *Orchestrator) hostMergeMissing(ctx context.Context, ss *session, si int, list []stories.Story) string {
+	base := ss.bases["."]
+	if ss.git == nil || base == "" {
+		return ""
+	}
+	type need struct{ name, commit string }
+	var needs []need
+	o.mu.RLock()
+	for _, d := range o.dependenciesLocked(si, list) {
+		label := storyLabel(list[d])
+		for i := len(o.run.Promotions) - 1; i >= 0; i-- {
+			p := o.run.Promotions[i]
+			if p.PR != nil && p.Status == IntegrationIntegrated && p.Commit != "" && slices.Contains(p.Stories, label) {
+				needs = append(needs, need{cmp.Or(o.run.Stories[d].ID, o.run.Stories[d].Title), p.Commit})
+				break
+			}
+		}
+	}
+	o.mu.RUnlock()
+	for _, n := range needs {
+		if !ss.git.IsAncestor(ctx, n.commit, base) {
+			return fmt.Sprintf("%s %s, que entrou pelo pull request mas ainda não está na base local %s: traga o merge (git pull) e continue",
+				dependsPrefix, n.name, base)
+		}
+	}
+	return ""
 }

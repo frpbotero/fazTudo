@@ -3,6 +3,8 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -209,5 +211,61 @@ func TestClosedPullRequestBlocksTheStory(t *testing.T) {
 	}
 	if st := o.Snapshot().Stories[0]; st.Integration != IntegrationBlocked {
 		t.Errorf("story integration = %s", st.Integration)
+	}
+}
+
+func TestDependentContinuesOnceTheMergeIsInTheLocalBase(t *testing.T) {
+	o, repo, host := newReviewTest(t, func(*workspace.SCMPolicy) {})
+	o.baseStages, o.stages = gatedStages, gatedStages
+	policy := o.ws.Policy()
+	policy.Sequential = false
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	o.SetJournalDir(t.TempDir())
+	_ = o.Start(StartOptions{Stories: threeStories, Source: "Markdown"})
+	run := waitDone(t, o)
+	if run.Stories[2].Status != StepSkipped {
+		t.Fatalf("US-3 = %s", run.Stories[2].Status)
+	}
+	writtenAt := run.Delivery.At
+
+	host.review = &scm.Review{State: "MERGED", MergeCommit: "m1"}
+	if _, err := o.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	snap := o.Snapshot()
+	if snap.Resume == nil || snap.Resume.Story != 2 || !snap.Resume.Fresh {
+		t.Fatalf("the dependent must be offered to continue: %+v", snap.Resume)
+	}
+	if snap.Delivery == nil || !snap.Delivery.At.After(writtenAt) {
+		t.Errorf("reconcile must rewrite the delivery package: %+v", snap.Delivery)
+	}
+	if md, _ := os.ReadFile(filepath.Join(snap.Delivery.Dir, "US-1.md")); !strings.Contains(string(md), "merge feito no pull request") {
+		t.Errorf("the package must show the reconciled integration:\n%s", md)
+	}
+
+	// Merged on the host only: the local base still lacks US-1 and US-2.
+	if err := o.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	run = waitDone(t, o)
+	if st := run.Stories[2]; st.Status != StepSkipped || !strings.Contains(st.IntegrationNote, "git pull") {
+		t.Fatalf("without the merge in the local base, US-3 must wait for it: %s %q", st.Status, st.IntegrationNote)
+	}
+
+	// The user pulls the merge into the base: the pull request's branch.
+	for _, p := range latestReviews(run.Promotions) {
+		gitOut(t, repo, "merge", "--no-edit", p.Branch)
+	}
+	if err := o.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	run = waitDone(t, o)
+	if st := run.Stories[2]; st.Status != StepDone || st.Integration != IntegrationAwaitingReview {
+		t.Errorf("US-3 = %s %s %q", st.Status, st.Integration, st.IntegrationNote)
+	}
+	if run.Stories[0].Integration != IntegrationIntegrated {
+		t.Errorf("the reconciled stories stay integrated: %s", run.Stories[0].Integration)
 	}
 }

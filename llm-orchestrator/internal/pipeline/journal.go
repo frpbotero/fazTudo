@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"time"
+
+	"llm-orchestrator/internal/workspace"
 )
 
 // ResumePoint is where a stopped run continues: the failed step, or the step
@@ -19,6 +21,9 @@ type ResumePoint struct {
 	Title string `json:"title"`
 	// StoryTitle names the story; empty for run-level steps.
 	StoryTitle string `json:"story_title,omitempty"`
+	// Fresh marks a story that starts over: it was left out for a dependency
+	// that has since been integrated, as when its pull request was merged.
+	Fresh bool `json:"fresh,omitempty"`
 }
 
 // journal is the last run of a repository as saved on disk: its steps and
@@ -74,8 +79,11 @@ func (o *Orchestrator) Resume() error {
 	}
 	point := o.resumePointLocked()
 	o.mu.Unlock()
-	if point == nil {
+	switch {
+	case point == nil:
 		return ErrNoFailedStep
+	case point.Fresh:
+		return o.continueDependents()
 	}
 	return o.RetryFailed(point.Story, point.Step)
 }
@@ -83,8 +91,11 @@ func (o *Orchestrator) Resume() error {
 // resumePointLocked finds where the stopped run continues: a failed step
 // first, else the first interrupted one, in wave order.
 func (o *Orchestrator) resumePointLocked() *ResumePoint {
-	if !o.isResumableLocked() || len(o.last.Stories) == 0 || len(o.last.Stories) != len(o.run.Stories) {
+	if o.run.Running || len(o.last.Stories) == 0 || len(o.last.Stories) != len(o.run.Stories) {
 		return nil
+	}
+	if !o.isResumableLocked() {
+		return o.releasedDependentLocked()
 	}
 	for _, s := range []*Step{&o.run.Discovery, o.run.Analysis} {
 		if s != nil && o.isStoppedLocked(s.Status) {
@@ -239,4 +250,64 @@ func markInterrupted(run *Run, at time.Time) {
 func journalFile(dir, repo string) string {
 	sum := sha1.Sum([]byte(repo))
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
+}
+
+// storyOrderLocked is the stories' indexes in wave order.
+func (o *Orchestrator) storyOrderLocked() []int {
+	order := slices.Concat(o.run.Waves...)
+	if len(order) != len(o.run.Stories) {
+		order = slices.Concat(sequentialWaves(len(o.run.Stories))...)
+	}
+	return order
+}
+
+// releasedLocked lists, in wave order, the stories left out only for a
+// dependency that has since been integrated: they can start now.
+func (o *Orchestrator) releasedLocked() []int {
+	var out []int
+	for _, si := range o.storyOrderLocked() {
+		if skippedByDependency(o.run.Stories[si]) && o.unmetDependencyLocked(si, o.last.Stories) == "" {
+			out = append(out, si)
+		}
+	}
+	return out
+}
+
+// releasedDependentLocked is where a finished run continues when a story it
+// left out for a dependency can start, as after a merged pull request.
+func (o *Orchestrator) releasedDependentLocked() *ResumePoint {
+	if o.run.Kind == RunCleanup {
+		return nil
+	}
+	released := o.releasedLocked()
+	if len(released) == 0 {
+		return nil
+	}
+	st := o.run.Stories[released[0]]
+	return &ResumePoint{Story: released[0], Title: "Começar: dependência integrada", StoryTitle: st.Title, Fresh: true}
+}
+
+// continueDependents develops, from Passo 0, the stories left out for a
+// dependency that has since been integrated.
+func (o *Orchestrator) continueDependents() error {
+	o.mu.Lock()
+	if o.busyLocked() {
+		o.mu.Unlock()
+		return ErrAlreadyRunning
+	}
+	released := o.releasedLocked()
+	if len(released) == 0 {
+		o.mu.Unlock()
+		return ErrNoFailedStep
+	}
+	unlock, err := workspace.LockRepository(o.ws.Path())
+	if err != nil {
+		o.mu.Unlock()
+		return err
+	}
+	for _, si := range released {
+		o.resetStoryLocked(si)
+	}
+	o.relaunchLocked(released[0], unlock, fmt.Sprintf("%d US liberada(s) pela dependência integrada; recomeçam do Passo 0.", len(released)))
+	return nil
 }

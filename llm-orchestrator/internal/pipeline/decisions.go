@@ -65,6 +65,14 @@ func (o *Orchestrator) AnswerDecisions(si int, answers []string) error {
 			o.resetStoryLocked(i)
 		}
 	}
+	o.relaunchLocked(si, unlock, fmt.Sprintf("Decisões de %s respondidas; a US recomeça do Passo 0.", story.Title))
+	return nil
+}
+
+// relaunchLocked runs the last run again from story si's wave, the stories
+// already finished kept as they are. Caller holds o.mu and the repository
+// lock, whose unlock runs when the run ends; o.mu is released here.
+func (o *Orchestrator) relaunchLocked(si int, unlock func(), msg string) {
 	o.run.Running = true
 	o.run.Result = ""
 	o.run.Validation = ""
@@ -77,22 +85,21 @@ func (o *Orchestrator) AnswerDecisions(si int, answers []string) error {
 	o.done = make(chan struct{})
 	done := o.done
 	opts := o.last
-	title := story.Title
 	customized := o.usePrompts()
 	o.mu.Unlock()
 	o.notify()
 	o.logCustomPrompts(customized)
-	o.logf(LevelInfo, "Decisões de %s respondidas; a US recomeça do Passo 0.", title)
+	o.logf(LevelInfo, "%s", msg)
 
+	started := time.Now()
 	go func() {
 		defer close(done)
 		defer unlock()
 		defer cancel()
 		defer o.sweepRun(o.ws.Path(), opts.DryRun)
 		o.sweepRun(o.ws.Path(), opts.DryRun)
-		o.retryExecute(ctx, opts, si, -1, now)
+		o.retryExecute(ctx, opts, si, -1, started)
 	}()
-	return nil
 }
 
 // resetStoryLocked puts a story back to its start, keeping only the user's

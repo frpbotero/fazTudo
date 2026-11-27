@@ -81,6 +81,7 @@ func (o *Orchestrator) Reconcile() (Promotion, error) {
 	o.recordPromotion(p, stories)
 	o.recordOperation(Operation{Key: operationKey("merge-base", partial.Commit, bases["."]), Kind: "merge-base", Target: bases["."], Result: partial.Commit})
 	o.logf(LevelSuccess, "%s reconciliada: todos os repositórios têm a integração. Continue de onde parou.", strings.Join(p.Stories, ", "))
+	o.writeDelivery(o.Snapshot())
 	o.writeJournal()
 	return p, nil
 }
@@ -150,6 +151,10 @@ func (o *Orchestrator) reconcileReviews() (Promotion, error) {
 	if last == nil {
 		return Promotion{}, ErrNothingToReconcile
 	}
+	if point := o.Snapshot().Resume; point != nil && point.Fresh {
+		o.logf(LevelInfo, "%s pode começar: continue a execução.", point.StoryTitle)
+	}
+	o.writeDelivery(o.Snapshot())
 	o.writeJournal()
 	return *last, nil
 }

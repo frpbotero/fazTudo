@@ -519,6 +519,10 @@ branch candidata e abre um pull request com a evidência, e a US fica *Aguardand
 - Depois do merge ou do fechamento no host, **Reconciliar integração** (ou `faztudo reconcile`) lê o
   resultado: PR mergeado conta a US como *integrada*, com o commit do merge; fechado sem merge, como
   *fora da base*, com a branch preservada. A base local não muda: traga o merge com o seu `git pull`.
+  O pacote de entrega é regravado com o resultado.
+- As US que esperavam o PR mergeado aparecem para **continuar** e recomeçam do Passo 0. Só começam
+  quando a base local já tem o commit avaliado do PR: sem o `git pull`, ficam paradas dizendo isso, e
+  continuar de novo depois do pull as desenvolve.
 
 GitHub (inclusive Enterprise) usa o `gh` autenticado na máquina, sem shell e com a descrição passada
 por arquivo; o FazTudo não vê token. Bitbucket é a subentrega FT-020b (Cloud e Server diferem; o

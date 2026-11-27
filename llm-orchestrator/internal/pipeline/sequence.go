@@ -315,7 +315,7 @@ func (o *Orchestrator) runStoriesInPlace(ctx context.Context, ss *session, opts 
 		if o.storyFinished(si) {
 			continue
 		}
-		if reason := o.unmetDependency(si, opts.Stories); reason != "" {
+		if reason := o.dependencyBlock(ctx, ss, si, opts.Stories); reason != "" {
 			o.skipStory(si, reason)
 			continue
 		}
@@ -498,7 +498,7 @@ func (o *Orchestrator) openLanes(ctx context.Context, ss *session, opts StartOpt
 		if o.storyFinished(si) {
 			continue
 		}
-		if reason := o.unmetDependency(si, opts.Stories); reason != "" {
+		if reason := o.dependencyBlock(ctx, ss, si, opts.Stories); reason != "" {
 			o.skipStory(si, reason)
 			continue
 		}
