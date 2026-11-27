@@ -113,6 +113,7 @@ func New(ctx context.Context, d Deps) *Server {
 	mux.HandleFunc("POST /api/pipeline/retry", s.handleRetry)
 	mux.HandleFunc("POST /api/pipeline/resume", s.handleResume)
 	mux.HandleFunc("POST /api/pipeline/answer", s.handleAnswer)
+	mux.HandleFunc("POST /api/pipeline/reconcile", s.handleReconcile)
 	mux.HandleFunc("GET /api/health/areas", s.handleHealthAreas)
 	mux.HandleFunc("POST /api/health/start", s.handleHealthStart)
 	mux.HandleFunc("GET /api/workspace", s.handleGetWorkspace)
@@ -458,6 +459,22 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "answered"})
+}
+
+// handleReconcile completes a promotion that reached only some of the
+// repositories, without resetting any of them.
+func (s *Server) handleReconcile(w http.ResponseWriter, _ *http.Request) {
+	p, err := s.orch.Reconcile()
+	switch {
+	case errors.Is(err, pipeline.ErrNothingToReconcile):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	case isConflict(err):
+		writeError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, p)
+	}
 }
 
 func (s *Server) handleGetWorkspace(w http.ResponseWriter, _ *http.Request) {

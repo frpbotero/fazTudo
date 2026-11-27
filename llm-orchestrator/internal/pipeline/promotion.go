@@ -3,12 +3,15 @@ package pipeline
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"llm-orchestrator/internal/quality"
 	"llm-orchestrator/internal/stories"
+	"llm-orchestrator/internal/vcs"
 	"llm-orchestrator/internal/workspace"
 )
 
@@ -22,7 +25,21 @@ const (
 	// IntegrationBlocked means the story was kept out of the base: its branch
 	// stays for review and the stories depending on it do not run.
 	IntegrationBlocked Integration = "blocked"
+	// IntegrationPartial means some repositories took the story and others
+	// did not: nothing was reset, the run stops and Reconcile completes it.
+	IntegrationPartial Integration = "partial"
 )
+
+// RepoPromotion is one repository's side of a promotion: the candidate's
+// commit there, where its base stood before and after, and what happened.
+type RepoPromotion struct {
+	Path      string      `json:"path"`
+	Base      string      `json:"base"`
+	Candidate string      `json:"candidate,omitempty"`
+	Before    string      `json:"before,omitempty"`
+	After     string      `json:"after,omitempty"`
+	Status    Integration `json:"status,omitempty"`
+}
 
 // Promotion records one decision on merging a candidate (a story's branch or
 // a wave's integration branch) into the base.
@@ -35,7 +52,9 @@ type Promotion struct {
 	// Checks are the project commands run on the candidate itself; empty
 	// when the story's own verification still covered the same code.
 	Checks []quality.Result `json:"checks,omitempty"`
-	At     time.Time        `json:"at"`
+	// Repos are the promotion per repository (the parent and each nested one).
+	Repos []RepoPromotion `json:"repos,omitempty"`
+	At    time.Time       `json:"at"`
 }
 
 // promotable is the single rule every route to the base goes through,
@@ -49,6 +68,8 @@ func promotable(st StoryRun, policy workspace.Policy) string {
 		return "US não desenvolvida"
 	case StepWaiting:
 		return "US aguarda decisão de produto"
+	case StepFailed, StepCanceled, StepRunning, StepPending:
+		return "US não concluída"
 	}
 	switch cmpValidation(st.Validation) {
 	case ValidationPassed:
@@ -150,7 +171,7 @@ func (o *Orchestrator) promoteStory(ctx context.Context, ss *session, st *storyS
 	if reason != "" {
 		return o.blockPromotion(ctx, ss, []int{st.si}, p, reason)
 	}
-	if !o.mergeIntoBase(ctx, ss, st.sc.Story.Title) {
+	if !o.mergeIntoBase(ctx, ss, st.sc.Story.Title, &p, []int{st.si}) {
 		return false
 	}
 	p.Status = IntegrationIntegrated
@@ -217,11 +238,18 @@ func (o *Orchestrator) unmetDependency(si int, list []stories.Story) string {
 	deps := o.dependenciesLocked(si, list)
 	for _, d := range deps {
 		dep := o.run.Stories[d]
+		name := cmp.Or(dep.ID, dep.Title)
 		switch {
 		case dep.Status == StepWaiting:
-			return fmt.Sprintf("%s %s, que aguarda decisão de produto", dependsPrefix, cmp.Or(dep.ID, dep.Title))
+			return fmt.Sprintf("%s %s, que aguarda decisão de produto", dependsPrefix, name)
+		case dep.Integration == IntegrationPartial:
+			return fmt.Sprintf("%s %s, cuja integração ficou parcial", dependsPrefix, name)
 		case dep.Integration == IntegrationBlocked || dep.Status == StepSkipped:
-			return fmt.Sprintf("%s %s, que não entrou na base", dependsPrefix, cmp.Or(dep.ID, dep.Title))
+			return fmt.Sprintf("%s %s, que não entrou na base", dependsPrefix, name)
+		case o.run.Bases["."] != "" && dep.Integration != IntegrationIntegrated:
+			// The dependent builds on the base: what it needs must be there,
+			// in an approved and identified snapshot.
+			return fmt.Sprintf("%s %s, que ainda não está na base", dependsPrefix, name)
 		}
 	}
 	return ""
@@ -239,6 +267,28 @@ func (o *Orchestrator) dependenciesLocked(si int, list []stories.Story) []int {
 		}
 	}
 	return deps
+}
+
+// dependencySnapshots names the base commit each dependency entered with,
+// for the record of what a story was built on.
+func (o *Orchestrator) dependencySnapshots(si int, list []stories.Story) map[string]string {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	out := map[string]string{}
+	for _, d := range o.dependenciesLocked(si, list) {
+		label := storyLabel(list[d])
+		for i := len(o.run.Promotions) - 1; i >= 0; i-- {
+			p := o.run.Promotions[i]
+			if p.Status == IntegrationIntegrated && slices.Contains(p.Stories, label) {
+				out[label] = p.Commit
+				break
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // dependsPrefix starts the note of a story skipped for an unmet dependency.
@@ -263,4 +313,77 @@ func (o *Orchestrator) skipStory(si int, reason string) {
 		}
 	})
 	o.logf(LevelWarn, "%s não iniciada: %s.", o.storyTitle(si), reason)
+}
+
+// mergeIntoBase merges the current branch into the bases and fills p.Repos
+// with where each repository stood. A merge that reached only some of the
+// repositories is recorded as partial: nothing is reset, the run stops, and
+// Reconcile completes it.
+func (o *Orchestrator) mergeIntoBase(ctx context.Context, ss *session, label string, p *Promotion, stories []int) bool {
+	if ss.git == nil || ss.bases["."] == "" {
+		return true
+	}
+	from := ss.git.Branch(ctx)
+	if from == "" || from == ss.bases["."] {
+		return true
+	}
+	sha, _ := ss.git.Rev(ctx, from)
+	before, cands := ss.git.BaseHeads(ctx, ss.bases), ss.git.CandidateHeads(ctx, from)
+	key := operationKey("merge-base", sha, ss.bases["."])
+	if op, done := o.operationDone(key); done || (sha != "" && ss.git.IsAncestor(ctx, sha, ss.bases["."])) {
+		// A resumed run finds the merge made before the interruption.
+		if err := ss.git.SwitchBranches(ctx, ss.bases); err != nil {
+			o.failRun(fmt.Errorf("voltar para a branch base: %w", err))
+			return false
+		}
+		if !done {
+			o.recordOperation(Operation{Key: key, Kind: "merge-base", Target: ss.bases["."], Result: sha})
+		}
+		p.Repos = repoPromotions(ss.bases, cands, before, ss.git.BaseHeads(ctx, ss.bases))
+		o.logf(LevelInfo, "%s já estava na branch base (%s); merge não repetido.", label, cmpOrString(op.Result, short(sha)))
+		return true
+	}
+	_, err := ss.git.MergeIntoBasesKeeping(ctx, from, fmt.Sprintf("faztudo: integra %s na base", label), ss.bases)
+	p.Repos = repoPromotions(ss.bases, cands, before, ss.git.BaseHeads(ctx, ss.bases))
+	var partial *vcs.PartialMergeError
+	switch {
+	case errors.As(err, &partial):
+		p.Status, p.Reason = IntegrationPartial, partial.Error()
+		p.Commit = sha
+		o.recordPromotion(*p, stories)
+		o.failRun(fmt.Errorf("%s: %w. Nada foi desfeito; use \"Reconciliar integração\" (POST /api/pipeline/reconcile) "+
+			"para completar, ou desfaça manualmente nos repositórios integrados", label, partial))
+		return false
+	case err != nil:
+		o.failRun(fmt.Errorf("merge de %s na branch base falhou (branch %s mantida): %w", label, from, err))
+		return false
+	}
+	o.recordOperation(Operation{Key: key, Kind: "merge-base", Target: ss.bases["."], Result: sha})
+	o.logf(LevelSuccess, "%s integrada na branch base (%s).", label, baseLabels(ctx, ss.git))
+	return true
+}
+
+// repoPromotions describes each repository's side of a promotion.
+func repoPromotions(bases, cands, before, after map[string]string) []RepoPromotion {
+	paths := make([]string, 0, len(bases))
+	for path := range bases {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	var out []RepoPromotion
+	for _, path := range paths {
+		r := RepoPromotion{Path: path, Base: bases[path], Candidate: cands[path], Before: before[path], After: after[path]}
+		switch {
+		case r.Candidate == "":
+			continue // the candidate does not touch this repository
+		case r.After != "" && r.After != r.Before:
+			r.Status = IntegrationIntegrated
+		case r.Before == r.Candidate:
+			r.Status = IntegrationIntegrated // already there
+		default:
+			r.Status = IntegrationBlocked
+		}
+		out = append(out, r)
+	}
+	return out
 }

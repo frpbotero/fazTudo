@@ -150,6 +150,9 @@ type StoryRun struct {
 	ChangeReason string `json:"change_reason,omitempty"`
 	// StartCommit is the snapshot the story started from.
 	StartCommit string `json:"start_commit,omitempty"`
+	// BuiltOn is the base commit each dependency entered with: the approved
+	// snapshot the story was built on.
+	BuiltOn map[string]string `json:"built_on,omitempty"`
 	// Head is the last commit the run made on the story's branch: a resume
 	// that finds the branch elsewhere knows its results judged other code.
 	Head string `json:"head,omitempty"`
@@ -288,12 +291,15 @@ type Orchestrator struct {
 	skillOverrides map[string]SkillOverride
 	// appVersion goes into every run's manifest.
 	appVersion string
-	exec       Executor
-	ws         *workspace.Manager
-	stages     []Stage
-	onChange   func()
-	logger     *slog.Logger
-	runCheck   func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
+	// lanes are the stories running side by side: a failure of one of them
+	// stops that story, not the run, unless it is global.
+	lanes    map[int]bool
+	exec     Executor
+	ws       *workspace.Manager
+	stages   []Stage
+	onChange func()
+	logger   *slog.Logger
+	runCheck func(ctx context.Context, dir string, c quality.Command, timeout time.Duration) quality.Result
 	// sweepStacks and lockStackSlot keep disposable test stacks in check.
 	sweepStacks   func(ctx context.Context, roots, patterns []string) ([]string, error)
 	lockStackSlot func(ctx context.Context, onWait func()) (func(), error)
@@ -1106,6 +1112,12 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 	}
 
 	if startAt == 0 {
+		o.mu.RLock()
+		list := o.last.Stories
+		o.mu.RUnlock()
+		if built := o.dependencySnapshots(st.si, list); built != nil {
+			o.updateStory(st.si, func(r *StoryRun) { r.BuiltOn = built })
+		}
 		if ss.git != nil {
 			st.startCommit, _ = ss.git.Head(ctx)
 			o.updateStory(st.si, func(r *StoryRun) { r.StartCommit = st.startCommit })
@@ -2004,7 +2016,40 @@ func (o *Orchestrator) failStep(ref stepRef, elapsed time.Duration, err error) {
 		title = s.Title
 	})
 	o.abortRemaining(ref.story, StepFailed)
-	o.finish(ResultFailed, LevelError, fmt.Sprintf("Falha na etapa \"%s\": %v", title, err))
+	msg := fmt.Sprintf("Falha na etapa \"%s\": %v", title, err)
+	if o.isLane(ref.story) && !isGlobalFailure(err) {
+		// Only this story stops; the others of its wave go on.
+		o.logf(LevelError, "%s. As demais US da onda continuam.", msg)
+		return
+	}
+	o.finish(ResultFailed, LevelError, msg)
+}
+
+// isGlobalFailure tells a failure no story can get past, such as no
+// provider able to run agents, from one that concerns a single story.
+func isGlobalFailure(err error) bool {
+	return errors.Is(err, provider.ErrNoCapableProvider) || errors.Is(err, provider.ErrNoProvider)
+}
+
+func (o *Orchestrator) isLane(si int) bool {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return o.lanes[si]
+}
+
+func (o *Orchestrator) setLanes(stories []int, on bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.lanes == nil {
+		o.lanes = map[int]bool{}
+	}
+	for _, si := range stories {
+		if on {
+			o.lanes[si] = true
+		} else {
+			delete(o.lanes, si)
+		}
+	}
 }
 
 // finish ends the run; when parallel stories stop one after the other, the

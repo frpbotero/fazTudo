@@ -331,48 +331,6 @@ func (o *Orchestrator) runStoriesInPlace(ctx context.Context, ss *session, opts 
 	return true
 }
 
-// mergeIntoBase merges what the current branch holds (the story's branch, or
-// the wave's integration branch) into the base branch of every repository, so
-// the next story or wave starts from the base with this one already in it.
-// A merge that fails stops the run: going on would build on code the base
-// does not have.
-func (o *Orchestrator) mergeIntoBase(ctx context.Context, ss *session, label string) bool {
-	if ss.git == nil || ss.bases["."] == "" {
-		return true
-	}
-	from := ss.git.Branch(ctx)
-	if from == "" || from == ss.bases["."] {
-		return true
-	}
-	sha, _ := ss.git.Rev(ctx, from)
-	key := operationKey("merge-base", sha, ss.bases["."])
-	if op, done := o.operationDone(key); done || (sha != "" && ss.git.IsAncestor(ctx, sha, ss.bases["."])) {
-		// A resumed run finds the merge made before the interruption.
-		if err := ss.git.SwitchBranches(ctx, ss.bases); err != nil {
-			o.failRun(fmt.Errorf("voltar para a branch base: %w", err))
-			return false
-		}
-		if !done {
-			o.recordOperation(Operation{Key: key, Kind: "merge-base", Target: ss.bases["."], Result: sha})
-		}
-		o.logf(LevelInfo, "%s já estava na branch base (%s); merge não repetido.", label, cmpOrString(op.Result, short(sha)))
-		return true
-	}
-	conflicts, err := ss.git.MergeIntoBases(ctx, from, fmt.Sprintf("faztudo: integra %s na base", label), ss.bases)
-	if err != nil {
-		if len(conflicts) == 0 {
-			err = fmt.Errorf("merge de %s na branch base falhou: %w", label, err)
-		} else {
-			err = fmt.Errorf("merge de %s na branch base falhou (branch %s mantida): %w", label, from, err)
-		}
-		o.failRun(err)
-		return false
-	}
-	o.recordOperation(Operation{Key: key, Kind: "merge-base", Target: ss.bases["."], Result: sha})
-	o.logf(LevelSuccess, "%s integrada na branch base (%s).", label, baseLabels(ctx, ss.git))
-	return true
-}
-
 // storyTask prepares a story: resumed from its failed stage or started anew.
 func (o *Orchestrator) storyTask(ss *session, opts StartOptions, si int, resume *resumePoint) (st *storyState, startAt int, fresh bool) {
 	if resume != nil && resume.si == si {
@@ -462,6 +420,11 @@ func (o *Orchestrator) runStoriesInParallel(ctx context.Context, ss *session, op
 	o.logf(LevelInfo, "%d US em paralelo nesta onda.", len(lanes))
 	waveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	running := make([]int, len(lanes))
+	for i, l := range lanes {
+		running[i] = l.st.si
+	}
+	o.setLanes(running, true)
 	var wg sync.WaitGroup
 	for _, lane := range lanes {
 		wg.Add(1)
@@ -471,14 +434,35 @@ func (o *Orchestrator) runStoriesInParallel(ctx context.Context, ss *session, op
 				o.closeStory(lane.ss, lane.st, len(opts.Stories))
 				return
 			}
-			cancel()
+			if !o.Snapshot().Running {
+				cancel() // a global failure, or the run was stopped: the wave stops
+			}
 		}()
 	}
 	wg.Wait()
-	if slices.ContainsFunc(lanes, func(l *storyLane) bool { return !l.ok }) {
+	o.setLanes(running, false)
+	var failed []string
+	var done []int
+	for _, l := range lanes {
+		if l.ok {
+			done = append(done, l.st.si)
+		} else {
+			failed = append(failed, l.st.sc.Story.Title)
+		}
+	}
+	if len(failed) == 0 {
+		return o.integrateWave(ctx, ss, opts, wave)
+	}
+	if ctx.Err() != nil || !o.Snapshot().Running {
 		return false
 	}
-	return o.integrateWave(ctx, ss, opts, wave)
+	// A story's own failure: the others of the wave are integrated, then the
+	// run stops there, resumable from the failed story.
+	if !o.integrateWave(ctx, ss, opts, done) {
+		return false
+	}
+	o.finish(ResultFailed, LevelError, fmt.Sprintf("Falha em %s; as demais US da onda foram integradas. Continue de onde parou.", strings.Join(failed, ", ")))
+	return false
 }
 
 // openLanes gives each unfinished story of the wave its own worktree on its
@@ -665,7 +649,7 @@ func (o *Orchestrator) integrateWave(ctx context.Context, ss *session, opts Star
 	if reason != "" {
 		return o.blockPromotion(ctx, ss, merged, p, "conjunto integrado: "+reason)
 	}
-	if !o.mergeIntoBase(ctx, ss, strings.Join(labels, ", ")) {
+	if !o.mergeIntoBase(ctx, ss, strings.Join(labels, ", "), &p, merged) {
 		return false
 	}
 	p.Status = IntegrationIntegrated

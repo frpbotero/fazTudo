@@ -99,7 +99,16 @@ base por **merge ao fim da onda** (ver abaixo); o FazTudo nunca commita direto n
    tem, a promoção é bloqueada. Candidato bloqueado deixa a base intacta, a branch fica para revisão
    (*Fora da base*, com o motivo) e as US que dependem dele, pela análise, não iniciam; as
    independentes seguem. Sem conseguir criar a branch da US, a execução para em vez de desenvolver
-   na base. Repositório que começa em uma branch `faztudo/`
+   na base.
+   **Dependências e repositórios aninhados.** Com branch base, uma US só começa quando cada US de
+   que depende já entrou na base; o commit de cada uma fica em `built_on`. Cada promoção registra,
+   por repositório (o principal e cada aninhado), o commit do candidato e onde a base estava antes e
+   depois. Git não tem transação entre repositórios: se o merge entrar em um aninhado e falhar no
+   principal, nada é desfeito, a promoção fica **parcial**, as dependentes não iniciam e a execução
+   para. **Reconciliar integração** (`POST /api/pipeline/reconcile`) completa o merge onde falta,
+   depois que você resolver o motivo; desfazer fica a seu critério. Em US paralelas, a falha de uma
+   US para só ela: as demais da onda terminam e são integradas, e a execução para pronta para
+   continuar da US que falhou. Sem provider capaz de rodar agentes, a onda inteira para. Repositório que começa em uma branch `faztudo/`
    (retomada) sem base configurada não é mergeado. Conflito entre US vai
    para um agente de **integração**, que resolve os marcadores e roda os testes; se não resolver, o
    merge é desfeito e a US fica *Com pendências* na própria branch. Falha numa US cancela as demais da

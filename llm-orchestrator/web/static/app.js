@@ -39,6 +39,7 @@ Critérios de aceitação:
   const INTEGRATION = {
     integrated: { label: 'Na branch base', tone: 'success' },
     blocked: { label: 'Fora da base', tone: 'danger' },
+    partial: { label: 'Integração parcial', tone: 'warn' },
   };
   const PROVIDER_STATUS = {
     available: { label: 'Disponível', tone: 'success' },
@@ -52,7 +53,7 @@ Critérios de aceitação:
     version: $('version'), conn: $('conn'), connText: $('connText'),
     themeBtn: $('themeBtn'), configBtn: $('configBtn'),
     runForm: $('runForm'), source: $('source'), story: $('story'), storyCount: $('storyCount'),
-    modeNote: $('modeNote'), startBtn: $('startBtn'), startLabel: $('startLabel'), stopBtn: $('stopBtn'), resumeBtn: $('resumeBtn'),
+    modeNote: $('modeNote'), startBtn: $('startBtn'), startLabel: $('startLabel'), stopBtn: $('stopBtn'), resumeBtn: $('resumeBtn'), reconcileBtn: $('reconcileBtn'),
     repoForm: $('repoForm'), repoPath: $('repoPath'), repoSaveBtn: $('repoSaveBtn'),
     discovery: $('discovery'), discoveryBadge: $('discoveryBadge'),
     openMdBtn: $('openMdBtn'), mdFile: $('mdFile'), fileInfo: $('fileInfo'),
@@ -428,6 +429,19 @@ Critérios de aceitação:
       toast(err.message, 'error');
     } finally {
       el.resumeBtn.disabled = false;
+    }
+  });
+
+  // Completes a promotion that reached only some repositories; nothing is reset.
+  el.reconcileBtn.addEventListener('click', async () => {
+    el.reconcileBtn.disabled = true;
+    try {
+      await api('POST', '/api/pipeline/reconcile');
+      toast('Integração reconciliada em todos os repositórios.', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      el.reconcileBtn.disabled = false;
     }
   });
 
@@ -1917,6 +1931,9 @@ Critérios de aceitação:
     el.stopBtn.hidden = !running;
     const resume = running ? null : snapshot?.run.resume;
     el.resumeBtn.hidden = !resume;
+    const promotions = snapshot?.run.promotions || [];
+    const last = promotions[promotions.length - 1];
+    el.reconcileBtn.hidden = running || last?.status !== 'partial';
     el.resumeBtn.title = resume ? `Retoma em ${[resume.story_title, resume.title].filter(Boolean).join(' · ')}` : '';
     el.newRunLink.hidden = running;
     el.startLabel.textContent = running ? 'Execução em andamento…' : 'Iniciar execução';
