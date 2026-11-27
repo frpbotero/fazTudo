@@ -210,3 +210,73 @@ func TestNumberedCriterionMatchesThePlannedScenario(t *testing.T) {
 		t.Error("a number that is part of the criterion must stay")
 	}
 }
+
+// archWithTwoScenarios plans one positive and one negative scenario.
+func archWithTwoScenarios(o *Orchestrator, exec *fakeExecutor) {
+	o.baseStages = append([]Stage{{ID: "arch", Title: "Arq", Role: "arch", Planner: true}}, acceptanceStages...)
+	o.stages = o.baseStages
+	exec.outputs["arch"] = []string{fence(`{"agents":["frontend"],"acceptance":[
+		{"id":"X-9","criterion":"adiciona item","scenario":"dado carrinho vazio","method":"unitário"},
+		{"criterion":"recusa quantidade zero","scenario":"quantidade 0","method":"unitário","negative":true}]}`)}
+}
+
+func TestPlannedScenariosGetTheirIDsFromTheOrchestrator(t *testing.T) {
+	plan, ok := parsePlan(fence(`{"agents":["frontend"],"acceptance":[
+		{"id":"X-9","criterion":"a","scenario":"s1"},{"criterion":"b","scenario":""},{"criterion":"c","scenario":"s3"}]}`), acceptanceStages)
+	if !ok || len(plan.Acceptance) != 2 || plan.Acceptance[0].ID != "AC-1" || plan.Acceptance[1].ID != "AC-2" {
+		t.Fatalf("acceptance = %+v", plan.Acceptance)
+	}
+}
+
+func TestQAAnswerMatchesThePlannedScenarioByID(t *testing.T) {
+	// QA rewrote both criteria; the IDs still tie them to the plan.
+	o, exec, _ := newAcceptanceTest(t, fence(`{"status":"approved","issues":[],"scenarios":[
+		{"id":"AC-1","criterion":"1. Adicionar um item ao carrinho vazio","method":"unitário","status":"aceito","tests":["UT-CART-01"]},
+		{"id":"ac-2","criterion":"Quantidade zero é recusada","method":"unitário","negative":true,"status":"aceito","tests":["UT-CART-01"]},
+		{"id":"AC-7","criterion":"cenário que o QA inventou","method":"inspeção","status":"aceito","evidence":"src/cart.ts:10"}]}`))
+	archWithTwoScenarios(o, exec)
+	_ = o.Start(realStory(cartDoc))
+	run := waitDone(t, o)
+	st := run.Stories[0]
+	if len(st.Acceptance) != 3 || st.Validation != ValidationPassed {
+		t.Fatalf("validation %s, acceptance %+v", st.Validation, st.Acceptance)
+	}
+	if st.Acceptance[0].ID != "AC-1" || st.Acceptance[1].ID != "AC-2" {
+		t.Errorf("ids = %q, %q", st.Acceptance[0].ID, st.Acceptance[1].ID)
+	}
+	if extra := st.Acceptance[2]; !extra.Extra || extra.ID != "" || !strings.Contains(extra.Note, "fora do plano") {
+		t.Errorf("a scenario outside the plan must say so: %+v", extra)
+	}
+	if exec.count("qa") != 1 {
+		t.Errorf("QA was asked %d times; every planned scenario was answered", exec.count("qa"))
+	}
+	if p := exec.promptsFor("qa"); len(p) == 0 || !strings.Contains(p[0], "AC-2") {
+		t.Error("the QA prompt must list the planned scenarios with their IDs")
+	}
+}
+
+func TestQAIsAskedOnlyForTheScenariosItLeftOut(t *testing.T) {
+	o, exec, _ := newAcceptanceTest(t, fence(`{"status":"approved","issues":[],"scenarios":[
+		{"id":"AC-1","criterion":"adiciona item","method":"unitário","status":"aceito","tests":["UT-CART-01"]}]}`))
+	exec.outputs["qa"] = append(exec.outputs["qa"], fence(`{"scenarios":[
+		{"id":"AC-2","criterion":"recusa quantidade zero","method":"unitário","negative":true,"status":"aceito","tests":["UT-CART-01"]}]}`))
+	archWithTwoScenarios(o, exec)
+	_ = o.Start(realStory(cartDoc))
+	run := waitDone(t, o)
+	st := run.Stories[0]
+	if st.Validation != ValidationPassed || len(st.Acceptance) != 2 || st.Acceptance[1].Status != ScenarioAccepted {
+		t.Fatalf("validation %s, acceptance %+v", st.Validation, st.Acceptance)
+	}
+	var recovery provider.Request
+	for _, r := range exec.reqs {
+		if r.Role == "qa" {
+			recovery = r
+		}
+	}
+	if !recovery.ReadOnly || !strings.Contains(recovery.Prompt, "AC-2") || strings.Contains(recovery.Prompt, "AC-1:") {
+		t.Errorf("the second QA call must be read-only and ask only for AC-2:\n%s", recovery.Prompt)
+	}
+	if step(st.Steps, "acceptance-cenarios-1") == nil {
+		t.Errorf("the recovery is a step of its own: %+v", st.Steps)
+	}
+}

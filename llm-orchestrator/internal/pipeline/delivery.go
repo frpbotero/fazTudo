@@ -219,10 +219,14 @@ func withReason(value, reason string) string {
 	return value + " (" + reason + ")"
 }
 
-// joinNonEmpty joins a and b with sep, or returns a when b is empty.
+// joinNonEmpty joins a and b with sep, or returns the one that is not empty.
 func joinNonEmpty(a, sep, b string) string {
-	if b = strings.TrimSpace(b); b == "" {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	switch {
+	case b == "":
 		return a
+	case a == "":
+		return b
 	}
 	return a + sep + b
 }
@@ -262,7 +266,14 @@ func renderStoryDelivery(run Run, st StoryRun) string {
 	if len(st.Acceptance) > 0 {
 		b.WriteString("\n## Aceitação funcional\n\n")
 		for _, a := range st.Acceptance {
-			fmt.Fprintf(&b, "- **%s** %s: %s — %s %s\n", a.Status, a.Criterion, a.Scenario, strings.Join(a.Tests, ", "), a.Evidence)
+			label := a.Criterion
+			switch {
+			case a.ID != "":
+				label = a.ID + " · " + label
+			case a.Extra:
+				label += " (fora do plano)"
+			}
+			fmt.Fprintf(&b, "- **%s** %s: %s — %s\n", a.Status, label, a.Scenario, joinNonEmpty(strings.Join(a.Tests, ", "), " ", a.Evidence))
 		}
 	}
 	if r := st.Reproduction; r != nil {

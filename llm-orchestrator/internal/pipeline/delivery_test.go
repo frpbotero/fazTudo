@@ -146,3 +146,16 @@ func TestStoryDeliveryReadsCleanly(t *testing.T) {
 		}
 	}
 }
+
+func TestDeliveryNamesEachScenarioByItsPlanID(t *testing.T) {
+	st := StoryRun{ID: "US-1", Acceptance: []ScenarioResult{
+		{ID: "AC-2", Criterion: "recusa zero", Scenario: "quantidade 0", Status: ScenarioAccepted, Tests: []string{"UT-CART-02"}},
+		{Criterion: "extra", Scenario: "s", Status: ScenarioAccepted, Extra: true, Evidence: "src/a.ts:3"},
+	}}
+	md := renderStoryDelivery(Run{}, st)
+	for _, want := range []string{"- **aceito** AC-2 · recusa zero: quantidade 0 — UT-CART-02\n", "- **aceito** extra (fora do plano): s — src/a.ts:3\n"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("US-1.md lacks %q:\n%s", want, md)
+		}
+	}
+}
