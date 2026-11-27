@@ -380,6 +380,7 @@ llm-orchestrator/
 - [`docs/solucao-de-problemas.md`](docs/solucao-de-problemas.md): sintomas comuns e o que fazer.
 - [`docs/distribuicao.md`](docs/distribuicao.md): plataformas suportadas, versões e release.
 - [`docs/contribuicao.md`](docs/contribuicao.md): como contribuir, reportar problemas, licença e atribuições.
+- [`docs/estrutura.md`](docs/estrutura.md): onde fica cada decisão no código e como seguir com as limpezas.
 - [`docs/ci.md`](docs/ci.md) e [`docs/provedores.md`](docs/provedores.md): CI e capacidades dos provedores.
 - [`docs/plano-de-evolucao.md`](docs/plano-de-evolucao.md): o plano de evolução implementado.
 - [`blueprint_e_guia_de_constru_o_orquestrador_de_agentes_llm.md`](blueprint_e_guia_de_constru_o_orquestrador_de_agentes_llm.md):
