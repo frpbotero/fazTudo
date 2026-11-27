@@ -263,7 +263,8 @@ e cenário do plano, inclusive os negativos, pelos critérios originais da US. R
 evidência executada (status de cada caso da especificação, casos do relatório, reprodução do bug) e a
 interpreta, sem substituí-la:
 
-- cenário **aceito** precisa citar o ID de um caso **comprovado** por execução; inspeção precisa de
+- cenário **aceito** precisa citar o ID de um caso **comprovado** por execução (ou o nome do caso
+  executado, que vale pelo próprio resultado); inspeção precisa de
   `arquivo:linha`, e o QA fica como responsável;
 - caso citado que falhou torna o cenário **recusado**, que volta para o implementador mesmo que o QA
   tenha aprovado;
@@ -392,7 +393,10 @@ pendente). Veja o [README da raiz](../README.md).
   Caso ignorado (`skip`) volta para o implementador. Relatório ausente, anterior ao comando ou ilegível
   aparece como **sem relatório**; ID citado no arquivo sem caso executado, como **não executado**; sem
   nenhum relatório configurado, como **só código de saída**: o comando passou, mas nenhum caso foi
-  vinculado ao critério. O painel mostra o status, os casos e o commit de cada critério.
+  vinculado ao critério. ID que os testes já usavam antes da US (uma especificação que repetiu o ID de
+  outra US) só é comprovado por caso novo ou que mudou de resultado; com só casos que já passavam antes,
+  aparece como **ID de antes da US**. Refatoração é a exceção: nela, os testes antigos passando são a
+  prova. O painel mostra o status, os casos e o commit de cada critério.
 - **Arquivos protegidos** — `US*.md`, `EDD*.md` e o `.md` aberto; se um agente alterar um deles, o
   conteúdo é restaurado e a etapa falha.
 - **Git** — uma branch `faztudo/<us>-<data>` por US e um commit por etapa, com diff no painel.

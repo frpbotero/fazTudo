@@ -181,7 +181,8 @@ const assessInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" 
 
 const specInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"tests\": [{\"id\": \"UT-CART-01\", \"description\": \"o que verifica\", \"kind\": \"unit\" | \"integration\" | \"e2e\"}]}\n```\n" +
-	"Documento já tem IDs de teste: use os mesmos. Orquestrador confere cada ID nos arquivos de teste."
+	"Documento já tem IDs de teste: use os mesmos. Caso novo ganha ID novo: nunca repita um ID que os testes do repositório já usam " +
+	"(confira nos arquivos de teste). Orquestrador confere cada ID nos arquivos de teste, e caso que já passava antes da US não comprova ID repetido."
 
 const verdictInstructions = "\n\nFim da resposta: bloco ```json obrigatório:\n" +
 	"```json\n{\"status\": \"approved\" | \"changes_requested\", \"issues\": [{\"agent\": \"frontend\" | \"backend\", \"severity\": \"alta\" | \"média\" | \"baixa\", " +

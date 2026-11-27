@@ -182,3 +182,31 @@ func TestRedactRemovesOnlyCardShapedNumbers(t *testing.T) {
 		}
 	}
 }
+
+func TestScenarioMayCiteTheExecutedCaseByName(t *testing.T) {
+	traces := []quality.Trace{{Requirement: quality.Requirement{ID: "UT-TASK-01"}, Status: quality.TraceProven, Cases: []quality.CaseRef{
+		{Name: "TestRemove/UT-TASK-01_removes_middle", Status: quality.CasePassed},
+		{Name: "TestRemove/UT-TASK-01_bad_input", Status: quality.CaseFailed},
+	}}}
+	cited := func(name string) ScenarioResult {
+		return checkScenario(ScenarioResult{Criterion: "c", Method: "teste unitário", Status: "aceito", Tests: []string{name}}, traces)
+	}
+	if got := cited("TestRemove/UT-TASK-01_removes_middle").Status; got != ScenarioAccepted {
+		t.Errorf("a passed case cited by name = %s", got)
+	}
+	if got := cited("TestRemove/UT-TASK-01_bad_input").Status; got != ScenarioRejected {
+		t.Errorf("a failed case cited by name = %s", got)
+	}
+	if got := cited("TestRemove/other").Status; got != ScenarioNoEvidence {
+		t.Errorf("an unknown case = %s", got)
+	}
+}
+
+func TestNumberedCriterionMatchesThePlannedScenario(t *testing.T) {
+	if !sameCriterionText("1. Remove tira a tarefa", "Remove tira a tarefa") || !sameCriterionText("2) Remove", "remove") {
+		t.Error("the numbering QA adds must not hide the planned scenario")
+	}
+	if sameCriterionText("10 tarefas no máximo", "tarefas no máximo") {
+		t.Error("a number that is part of the criterion must stay")
+	}
+}

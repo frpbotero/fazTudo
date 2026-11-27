@@ -116,7 +116,7 @@ func (o *Orchestrator) judgeAcceptance(ss *session, st *storyState, ev evaluatio
 	}
 	for _, a := range st.plan.Acceptance {
 		judged := slices.ContainsFunc(results, func(r ScenarioResult) bool {
-			return normalizeQuestion(r.Criterion) == normalizeQuestion(a.Criterion) &&
+			return sameCriterionText(r.Criterion, a.Criterion) &&
 				(r.Scenario == "" || a.Scenario == "" || normalizeQuestion(r.Scenario) == normalizeQuestion(a.Scenario) || r.Negative == a.Negative)
 		})
 		if !judged {
@@ -187,8 +187,20 @@ func checkScenario(s ScenarioResult, traces []quality.Trace) ScenarioResult {
 	}
 	proven := false
 	for _, id := range s.Tests {
-		i := slices.IndexFunc(traces, func(t quality.Trace) bool { return strings.EqualFold(t.ID, strings.TrimSpace(id)) })
+		id = strings.TrimSpace(id)
+		i := slices.IndexFunc(traces, func(t quality.Trace) bool { return strings.EqualFold(t.ID, id) })
 		if i < 0 {
+			// QA may cite the executed case instead of the spec's ID: that
+			// case's own result is the evidence.
+			switch c, ok := citedCase(traces, id); {
+			case !ok:
+			case c.Status == quality.CaseFailed:
+				s.Status, s.Note = ScenarioRejected, "o caso "+c.Name+" falhou na execução"
+				return s
+			case c.Status == quality.CasePassed:
+				s.Artifacts = append(s.Artifacts, c.Attachments...)
+				proven = true
+			}
 			continue
 		}
 		t := traces[i]
@@ -207,6 +219,28 @@ func checkScenario(s ScenarioResult, traces []quality.Trace) ScenarioResult {
 		s.Status, s.Note = ScenarioNoEvidence, "nenhum caso citado foi comprovado por execução"
 	}
 	return s
+}
+
+// citedCase finds an executed case, linked to a trace, by its full name.
+func citedCase(traces []quality.Trace, name string) (quality.CaseRef, bool) {
+	for _, t := range traces {
+		for _, c := range t.Cases {
+			if strings.EqualFold(c.Name, name) {
+				return c, true
+			}
+		}
+	}
+	return quality.CaseRef{}, false
+}
+
+// reEnumeration is the numbering QA may put before a criterion ("1. ", "2) ").
+var reEnumeration = regexp.MustCompile(`^\s*\d{1,3}[.)]\s+`)
+
+// sameCriterionText compares a criterion QA judged to a planned one, ignoring
+// case, spacing and the numbering QA adds.
+func sameCriterionText(a, b string) bool {
+	strip := func(s string) string { return normalizeQuestion(reEnumeration.ReplaceAllString(s, "")) }
+	return strip(a) == strip(b)
 }
 
 func isInspection(method string) bool {

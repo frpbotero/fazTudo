@@ -159,3 +159,32 @@ func TestLinkResultsProvesOnlyWhatRan(t *testing.T) {
 		t.Errorf("missing report = %+v", broken[0])
 	}
 }
+
+func TestCasesThatPassedBeforeTheStoryProveNothing(t *testing.T) {
+	traces := []Trace{
+		{Requirement: Requirement{ID: "UT-TASK-01"}, Files: []string{"t_test.go"}, Status: TraceProven, Cases: []CaseRef{
+			{Command: "go", Name: "TestComplete/UT-TASK-01_marks", Status: CasePassed},
+			{Command: "go", Name: "TestRemove/UT-TASK-01_removes", Status: CasePassed},
+		}},
+		{Requirement: Requirement{ID: "UT-TASK-02"}, Files: []string{"t_test.go"}, Status: TraceProven, Cases: []CaseRef{
+			{Command: "go", Name: "TestComplete/UT-TASK-02_unknown", Status: CasePassed},
+		}},
+		{Requirement: Requirement{ID: "UT-TASK-09"}, Files: []string{"t_test.go"}, Status: TraceProven, Cases: []CaseRef{
+			{Command: "go", Name: "TestRename/UT-TASK-09_unknown", Status: CasePassed},
+		}},
+	}
+	before := map[string]bool{"TestComplete/UT-TASK-01_marks": true, "TestComplete/UT-TASK-02_unknown": true}
+	out := DiscountPreexisting(traces, []string{"UT-TASK-01", "UT-TASK-02"}, func(c CaseRef) bool { return before[c.Name] })
+	if out[0].Status != TraceProven || len(out[0].Cases) != 1 || out[0].Cases[0].Name != "TestRemove/UT-TASK-01_removes" {
+		t.Errorf("a new case still proves a reused ID: %+v", out[0])
+	}
+	if out[1].Status != TraceReused || len(out[1].Cases) != 0 {
+		t.Errorf("only an old case carries the ID: %+v", out[1])
+	}
+	if out[2].Status != TraceProven || len(out[2].Cases) != 1 {
+		t.Errorf("a new ID is untouched: %+v", out[2])
+	}
+	if traces[1].Status != TraceProven || len(traces[1].Cases) != 1 {
+		t.Error("the input traces were changed")
+	}
+}

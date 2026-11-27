@@ -190,6 +190,14 @@ func (o *Orchestrator) linkTraces(ss *session, st *storyState, a *assessment) {
 		return
 	}
 	a.traces = quality.LinkResults(a.traces, a.results)
+	// A spec may reuse an ID an earlier story's tests carry; those tests
+	// passed before and prove nothing about this story. A refactoring is the
+	// exception: its proof is that the old tests still pass.
+	if b := st.baseline; b != nil && st.change != ChangeRefactor {
+		a.traces = quality.DiscountPreexisting(a.traces, b.TestIDs, func(c quality.CaseRef) bool {
+			return slices.Contains(b.PassedCases, caseKey(c.Command, c.Name))
+		})
+	}
 	a.issues = append(a.issues, o.skippedIssues(ss, a.traces, st.plan)...)
 }
 
@@ -663,7 +671,8 @@ func verifierReport(a assessment) string {
 
 // traceReportOrder lists what a trace may be short of, worst first.
 var traceReportOrder = []string{
-	quality.TraceFailed, quality.TraceMissing, quality.TraceSkipped, quality.TraceNoReport, quality.TraceNotRun, quality.TraceExitOnly,
+	quality.TraceFailed, quality.TraceMissing, quality.TraceSkipped, quality.TraceReused, quality.TraceNoReport, quality.TraceNotRun,
+	quality.TraceExitOnly,
 }
 
 func describeChecks(checks []quality.Command) string {
