@@ -1425,6 +1425,10 @@ Critérios de aceitação:
     if (s.model) parts.push(`<span class="model" title="${esc([s.provider, s.model, s.effort].filter(Boolean).join(' · '))}">${esc(s.model)}</span>`);
     if (s.status === 'running' && s.started_at) parts.push(`<span class="time" data-elapsed="${esc(s.started_at)}"></span>`);
     else if (s.duration_ms) parts.push(`<span class="time">${esc(fmtDuration(s.duration_ms))}</span>`);
+    if (s.need && s.need !== 'obrigatória') {
+      parts.push(`<span class="note" data-tone="${s.need === 'exigida pelo risco' ? 'warn' : ''}" title="${esc(s.need_reason || '')}">${esc(s.need)}</span>`);
+    }
+    if (s.failure_class) parts.push(`<span class="note" data-tone="danger" title="Classe da falha">${esc(s.failure_class)}</span>`);
     if (s.queue_ms >= 1000) parts.push(`<span class="time" title="Tempo esperando vaga de agente">fila ${esc(fmtDuration(s.queue_ms))}</span>`);
     if (s.status === 'running') parts.push(pill({ label: 'Executando', tone: 'accent' }));
     if (s.status === 'failed') parts.push(pill({ label: 'Falhou', tone: 'danger' }));
@@ -1705,7 +1709,13 @@ Critérios de aceitação:
     if (u.unknown_cost) parts.push(`${u.unknown_cost} sem custo conhecido`);
     if (u.unreported) parts.push(`${u.unreported} sem contagem de tokens`);
     const stop = u.stopped_by ? ` <span class="note" data-tone="warn">Parou no orçamento: ${esc(u.stopped_by)}.</span>` : '';
-    return `<p class="note">Consumo: ${parts.join(' · ')}.${stop}</p>`;
+    const b = snapshot?.workspace?.policy?.budget || {};
+    const limits = [
+      b.max_minutes && `${b.max_minutes} min`, b.max_calls && `${b.max_calls} chamadas`,
+      b.max_tokens && `${Number(b.max_tokens).toLocaleString('pt-BR')} tokens (conferido entre chamadas)`, b.max_retries && `${b.max_retries} novas tentativas`,
+    ].filter(Boolean);
+    const budget = limits.length ? ` Orçamento: ${esc(limits.join(', '))}.` : ' Sem orçamento definido.';
+    return `<p class="note">Consumo: ${parts.join(' · ')}.${stop}${budget}</p>`;
   }
 
   // The pull request a story went to, from its promotion.

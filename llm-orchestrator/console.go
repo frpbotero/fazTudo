@@ -45,7 +45,11 @@ func runConsole(args []string, input io.Reader, out, errOut io.Writer) int {
   faztudo stories parse --file US.md [--detect-model --real]
   faztudo status [--repo DIR] [--json]
   faztudo logs [--repo DIR]
-  faztudo stop | resume | retry --story N --step ID [--repo DIR]
+    faztudo stop | resume | retry --story N --step ID [--repo DIR]
+  faztudo why --story N [--repo DIR] [--json]
+  faztudo answer --story N --answers "resposta 1 | resposta 2" [--repo DIR]
+  faztudo reconcile [--repo DIR]
+  faztudo review-log --story N --minutes M [--rework M] [--note TEXTO] [--repo DIR]
   faztudo repo show | set --path DIR | discovery-reset | branches | base --path . --id BRANCH
   faztudo policy show | apply --file POLITICA.json
   faztudo config show | apply --file CONFIG.json

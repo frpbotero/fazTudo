@@ -115,6 +115,9 @@ type Step struct {
 	QueueMS int64 `json:"queue_ms,omitempty"`
 	// FailureClass is what a failed or unsettled step ran into (Failure*).
 	FailureClass string `json:"failure_class,omitempty"`
+	// Need says why the stage is part of the story (Need*), NeedReason why.
+	Need       string `json:"need,omitempty"`
+	NeedReason string `json:"need_reason,omitempty"`
 	// Advisory are a review's style remarks: reported, not demanded.
 	Advisory   []Issue    `json:"advisory,omitempty"`
 	Error      string     `json:"error,omitempty"`
@@ -818,6 +821,7 @@ func (o *Orchestrator) execute(ctx context.Context, repo string, opts StartOptio
 // closeStory records how a developed story ended: delivered, delivered with
 // pending issues, or blocked in Passo 0.
 func (o *Orchestrator) closeStory(ss *session, st *storyState, total int) {
+	o.annotateNeeds(ss, st) // the diff may have raised the risk since the plan
 	if o.invalidateAcceptance(ss, st) {
 		o.logf(LevelWarn, "%s: código alterado depois da aceitação funcional; os cenários precisam ser aceitos de novo.", st.sc.Story.Title)
 	}
@@ -1162,6 +1166,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 	}
 	o.planAudit(ss, st)
 	o.assessStoryRisk(ss, st, nil)
+	o.annotateNeeds(ss, st)
 	streamed := false
 	for stageIndex, stage := range o.stages {
 		if stageIndex < startAt {
@@ -1247,6 +1252,7 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			st.plan, st.planText = o.applyPlan(st.si, st.sc, resp), resp.Output
 			o.enforceRisk(ss, st) // the architect may add stages, not drop mandatory ones
 			o.enforceSpecialties(st)
+			o.annotateNeeds(ss, st)
 		case stage.Specialist:
 			o.applySpecialist(st, ref, stage, resp)
 		case stage.Gate:
