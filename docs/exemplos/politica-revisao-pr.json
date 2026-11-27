@@ -1,0 +1,20 @@
+{
+  "auto_checks": false,
+  "checks": [
+    { "name": "web", "run": "cd web && npm test -- --reporter=junit --outputFile=reports/junit.xml", "report": { "format": "junit", "path": "web/reports/junit.xml" } },
+    { "name": "api", "run": "cd api && npm test", "resource": "postgres" },
+    { "name": "e2e", "run": "npx playwright test --reporter=json > reports/e2e.json", "report": { "format": "playwright-json", "path": "reports/e2e.json" } }
+  ],
+  "git": true,
+  "flow": "full",
+  "migration_checks": [
+    { "name": "migrate", "run": "make db-reset db-up db-check db-down db-up", "resource": "postgres" }
+  ],
+  "profiles": ["angular-nestjs-postgres"],
+  "scm": { "mode": "pr", "review_from": "alto", "draft": true },
+  "budget": { "max_minutes": 120, "max_tokens": 4000000 },
+  "prices_version": "minha-tabela-2026-11",
+  "prices": {
+    "claude-sonnet": { "input": 3, "cached_input": 0.3, "output": 15 }
+  }
+}

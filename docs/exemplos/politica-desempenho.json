@@ -1,0 +1,19 @@
+{
+  "auto_checks": true,
+  "checks": [],
+  "git": true,
+  "flow": "full",
+  "benchmarks": [
+    {
+      "name": "listar-pedidos",
+      "run": "go run ./cmd/bench -json",
+      "workload": "10 mil pedidos, 20 clientes simultâneos, 5 s de aquecimento",
+      "stack": "Go",
+      "warmup": 1,
+      "repeat": 5,
+      "max_regression_pct": 10,
+      "max_noise_pct": 15,
+      "required": true
+    }
+  ]
+}

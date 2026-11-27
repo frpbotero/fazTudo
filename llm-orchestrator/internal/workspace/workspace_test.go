@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -439,6 +440,31 @@ func TestPolicyBenchmarks(t *testing.T) {
 		p.Benchmarks = []Benchmark{bad}
 		if _, err := m.SetPolicy(p); err == nil {
 			t.Errorf("%+v accepted", bad)
+		}
+	}
+}
+
+// TestDocumentedExamplePoliciesAreValid keeps docs/exemplos in step with the
+// policy: every example decodes without unknown fields and passes validation.
+func TestDocumentedExamplePoliciesAreValid(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "docs", "exemplos", "politica-*.json"))
+	if err != nil || len(files) < 3 {
+		t.Fatalf("example policies = %v, %v", files, err)
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := DefaultPolicy()
+		dec := json.NewDecoder(strings.NewReader(string(data)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			t.Errorf("%s: %v", filepath.Base(f), err)
+			continue
+		}
+		if err := p.Normalize().Validate(); err != nil {
+			t.Errorf("%s: %v", filepath.Base(f), err)
 		}
 	}
 }
