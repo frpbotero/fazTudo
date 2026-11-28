@@ -43,7 +43,9 @@ docker: ## Imagem de container (modo simulação)
 # App desktop (Wails). Instale o CLI com:
 #   go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
 WAILS        ?= $(or $(shell command -v wails 2>/dev/null),$(HOME)/go/bin/wails)
-APP_VERSION  ?= $(or $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//'),0.1.0)
+# The highest release tag in the repository: the tags live on main, so
+# "git describe" finds none from develop or a feature branch.
+APP_VERSION  ?= $(or $(shell git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null | head -1 | sed 's/^v//'),0.1.0)
 WAILS_TAGS   := desktop
 WAILS_FLAGS   = -clean -skipbindings -trimpath -tags "$(WAILS_TAGS)" -ldflags "-X main.version=$(VERSION)"
 # The installers take their version from wails.json; the script sets it to

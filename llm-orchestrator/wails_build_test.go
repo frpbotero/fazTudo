@@ -103,3 +103,48 @@ func TestWailsBuildRefusesAVersionThatIsNotSemver(t *testing.T) {
 		t.Fatalf("prerelease version refused: %v\n%s", err, out)
 	}
 }
+
+// The release tags live on main, so a build from develop or a feature branch
+// reaches none of them; the installers still take the highest release tag,
+// compared as versions, not as text.
+func TestAppVersionIsTheHighestReleaseTagEvenWhenUnreachable(t *testing.T) {
+	for _, tool := range []string{"git", "make"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s indisponível", tool)
+		}
+	}
+	dir := t.TempDir()
+	mk, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), mk, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "develop")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	git("switch", "-q", "-c", "main")
+	git("commit", "-q", "--allow-empty", "-m", "release")
+	for _, tag := range []string{"v0.2.0", "v0.9.1", "v0.10.0", "nightly"} {
+		git("tag", tag)
+	}
+	git("switch", "-q", "develop")
+
+	cmd := exec.Command("make", "-n", "desktop-mac", "WAILS=wails")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("make -n: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "wails-build.sh 0.10.0 wails ") {
+		t.Fatalf("desktop-mac did not build 0.10.0:\n%s", out)
+	}
+}
