@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,12 +60,17 @@ func (o *Orchestrator) AnswerDecisions(si int, answers []string) error {
 		d.Answer, d.AnsweredAt = strings.TrimSpace(answers[i]), &now
 		story.Answers = append(story.Answers, d)
 	}
+	// The waiting story's branch holds no work (Passo 0 stops before any
+	// change); the story starts over on a new one, so the old is dropped.
+	stale := []string{story.Branch}
 	o.resetStoryLocked(si)
 	for i := range o.run.Stories {
 		if i != si && skippedByDependency(o.run.Stories[i]) {
+			stale = append(stale, o.run.Stories[i].Branch)
 			o.resetStoryLocked(i)
 		}
 	}
+	o.staleBranches = slices.DeleteFunc(stale, func(b string) bool { return b == "" })
 	o.relaunchLocked(si, unlock, fmt.Sprintf("Decisões de %s respondidas; a US recomeça do Passo 0.", story.Title))
 	return nil
 }

@@ -325,12 +325,27 @@ func (o *Orchestrator) commandFailure(ss *session, st *storyState, c quality.Com
 	case originNew:
 		is.Description = "[Falha nova: introduzida nesta US] " + is.Description
 	}
+	parsed := r
+	parsed.Failures = failures
+	if why := quality.Unreachable(parsed); why != "" {
+		// A service the tests need is down: no agent can fix that, and asking
+		// one only spends fix rounds on code that never ran.
+		is.Infra = true
+		is.InfraReason = unreachableReason(why)
+		is.Description = "[Ambiente indisponível: " + why + "] " + is.Description
+	}
 	is.Class = classBuild
+	titled := map[string]bool{}
 	for _, f := range failures {
 		if !f.Compile {
 			is.Class = classTest
 		}
-		is.Titles = append(is.Titles, failureTitle(f))
+		// One title per fingerprint, in the same order: the i-th title names
+		// the i-th cause.
+		if !titled[f.Fingerprint] {
+			titled[f.Fingerprint] = true
+			is.Titles = append(is.Titles, failureTitle(f))
+		}
 		if f.File != "" {
 			is.Files = append(is.Files, path.Join(f.Dir, f.File))
 		}
@@ -537,7 +552,7 @@ func (o *Orchestrator) traceIssues(ss *session, traces []quality.Trace, plan Pla
 			Class:    classMissingTest,
 			// The list shrinks as tests appear: it is still the same task.
 			Fingerprints: []string{quality.TextFingerprint("rastreabilidade", agent)},
-			Titles:       []string{"Testes da especificação sem implementação"},
+			Titles:       []string{"Testes da especificação sem implementação (" + agent + ")"},
 		})
 	}
 	return issues
@@ -569,7 +584,7 @@ func (o *Orchestrator) skippedIssues(ss *session, traces []quality.Trace, plan P
 			Location:     "rastreabilidade",
 			Class:        classMissingTest,
 			Fingerprints: []string{quality.TextFingerprint("ignorado", agent)},
-			Titles:       []string{"Testes da especificação ignorados"},
+			Titles:       []string{"Testes da especificação ignorados (" + agent + ")"},
 		})
 	}
 	return issues
@@ -736,4 +751,9 @@ func (o *Orchestrator) stillVerified(ss *session, st *storyState) string {
 
 func (o *Orchestrator) verificationKey(ss *session, st *storyState) string {
 	return baselineKey(contentKey(ss.repo, o.changedFiles(ss, st.started)), ss.checks)
+}
+
+// unreachableReason tells the person what to do about a service that is down.
+func unreachableReason(line string) string {
+	return "Serviço do ambiente indisponível (" + line + "); suba o banco ou o serviço e rode de novo. Não indica erro no código."
 }

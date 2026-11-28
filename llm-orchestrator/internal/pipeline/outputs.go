@@ -161,3 +161,71 @@ func (o *Orchestrator) applyPlan(si int, sc storyContext, resp *provider.Respons
 	}
 	return plan
 }
+
+// testKind is a required test's kind, from the spec or, when it gave none,
+// from its ID's prefix (UT-, IT-, E2E-).
+func testKind(r quality.Requirement) string {
+	if r.Kind != "" {
+		return r.Kind
+	}
+	id := strings.ToUpper(r.ID)
+	switch {
+	case strings.HasPrefix(id, "UT-"):
+		return "unit"
+	case strings.HasPrefix(id, "IT-"):
+		return "integration"
+	case strings.HasPrefix(id, "E2E-"):
+		return "e2e"
+	}
+	return ""
+}
+
+// commandRunsKind reports whether some project command can run tests of the
+// kind: unit tests need a test command short of a whole stack; integration
+// tests may also live in the e2e suite.
+func commandRunsKind(checks []quality.Command, kind string) bool {
+	return slices.ContainsFunc(checks, func(c quality.Command) bool {
+		switch l := quality.Layer(c); kind {
+		case "unit":
+			return l == 1 || l == 2
+		case "integration":
+			return l >= 1
+		}
+		return true
+	})
+}
+
+// kindLabels name the kinds in the warnings.
+var kindLabels = map[string]string{"unit": "unitários", "integration": "de integração"}
+
+// warnUncoveredKinds says, right after the spec, which required tests no
+// project command runs: their IDs could only end as "sem teste" or "só
+// código de saída", and the person can still add the command.
+func (o *Orchestrator) warnUncoveredKinds(ss *session, st *storyState) {
+	ids := map[string][]string{}
+	for _, r := range st.reqs {
+		if k := testKind(r); kindLabels[k] != "" {
+			ids[k] = append(ids[k], r.ID)
+		}
+	}
+	for _, kind := range []string{"unit", "integration"} {
+		if len(ids[kind]) == 0 || commandRunsKind(ss.checks, kind) {
+			continue
+		}
+		o.logf(LevelWarn, "Nenhum comando do projeto roda testes %s: %d caso(s) da especificação (%s) ficarão sem evidência. Configure o comando em Portões de qualidade.",
+			kindLabels[kind], len(ids[kind]), strings.Join(clipList(ids[kind], 4), ", "))
+	}
+}
+
+// warnMigrationChecks says, as soon as the plan or the risk brings in the
+// migration check, that the policy has no command for it.
+func (o *Orchestrator) warnMigrationChecks(ss *session, st *storyState) {
+	if st.warnedMigrations || len(ss.policy.MigrationChecks) > 0 || ss.dry {
+		return
+	}
+	if !st.plan.Includes("migrations") && !st.requiredByRisk("migrations") {
+		return
+	}
+	st.warnedMigrations = true
+	o.logf(LevelWarn, "%s vai alterar migrations, mas a política não tem `migration_checks`: integridade, compatibilidade e recuperação não serão testadas. Configure em Portões de qualidade.", st.sc.Story.Title)
+}

@@ -163,3 +163,22 @@ func TestPreflightWithoutAnyCLI(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// The mag run warned that Codex does not restrict commands while every task
+// went to Claude Code: a reserve is named only when it takes a task.
+func TestPreflightDoesNotWarnAboutAReserveProvider(t *testing.T) {
+	r := capRouter(Claude, true, &fakeRunner{}, only("claude", "codex"))
+	warnings, err := r.Preflight(context.Background(), Requirements{MaxTurns: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(warnings, "\n"); strings.Contains(joined, "Codex") {
+		t.Errorf("warnings name an unused reserve: %q", warnings)
+	}
+	// The same reserve as the default is warned about.
+	r = capRouter(Codex, true, &fakeRunner{}, only("claude", "codex"))
+	warnings, _ = r.Preflight(context.Background(), Requirements{MaxTurns: true})
+	if joined := strings.Join(warnings, "\n"); !strings.Contains(joined, "Codex CLI não restringe os comandos") {
+		t.Errorf("the serving provider's weaker isolation must be said: %q", warnings)
+	}
+}

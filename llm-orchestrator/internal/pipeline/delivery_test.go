@@ -90,6 +90,9 @@ func TestDeliveryPackageHasTheEvidenceAndNoSecret(t *testing.T) {
 	if !strings.Contains(string(index), "complementa os checks do CI") {
 		t.Error("the package must not present itself as a guarantee")
 	}
+	if strings.Contains(string(index), "succeeded") || !strings.Contains(string(index), "; resultado conclu") {
+		t.Errorf("the result is said in Portuguese, pending work included:\n%s", index)
+	}
 }
 
 func TestDeliveryPackagesAreRetained(t *testing.T) {

@@ -30,6 +30,9 @@ type Baseline struct {
 	// Unknown are commands with no result: out of time, or not run because
 	// an earlier layer failed.
 	Unknown []string `json:"unknown,omitempty"`
+	// Unavailable maps a failing command to the line showing a service it
+	// needs was down: the failure is the environment's, not the code's.
+	Unavailable map[string]string `json:"unavailable,omitempty"`
 	// Tests, TestIDs and PassedCases are what characterizes the behavior
 	// before the story: its test files, the criterion IDs they name and the
 	// cases that passed ("command › case"). A refactoring keeps them all.
@@ -92,10 +95,17 @@ func (o *Orchestrator) takeBaseline(ctx context.Context, ss *session, st *storyS
 		// takes the baseline, the others wait for it instead of repeating it.
 		o.baselineMu.Lock()
 		defer o.baselineMu.Unlock()
-		if b, ok := o.baselines.Load(key); ok {
-			o.setBaseline(st, b.(*Baseline))
-			o.logf(LevelInfo, "Linha de base de %s reutilizada (mesmo commit e comandos).", st.sc.Story.Title)
-			return true
+		if v, ok := o.baselines.Load(key); ok {
+			b := v.(*Baseline)
+			// The environment may be up by now: a baseline the environment
+			// failed proves nothing about this commit, so it runs again.
+			if len(b.Unavailable) == 0 {
+				o.setBaseline(st, b)
+				o.logf(LevelInfo, "Linha de base de %s reutilizada (mesmo commit e comandos).", st.sc.Story.Title)
+				return true
+			}
+			o.baselines.Delete(key)
+			o.logf(LevelInfo, "Linha de base anterior de %s encontrou o ambiente indisponível; rodando de novo.", st.sc.Story.Title)
 		}
 	}
 	o.logf(LevelInfo, "Linha de base de %s: rodando os comandos do projeto antes de qualquer mudança.", st.sc.Story.Title)
@@ -124,6 +134,14 @@ func (o *Orchestrator) takeBaseline(ctx context.Context, ss *session, st *storyS
 				failures = quality.ParseFailures(c, failureText(r))
 			}
 			b.Failing[c.Name] = quality.Fingerprints(failures)
+			parsed := r
+			parsed.Failures = failures
+			if why := quality.Unreachable(parsed); why != "" {
+				if b.Unavailable == nil {
+					b.Unavailable = map[string]string{}
+				}
+				b.Unavailable[c.Name] = why
+			}
 		}
 		r.Output = tail(r.Output, maxBaselineOutput)
 		for _, c := range r.Cases {
@@ -138,9 +156,7 @@ func (o *Orchestrator) takeBaseline(ctx context.Context, ss *session, st *storyS
 		o.baselines.Store(key, b)
 	}
 	o.setBaseline(st, b)
-	if len(b.Failing) > 0 {
-		o.logf(LevelWarn, "Antes da US já falhavam: %s. Essas falhas aparecem como preexistentes e continuam bloqueando.", strings.Join(sortedKeys(b.Failing), ", "))
-	}
+	o.warnBaseline(b)
 	return true
 }
 
@@ -158,11 +174,22 @@ func baselineKey(commit string, checks []quality.Command) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func sortedKeys(m map[string][]string) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// warnBaseline says what already failed before the story and, apart, what
+// failed only because the environment is down, which a person must fix.
+func (o *Orchestrator) warnBaseline(b *Baseline) {
+	if len(b.Failing) > 0 {
+		o.logf(LevelWarn, "Antes da US já falhavam: %s. Essas falhas aparecem como preexistentes e continuam bloqueando.", strings.Join(sortedKeys(b.Failing), ", "))
+	}
+	for _, name := range sortedKeys(b.Unavailable) {
+		o.logf(LevelWarn, "Ambiente indisponível na linha de base: %s falhou porque um serviço não respondeu (%s). Suba o banco ou o serviço e rode de novo; essas falhas não serão enviadas aos agentes.", name, b.Unavailable[name])
+	}
 }

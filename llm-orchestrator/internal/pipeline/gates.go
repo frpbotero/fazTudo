@@ -197,6 +197,11 @@ func (o *Orchestrator) settleGate(st *storyState, stepID string, gate Stage, iss
 	o.updateStep(stepRef{st.si, stepID}, func(s *Step) {
 		s.Status = StepWarning
 		s.Error = msg + ". Pendências registradas; o pipeline segue."
+		// A later round's step has no verdict of its own: it carries the
+		// issues it settles, or the reports count none.
+		if len(s.Issues) == 0 {
+			s.Issues = slices.Clone(issues)
+		}
 	})
 	o.setValidation(st, gate, ValidationFailed)
 	class := FailureBehavior
