@@ -79,6 +79,9 @@ func (o *Orchestrator) preflight(opts StartOptions) ([]string, error) {
 
 // Orchestrator runs one pipeline at a time and notifies observers on change.
 type Orchestrator struct {
+	// staleBranches are the branches of stories that start over, to remove
+	// when empty once the resumed run has its repository.
+	staleBranches []string
 	// baselines caches the baselines by commit and commands, so the stories
 	// of a wave starting from the same commit share one.
 	baselines  sync.Map
@@ -561,11 +564,14 @@ type storyState struct {
 	benchmarks   string
 	benchResults []BenchResult
 	// stageAt is the index of the stage running; late lists the planning
-	// stages the risk required only after they had passed.
+	// stages the risk required only after they had passed, still to run on
+	// the code already written.
 	stageAt int
 	late    []string
-	red     []string // commands that failed last, retried first
-	skipped bool     // the last assessment left costlier commands out
+	// warnedMigrations keeps the missing migration_checks warning to once.
+	warnedMigrations bool
+	red              []string // commands that failed last, retried first
+	skipped          bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -697,6 +703,7 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 	if ss == nil {
 		return
 	}
+	o.pruneStaleBranches(ctx, ss)
 	graph := o.updateGraph(ctx, ss)
 	report, ok := o.discover(ctx, ss, graph) // the saved one, or a new one
 	if !ok {
@@ -717,7 +724,16 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 	if !o.runWaves(ctx, ss, opts, waves[max(from, 0):], resume) {
 		return
 	}
-	o.finishSucceeded("Pipeline concluído após refazer a etapa com falha.")
+	o.finishSucceeded(retryFinish(stageAt))
+}
+
+// retryFinish names what the resumed run did: a story started over (its
+// product decisions answered) or a failed stage done again.
+func retryFinish(stageAt int) string {
+	if stageAt < 0 {
+		return "Pipeline concluído após retomar a US com as decisões de produto respondidas."
+	}
+	return "Pipeline concluído após refazer a etapa com falha."
 }
 
 func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts StartOptions) *session {
@@ -955,6 +971,9 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		if stage.Gate || stage.Verifier {
 			// The real diff may raise the risk set from the story's text.
 			o.assessStoryRisk(ss, st, o.changedFiles(ss, st.started))
+			if !o.runLateSpecialties(ctx, ss, st) {
+				return false
+			}
 		}
 		if stage.Selectable && !st.plan.Includes(stage.ID) {
 			continue // already marked as omitted when the plan was applied
@@ -1027,11 +1046,15 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			}
 		case stage.Specifier:
 			o.applySpec(st, resp)
+			if !ss.dry {
+				o.warnUncoveredKinds(ss, st)
+			}
 		case stage.Planner:
 			st.plan, st.planText = o.applyPlan(st.si, st.sc, resp), resp.Output
 			o.enforceRisk(ss, st) // the architect may add stages, not drop mandatory ones
 			o.enforceSpecialties(st)
 			o.annotateNeeds(ss, st)
+			o.warnMigrationChecks(ss, st)
 		case stage.Specialist:
 			o.applySpecialist(st, ref, stage, resp)
 		case stage.Gate:
@@ -1203,4 +1226,25 @@ func (o *Orchestrator) storyPending(si int) int {
 		return 0
 	}
 	return pendingCount(o.run.Stories[si])
+}
+
+// pruneStaleBranches removes the branches of stories that start over, when
+// they hold no commit of their own; one with work stays for review.
+func (o *Orchestrator) pruneStaleBranches(ctx context.Context, ss *session) {
+	o.mu.Lock()
+	stale := o.staleBranches
+	o.staleBranches = nil
+	o.mu.Unlock()
+	if ss.git == nil {
+		return
+	}
+	for _, b := range stale {
+		removed, err := ss.git.DeleteEmptyBranch(ctx, b, ss.bases)
+		switch {
+		case err != nil:
+			o.logf(LevelWarn, "Branch %s não foi removida: %v.", b, err)
+		case removed:
+			o.logf(LevelInfo, "Branch %s removida: a US recomeça em outra e ela não tinha commits próprios.", b)
+		}
+	}
 }

@@ -98,7 +98,7 @@ func renderPendencies(run Run) string {
 	}
 	var head strings.Builder
 	fmt.Fprintf(&head, "# Pendências da execução\n\n")
-	fmt.Fprintf(&head, "Resultado: **%s**", cmp.Or(string(run.Result), "indefinido"))
+	fmt.Fprintf(&head, "Resultado: **%s**", cmp.Or(resultLabel(run), "indefinido"))
 	if run.Validation != "" {
 		fmt.Fprintf(&head, " · validação **%s**", run.Validation.Label())
 	}

@@ -3,12 +3,14 @@
 package pipeline
 
 import (
+	"slices"
+	"time"
+
 	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/quality"
 	"llm-orchestrator/internal/stories"
 	"llm-orchestrator/internal/vcs"
 	"llm-orchestrator/internal/workspace"
-	"time"
 )
 
 // StepStatus is the lifecycle state of a stage.
@@ -234,3 +236,25 @@ type stepRef struct {
 }
 
 var discoveryRef = stepRef{story: -1, id: DiscoveryStage.ID}
+
+// resultLabel says in Portuguese how the run ended. A run that finished with
+// stories pending or a delivery not validated did not succeed as a delivery:
+// the label says so instead of the bare "succeeded".
+func resultLabel(run Run) string {
+	switch run.Result {
+	case ResultFailed:
+		return "falhou"
+	case ResultCanceled:
+		return "cancelada"
+	case ResultSucceeded:
+		pending := slices.ContainsFunc(run.Stories, func(st StoryRun) bool { return st.Status == StepWarning || st.Status == StepFailed })
+		if pending || run.Validation == ValidationFailed {
+			return "concluída com pendências"
+		}
+		if slices.ContainsFunc(run.Stories, func(st StoryRun) bool { return st.Status == StepWaiting }) {
+			return "concluída, aguardando decisão de produto"
+		}
+		return "concluída"
+	}
+	return ""
+}

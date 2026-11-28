@@ -795,3 +795,51 @@ func TestDeletedPathsListsOnlyRemovedTrackedFiles(t *testing.T) {
 		t.Errorf("deleted = %v, %v", got, err)
 	}
 }
+
+func TestDeleteEmptyBranchKeepsWorkAndOthersBranches(t *testing.T) {
+	r, root := newNestedRepo(t)
+	ctx := context.Background()
+	bases := r.CurrentBranches(ctx)
+
+	if err := r.CreateBranch(ctx, "faztudo/us-1-vazia"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SwitchBranches(ctx, bases); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CreateBranch(ctx, "faztudo/us-1-com-trabalho"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "api/src/service.ts", "trabalho\n")
+	if _, err := r.CommitAll(ctx, "trabalho"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Checked out: kept.
+	if ok, err := r.DeleteEmptyBranch(ctx, "faztudo/us-1-com-trabalho", bases); ok || err != nil {
+		t.Errorf("checked-out branch removed: %v %v", ok, err)
+	}
+	if err := r.SwitchBranches(ctx, bases); err != nil {
+		t.Fatal(err)
+	}
+	// With a commit of its own in the nested repository: kept.
+	if ok, err := r.DeleteEmptyBranch(ctx, "faztudo/us-1-com-trabalho", bases); ok || err != nil {
+		t.Errorf("branch with work removed: %v %v", ok, err)
+	}
+	// Empty in both repositories: removed from both.
+	if ok, err := r.DeleteEmptyBranch(ctx, "faztudo/us-1-vazia", bases); !ok || err != nil {
+		t.Fatalf("empty branch kept: %v %v", ok, err)
+	}
+	for _, repo := range []*Repo{r, r.sub("api")} {
+		if _, err := repo.Rev(ctx, "refs/heads/faztudo/us-1-vazia"); err == nil {
+			t.Errorf("%s still has the empty branch", repo.dir)
+		}
+		if _, err := repo.Rev(ctx, "refs/heads/faztudo/us-1-com-trabalho"); err != nil {
+			t.Errorf("%s lost the branch with work", repo.dir)
+		}
+	}
+	// Never a user's branch.
+	if _, err := r.DeleteEmptyBranch(ctx, "main", bases); err == nil {
+		t.Error("a branch outside FazTudo's prefix must be refused")
+	}
+}

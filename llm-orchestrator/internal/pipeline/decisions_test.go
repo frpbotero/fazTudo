@@ -106,6 +106,10 @@ func TestAnsweringResumesTheStoryFromPassoZeroWithTheAnswer(t *testing.T) {
 	if got := exec.count("fe") - feBefore; got != 2 {
 		t.Errorf("only US-1 and US-3 are developed again, fe calls = %d", got)
 	}
+	// The resumed run answered decisions; no stage had failed.
+	if !hasLog(run, "Pipeline concluído após retomar a US com as decisões de produto respondidas") || hasLog(run, "refazer a etapa com falha") {
+		t.Errorf("final message misnames the resume: %+v", run.Logs[len(run.Logs)-1])
+	}
 }
 
 func TestReadinessNormalizesTheAgentsAnswer(t *testing.T) {
@@ -126,5 +130,44 @@ func TestReadinessNormalizesTheAgentsAnswer(t *testing.T) {
 	}
 	if len(r.Decisions) != 1 || r.Decisions[0].Question != "Qual moeda?" || r.Decisions[0].Answer != "" {
 		t.Errorf("decisions = %+v", r.Decisions)
+	}
+}
+
+func TestAnsweringDropsTheEmptyBranchOfTheWaitingStory(t *testing.T) {
+	var asked atomic.Int32
+	exec := &fakeExecutor{}
+	exec.answer = func(req provider.Request) string {
+		if req.Role == "scout" {
+			if asked.Add(1) == 1 {
+				return openDecision
+			}
+			return decision(DecisionImplement)
+		}
+		return ""
+	}
+	o, repo := newParallelStoryTest(t, exec)
+	o.baseStages = assessStages
+	o.stages = o.baseStages
+	exec.onCall = func(provider.Request) {} // Passo 0 reads; it writes nothing
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	first := waitDone(t, o).Stories[0]
+	if first.Status != StepWaiting || first.Branch == "" {
+		t.Fatalf("US-1 = %s on %q", first.Status, first.Branch)
+	}
+	if err := o.AnswerDecisions(0, []string{"R$ 200"}); err != nil {
+		t.Fatal(err)
+	}
+	run := waitDone(t, o)
+	again := run.Stories[0]
+	if again.Branch == "" || again.Status != StepDone {
+		t.Fatalf("the story must start over on a branch: %s on %q", again.Status, again.Branch)
+	}
+	// Only the branch of the new attempt is left (same name when it all runs
+	// within one second: the old one was removed first).
+	if got := strings.Fields(strings.ReplaceAll(gitOut(t, repo, "branch", "--list", "faztudo/*"), "*", "")); len(got) != 1 || got[0] != again.Branch {
+		t.Errorf("faztudo branches = %v, want only %s", got, again.Branch)
+	}
+	if !hasLog(run, "Branch "+first.Branch+" removida") {
+		t.Errorf("logs = %+v", run.Logs)
 	}
 }

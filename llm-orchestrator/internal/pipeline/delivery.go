@@ -71,7 +71,7 @@ func (o *Orchestrator) writeDelivery(run Run) {
 	write := func(name, body string) { save(name, []byte(redactSecrets(body))) }
 	var index strings.Builder
 	fmt.Fprintf(&index, "# Entrega: %s\n\n", filepath.Base(run.Repository))
-	fmt.Fprintf(&index, "- Execução iniciada em %s; resultado %s; validação %s.\n", run.StartedAt.Format("02/01/2006 15:04"), cmp.Or(string(run.Result), "em andamento"), cmpValidation(run.Validation).Label())
+	fmt.Fprintf(&index, "- Execução iniciada em %s; resultado %s; validação %s.\n", run.StartedAt.Format("02/01/2006 15:04"), cmp.Or(resultLabel(run), "em andamento"), cmpValidation(run.Validation).Label())
 	if run.DryRun {
 		index.WriteString("- **Simulação**: nenhum comando nem modelo rodou; nada aqui é evidência.\n")
 	}

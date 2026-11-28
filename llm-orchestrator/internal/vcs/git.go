@@ -235,6 +235,37 @@ func (r *Repo) CreateBranch(ctx context.Context, name string) error {
 	return err
 }
 
+// DeleteEmptyBranch removes one of FazTudo's branches from the directory's
+// repository and its nested ones when none of them holds a commit of its own
+// there (every tip already in its base) and none has it checked out. It
+// reports whether the branch was removed; a branch with work stays.
+func (r *Repo) DeleteEmptyBranch(ctx context.Context, branch string, bases map[string]string) (bool, error) {
+	if !strings.HasPrefix(branch, BranchPrefix) {
+		return false, fmt.Errorf("%s: só branches do FazTudo são removidas", branch)
+	}
+	var holders []*Repo
+	for _, p := range append([]string{"."}, r.nested...) {
+		repo := r
+		if p != "." {
+			repo = r.sub(p)
+		}
+		if _, err := repo.Rev(ctx, "refs/heads/"+branch); err != nil {
+			continue // not in this repository
+		}
+		base := bases[p]
+		if base == "" || repo.Branch(ctx) == branch || !repo.IsAncestor(ctx, "refs/heads/"+branch, base) {
+			return false, nil
+		}
+		holders = append(holders, repo)
+	}
+	for _, repo := range holders {
+		if _, err := repo.git(ctx, "branch", "-D", branch); err != nil {
+			return false, err
+		}
+	}
+	return len(holders) > 0, nil
+}
+
 // RepoBranches lists a repository's branches; Path is "." for the directory
 // itself or a nested repository's path.
 type RepoBranches struct {

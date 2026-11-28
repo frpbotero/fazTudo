@@ -206,11 +206,13 @@ func TestPerformanceWithoutBenchmarkIsInconclusive(t *testing.T) {
 	}
 }
 
-func TestSpecialtyRequiredOnlyByTheDiffDoesNotBlockTheStory(t *testing.T) {
-	exec := &fakeExecutor{}
-	o := newSpecialtyTest(t, exec, func(p *workspace.Policy) {
-		p.RiskRules = []workspace.RiskRule{{Name: "Auth", Paths: []string{"**/auth/**"}, Level: workspace.RiskHigh, Require: []string{"threat-model"}}}
-	}, nil)
+// authRisk makes any change under auth/ high risk, with a threat model.
+func authRisk(p *workspace.Policy) {
+	p.RiskRules = []workspace.RiskRule{{Name: "Auth", Paths: []string{"**/auth/**"}, Level: workspace.RiskHigh, Require: []string{"threat-model"}}}
+}
+
+// touchAuth makes the back-end implementer change a file under auth/.
+func touchAuth(t *testing.T, exec *fakeExecutor) {
 	be := exec.onCall
 	exec.onCall = func(req provider.Request) {
 		be(req)
@@ -218,16 +220,162 @@ func TestSpecialtyRequiredOnlyByTheDiffDoesNotBlockTheStory(t *testing.T) {
 			writeFile(t, req.WorkDir, "src/auth/session.txt", "x")
 		}
 	}
+}
+
+func TestSpecialtyRequiredOnlyByTheDiffRunsOnTheBuiltCode(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{"tm": {specialistOK}}}
+	o := newSpecialtyTest(t, exec, authRisk, nil)
+	touchAuth(t, exec)
 	_ = o.Start(realStory("Mostrar o perfil"))
 	run := waitDone(t, o)
 	st := run.Stories[0]
 	if st.Risk == nil || st.Risk.Level != workspace.RiskHigh {
 		t.Fatalf("the diff must raise the risk: %+v", st.Risk)
 	}
-	if exec.count("tm") != 0 {
-		t.Error("a planning specialty cannot run after the code is built")
+	if exec.count("tm") != 1 {
+		t.Fatalf("threat model calls = %d: a mandatory specialty must not be skipped, logs %+v", exec.count("tm"), run.Logs)
+	}
+	if indexOfRole(exec, "tm", 1) < indexOfRole(exec, "be", 1) {
+		t.Errorf("the late threat model must look at the built code: %v", exec.roles)
+	}
+	prompt := exec.promptsFor("tm")[0]
+	if !strings.Contains(prompt, "Implementação já feita") || !strings.Contains(prompt, "src/auth/session.txt") {
+		t.Errorf("the late specialty must be told what was built:\n%s", prompt)
+	}
+	if r := st.Specialties["threat-model"]; len(r.Requirements) != 1 {
+		t.Errorf("report = %+v", r)
+	}
+	if s := step(st.Steps, "threat-model"); s.Status != StepDone || s.Validation != ValidationPassed {
+		t.Errorf("threat-model step = %s %s %q", s.Status, s.Validation, s.Note)
+	}
+	if !hasLog(run, "roda agora sobre o código já feito") || hasLog(run, "segue sem ela") {
+		t.Errorf("logs = %+v", run.Logs)
 	}
 	if st.Validation != ValidationPassed {
 		t.Errorf("validation = %s, logs %+v", st.Validation, run.Logs)
+	}
+}
+
+func TestLateSpecialtyWithoutAResultBlocksApproval(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{"tm": {"tudo certo"}}}
+	o := newSpecialtyTest(t, exec, authRisk, nil)
+	touchAuth(t, exec)
+	_ = o.Start(realStory("Mostrar o perfil"))
+	run := waitDone(t, o)
+	if v := run.Stories[0].Validation; v == ValidationPassed {
+		t.Errorf("a mandatory threat model without a valid report cannot pass: %s", v)
+	}
+}
+
+// The architect chose the data specialty; the diff then requires it too. It
+// ran: nothing is late and nothing is skipped (the false warning of a run
+// where "Dados e migrations" had passed).
+func TestSpecialtyThatAlreadyRanIsNotReportedLate(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{
+		"architect": {fence(`{"agents": ["data", "backend"]}`)},
+		"dba":       {specialistOK},
+	}}
+	o := newSpecialtyTest(t, exec, func(p *workspace.Policy) {
+		p.RiskRules = []workspace.RiskRule{{Name: "Migrations", Paths: []string{"**/migrations/**"}, Level: workspace.RiskHigh, Require: []string{"data"}}}
+	}, nil)
+	be := exec.onCall
+	exec.onCall = func(req provider.Request) {
+		be(req)
+		if req.Role == "be" {
+			writeFile(t, req.WorkDir, "src/migrations/001.sql", "x")
+		}
+	}
+	_ = o.Start(realStory("Reclassificar ordens"))
+	run := waitDone(t, o)
+	if exec.count("dba") != 1 {
+		t.Errorf("data specialty calls = %d", exec.count("dba"))
+	}
+	if hasLog(run, "passou a ser exigida pelo diff") {
+		t.Errorf("a stage that ran is not late: %+v", run.Logs)
+	}
+	if st := run.Stories[0]; st.Risk == nil || st.Risk.Level != workspace.RiskHigh || st.Validation != ValidationPassed {
+		t.Errorf("risk %+v, validation %s", st.Risk, st.Validation)
+	}
+}
+
+func TestTestKindAndTheCommandsThatRunIt(t *testing.T) {
+	for _, tc := range []struct {
+		req  quality.Requirement
+		want string
+	}{
+		{quality.Requirement{ID: "UT-US101-01"}, "unit"},
+		{quality.Requirement{ID: "it-us101-02"}, "integration"},
+		{quality.Requirement{ID: "E2E-US101-03"}, "e2e"},
+		{quality.Requirement{ID: "UT-1", Kind: "e2e"}, "e2e"},
+		{quality.Requirement{ID: "AC-1"}, ""},
+	} {
+		if got := testKind(tc.req); got != tc.want {
+			t.Errorf("testKind(%+v) = %q, want %q", tc.req, got, tc.want)
+		}
+	}
+	lintE2E := []quality.Command{{Name: "lint", Run: "npm run lint"}, {Name: "test:e2e", Run: "npm run test:e2e"}}
+	if commandRunsKind(lintE2E, "unit") || !commandRunsKind(lintE2E, "integration") {
+		t.Error("lint and e2e run no unit test; integration tests may live in the e2e suite")
+	}
+	if !commandRunsKind([]quality.Command{{Name: "unit", Run: "npm test"}}, "unit") {
+		t.Error("npm test runs unit tests")
+	}
+	if commandRunsKind([]quality.Command{{Name: "lint", Run: "npm run lint"}}, "integration") {
+		t.Error("lint runs no integration test")
+	}
+}
+
+// The mag run only learned at the end that no command ran its UT and IT
+// cases; the spec's own list says it before any code is written.
+func TestSpecWarnsAboutTestsNoCommandRuns(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{
+		"spec": {fence(`{"tests": [{"id": "UT-US101-01", "kind": "unit"}, {"id": "UT-US101-02", "kind": "unit"}, {"id": "IT-US101-01", "kind": "integration"}]}`)},
+	}}
+	o, _ := newVerifierTest(t, exec, func(int) quality.Result { return quality.Result{Passed: true} })
+	policy := o.ws.Policy()
+	policy.Checks = []quality.Command{{Name: "lint", Run: "npm run lint"}, {Name: "test:e2e", Run: "npm run test:e2e"}}
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	_ = o.Start(realStory("Relatórios"))
+	run := waitDone(t, o)
+	if !hasLog(run, "Nenhum comando do projeto roda testes unitários: 2 caso(s) da especificação (UT-US101-01, UT-US101-02)") {
+		t.Errorf("no warning for the unit tests: %+v", run.Logs)
+	}
+	if hasLog(run, "testes de integração") {
+		t.Error("the e2e suite may run integration tests: no warning for them")
+	}
+}
+
+func TestPlannedMigrationsWithoutChecksAreWarnedEarlyOnce(t *testing.T) {
+	exec := &fakeExecutor{outputs: map[string][]string{"architect": {fence(`{"agents": ["backend", "migrations"]}`)}}}
+	o := newSpecialtyTest(t, exec, func(p *workspace.Policy) {
+		p.MigrationChecks = nil
+		p.RiskRules = []workspace.RiskRule{{Name: "Migrations", Paths: []string{"**/migrations/**"}, Level: workspace.RiskHigh, Require: []string{"migrations"}}}
+	}, nil)
+	be := exec.onCall
+	exec.onCall = func(req provider.Request) {
+		be(req)
+		if req.Role == "be" {
+			writeFile(t, req.WorkDir, "src/migrations/001.sql", "x")
+		}
+	}
+	_ = o.Start(realStory("Reclassificar ordens"))
+	run := waitDone(t, o)
+	warned, beAt := -1, -1
+	n := 0
+	for i, l := range run.Logs {
+		if strings.Contains(l.Message, "vai alterar migrations, mas a política não tem `migration_checks`") {
+			n++
+			if warned < 0 {
+				warned = i
+			}
+		}
+		if beAt < 0 && strings.Contains(l.Message, "Back concluída") {
+			beAt = i
+		}
+	}
+	if n != 1 || warned < 0 || warned > beAt {
+		t.Errorf("warning count %d at %d, back-end done at %d: %+v", n, warned, beAt, run.Logs)
 	}
 }

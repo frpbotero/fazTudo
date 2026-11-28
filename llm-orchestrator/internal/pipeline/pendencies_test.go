@@ -199,3 +199,37 @@ func TestPersistentFailuresKeepTheirTitlesAndOneCount(t *testing.T) {
 		t.Errorf("the settled step must carry its issues: %s", stepIDs(st.Steps))
 	}
 }
+
+func TestRetryFinishNamesWhatWasResumed(t *testing.T) {
+	if got := retryFinish(-1); !strings.Contains(got, "decisões de produto respondidas") {
+		t.Errorf("answered decisions = %q", got)
+	}
+	if got := retryFinish(3); !strings.Contains(got, "refazer a etapa com falha") {
+		t.Errorf("failed stage = %q", got)
+	}
+}
+
+func TestResultLabelDoesNotCallPendingWorkASuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  Run
+		want string
+	}{
+		{"validated", Run{Result: ResultSucceeded, Validation: ValidationPassed, Stories: []StoryRun{{Status: StepDone}}}, "concluída"},
+		{"story pending", Run{Result: ResultSucceeded, Stories: []StoryRun{{Status: StepWarning}}}, "concluída com pendências"},
+		{"validation failed", Run{Result: ResultSucceeded, Validation: ValidationFailed, Stories: []StoryRun{{Status: StepDone}}}, "concluída com pendências"},
+		{"waiting", Run{Result: ResultSucceeded, Stories: []StoryRun{{Status: StepWaiting}}}, "concluída, aguardando decisão de produto"},
+		{"failed", Run{Result: ResultFailed}, "falhou"},
+		{"canceled", Run{Result: ResultCanceled}, "cancelada"},
+		{"running", Run{}, ""},
+	} {
+		if got := resultLabel(tc.run); got != tc.want {
+			t.Errorf("%s: resultLabel = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	now := time.Now()
+	got := renderPendencies(Run{Result: ResultSucceeded, Validation: ValidationFailed, FinishedAt: &now, Stories: []StoryRun{{ID: "US-1", Status: StepWarning, Steps: []Step{{Title: "QA", Status: StepWarning}}}}})
+	if !strings.Contains(got, "Resultado: **concluída com pendências** · validação **reprovada**") {
+		t.Errorf("header:\n%s", got)
+	}
+}
