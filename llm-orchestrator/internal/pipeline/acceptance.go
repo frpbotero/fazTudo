@@ -286,7 +286,7 @@ func (o *Orchestrator) judgeScenarios(ss *session, st *storyState, ev evaluation
 			Description:  "Cenário de aceitação recusado: " + r.Criterion + " — " + r.Scenario + ". " + cmpOrString(r.Note, r.Evidence),
 			Location:     "aceitação",
 			Fingerprints: []string{fp},
-			Titles:       []string{"Cenário de aceitação recusado"},
+			Titles:       []string{clipRunes("Cenário de aceitação recusado: "+strings.TrimPrefix(r.ID+" · "+r.Criterion, " · "), 120)},
 		})
 	}
 	ev.verdict = verdict

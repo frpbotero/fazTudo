@@ -76,6 +76,9 @@ type Issue struct {
 	// Infra marks a failure no code change can fix, such as a command that ran
 	// out of time: it goes to the report, never to an implementer.
 	Infra bool `json:"infra,omitempty"`
+	// InfraReason says why a failure is the machine's, when it is not a
+	// time-out: a service the commands need was down.
+	InfraReason string `json:"infra_reason,omitempty"`
 	// Origin tells a failing command's issue against the story's baseline:
 	// "preexistente" (it already failed before the story) or "nova".
 	Origin string `json:"origin,omitempty"`
@@ -278,6 +281,7 @@ func readVerdict(output string, stages []Stage, plan Plan) (Verdict, string) {
 			continue
 		}
 		is.Infra, is.Class, is.Fingerprints, is.Titles, is.Files, is.Origin = false, "", nil, nil, nil, "" // not a model's to claim
+		is.InfraReason = ""
 		is.Sources = nil
 		is.Agent = strings.ToLower(strings.TrimSpace(is.Agent))
 		if !isImplementer(stages, is.Agent) {

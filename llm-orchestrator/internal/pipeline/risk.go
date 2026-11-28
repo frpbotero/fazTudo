@@ -1,9 +1,12 @@
 package pipeline
 
 import (
+	"context"
 	"slices"
 	"strings"
+	"time"
 
+	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/workspace"
 )
 
@@ -38,11 +41,12 @@ func (o *Orchestrator) assessStoryRisk(ss *session, st *storyState, changed []st
 			continue
 		}
 		titles = append(titles, s.Title)
-		if i := slices.IndexFunc(o.stages, func(x Stage) bool { return x.ID == id }); i < st.stageAt && s.Specialist {
+		if i := slices.IndexFunc(o.stages, func(x Stage) bool { return x.ID == id }); i < st.stageAt && s.Specialist && !o.stageRan(st, id) {
 			// A planning specialty found necessary only by the diff cannot plan
-			// what is already built; the gates after it still judge.
+			// what is already built: it reviews it before the next gate, and
+			// the gates judge its requirements.
 			st.late = append(st.late, id)
-			o.logf(LevelWarn, "%s passou a ser exigida pelo diff depois de sua vez; segue sem ela, com as verificações seguintes.", s.Title)
+			o.logf(LevelWarn, "%s passou a ser exigida pelo diff depois de sua vez; roda agora sobre o código já feito, antes das verificações.", s.Title)
 		}
 	}
 	msg := "Risco " + next.Level + " (" + strings.Join(next.Reasons, "; ") + ")"
@@ -54,6 +58,7 @@ func (o *Orchestrator) assessStoryRisk(ss *session, st *storyState, changed []st
 		o.logf(LevelWarn, "Regra de risco exige etapa inexistente neste fluxo (%s); a US não poderá ser aprovada sem ela.", strings.Join(unknown, ", "))
 	}
 	o.enforceRisk(ss, st)
+	o.warnMigrationChecks(ss, st)
 }
 
 // enforceRisk puts the stages the risk requires back into the plan and the
@@ -65,9 +70,6 @@ func (o *Orchestrator) enforceRisk(ss *session, st *storyState) {
 	note := "Exigida pela política de risco: " + strings.Join(st.risk.Rules, ", ")
 	changed := false
 	for _, id := range st.risk.Required {
-		if slices.Contains(st.late, id) {
-			continue
-		}
 		stage, ok := o.lookupStage(id)
 		if !ok {
 			continue
@@ -97,9 +99,6 @@ func (st *storyState) requiredByRisk(id string) bool { return slices.Contains(st
 func (o *Orchestrator) missingRequired(st *storyState, steps []Step) []string {
 	var missing []string
 	for _, id := range st.risk.Required {
-		if slices.Contains(st.late, id) {
-			continue
-		}
 		stage, ok := o.lookupStage(id)
 		i := stepIndex(steps, id)
 		switch {
@@ -138,4 +137,53 @@ func (o *Orchestrator) warnRiskVersusFlow(policy workspace.Policy) {
 	if len(back) > 0 {
 		o.logf(LevelInfo, "O fluxo escolhido desliga %s; a política de risco as religa nas US que as exigirem.", strings.Join(back, ", "))
 	}
+}
+
+// stageRan reports whether the story's step for the stage already reached a
+// result: the architect may have chosen it before the risk required it.
+func (o *Orchestrator) stageRan(st *storyState, id string) bool {
+	s := o.stepAt(stepRef{st.si, id})
+	return s.Status == StepDone || s.Status == StepWarning
+}
+
+// lateSpecialtyNote tells a specialty that runs after the implementation
+// what it is looking at.
+const lateSpecialtyNote = "\n\n## Implementação já feita\n\nEsta especialidade passou a ser exigida pelo diff depois da implementação. " +
+	"Analise o código já alterado (lista acima) e diga o que ele precisa garantir; as verificações seguintes cobram cada requisito " +
+	"e mandam corrigir o que faltar.\n"
+
+// runLateSpecialties runs, before a gate, the planning specialties the diff
+// made mandatory after their turn. It returns false when ctx was canceled or
+// the run must stop.
+func (o *Orchestrator) runLateSpecialties(ctx context.Context, ss *session, st *storyState) bool {
+	for len(st.late) > 0 {
+		id := st.late[0]
+		st.late = st.late[1:]
+		stage, ok := o.lookupStage(id)
+		if !ok || o.stageRan(st, id) {
+			continue
+		}
+		ref := stepRef{st.si, id}
+		o.updateStep(ref, func(s *Step) {
+			s.Status, s.Note = StepPending, "Exigida pelo diff depois da implementação; avalia o código já feito"
+		})
+		sc := o.stageContext(ss, st, stage)
+		if !ss.dry {
+			sc.Changed = o.changedFiles(ss, st.started)
+		}
+		resp, ok := o.runStage(ctx, ref, provider.Request{
+			Role:     stage.Role,
+			System:   stage.System,
+			Prompt:   buildPrompt(stage, sc, ss.report, o.stepsBefore(ref)) + lateSpecialtyNote,
+			Tier:     stage.Tier,
+			WorkDir:  ss.repo,
+			ReadOnly: stage.ReadOnly,
+		})
+		if !ok || !o.afterAgent(ctx, ss, st, ref) {
+			return false
+		}
+		o.logf(LevelSuccess, "%s concluída via %s em %s.", stage.Title, resp.Name, resp.Duration.Round(time.Millisecond))
+		o.applySpecialist(st, ref, stage, resp)
+	}
+	return true
 }

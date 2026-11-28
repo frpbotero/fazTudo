@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -356,5 +357,23 @@ func TestPreferredProviderGoesFirstAndKeepsFailover(t *testing.T) {
 	resp, err = r.Execute(context.Background(), Request{Role: "review", Tier: TierStandard, ReadOnly: true, Prefer: Codex}, discard)
 	if err != nil || resp.Provider != Claude {
 		t.Errorf("a preferred provider out of quota falls back: %v, %v", resp, err)
+	}
+}
+
+// The reserve's weaker isolation, left out of the preflight, is said when it
+// actually takes a writing task.
+func TestReserveWithWeakerIsolationIsNamedWhenItTakesATask(t *testing.T) {
+	real := &fakeRunner{results: map[string][]result{
+		"claude": {{out: "rate limit, retry after 1 seconds", err: errors.New("exit 1")}},
+	}}
+	r := newTestRouter(false, real, allInstalled)
+	var logs []string
+	logf := func(_ slog.Level, format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+	resp, err := r.Execute(context.Background(), Request{Role: "backend", Tier: TierStandard}, logf)
+	if err != nil || resp.Provider != Codex {
+		t.Fatalf("failover = %v, %v", resp, err)
+	}
+	if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "Codex CLI assume a tarefa sem restringir os comandos") {
+		t.Errorf("logs = %q", logs)
 	}
 }

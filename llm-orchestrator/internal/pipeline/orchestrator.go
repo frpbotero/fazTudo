@@ -79,6 +79,9 @@ func (o *Orchestrator) preflight(opts StartOptions) ([]string, error) {
 
 // Orchestrator runs one pipeline at a time and notifies observers on change.
 type Orchestrator struct {
+	// staleBranches are the branches of stories that start over, to remove
+	// when empty once the resumed run has its repository.
+	staleBranches []string
 	// baselines caches the baselines by commit and commands, so the stories
 	// of a wave starting from the same commit share one.
 	baselines  sync.Map
@@ -561,11 +564,14 @@ type storyState struct {
 	benchmarks   string
 	benchResults []BenchResult
 	// stageAt is the index of the stage running; late lists the planning
-	// stages the risk required only after they had passed.
+	// stages the risk required only after they had passed, still to run on
+	// the code already written.
 	stageAt int
 	late    []string
-	red     []string // commands that failed last, retried first
-	skipped bool     // the last assessment left costlier commands out
+	// warnedMigrations keeps the missing migration_checks warning to once.
+	warnedMigrations bool
+	red              []string // commands that failed last, retried first
+	skipped          bool     // the last assessment left costlier commands out
 	// lastFailures and stalls track whether a fix loop is getting anywhere.
 	lastFailures int
 	stalls       int
@@ -610,7 +616,7 @@ func (o *Orchestrator) closeStory(ss *session, st *storyState, total int) {
 		o.logf(LevelWarn, "%s bloqueada no Passo 0: %s", st.sc.Story.Title, st.blocked)
 	case st.pending > 0:
 		status = StepWarning
-		o.logf(LevelWarn, "%s entregue com %d pendência(s) não resolvida(s).", st.sc.Story.Title, st.pending)
+		o.logf(LevelWarn, "%s entregue com %d pendência(s) não resolvida(s).", st.sc.Story.Title, cmp.Or(o.storyPending(st.si), st.pending))
 	case st.inconclusive > 0:
 		status = StepWarning
 		o.logf(LevelWarn, "%s entregue sem veredito válido em %d portão(ões); validação inconclusiva.", st.sc.Story.Title, st.inconclusive)
@@ -697,6 +703,7 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 	if ss == nil {
 		return
 	}
+	o.pruneStaleBranches(ctx, ss)
 	graph := o.updateGraph(ctx, ss)
 	report, ok := o.discover(ctx, ss, graph) // the saved one, or a new one
 	if !ok {
@@ -717,7 +724,16 @@ func (o *Orchestrator) retryExecute(ctx context.Context, opts StartOptions, stor
 	if !o.runWaves(ctx, ss, opts, waves[max(from, 0):], resume) {
 		return
 	}
-	o.finishSucceeded("Pipeline concluído após refazer a etapa com falha.")
+	o.finishSucceeded(retryFinish(stageAt))
+}
+
+// retryFinish names what the resumed run did: a story started over (its
+// product decisions answered) or a failed stage done again.
+func retryFinish(stageAt int) string {
+	if stageAt < 0 {
+		return "Pipeline concluído após retomar a US com as decisões de produto respondidas."
+	}
+	return "Pipeline concluído após refazer a etapa com falha."
 }
 
 func (o *Orchestrator) retrySession(ctx context.Context, repo string, opts StartOptions) *session {
@@ -955,6 +971,9 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 		if stage.Gate || stage.Verifier {
 			// The real diff may raise the risk set from the story's text.
 			o.assessStoryRisk(ss, st, o.changedFiles(ss, st.started))
+			if !o.runLateSpecialties(ctx, ss, st) {
+				return false
+			}
 		}
 		if stage.Selectable && !st.plan.Includes(stage.ID) {
 			continue // already marked as omitted when the plan was applied
@@ -1027,11 +1046,15 @@ func (o *Orchestrator) developStoryFrom(ctx context.Context, ss *session, st *st
 			}
 		case stage.Specifier:
 			o.applySpec(st, resp)
+			if !ss.dry {
+				o.warnUncoveredKinds(ss, st)
+			}
 		case stage.Planner:
 			st.plan, st.planText = o.applyPlan(st.si, st.sc, resp), resp.Output
 			o.enforceRisk(ss, st) // the architect may add stages, not drop mandatory ones
 			o.enforceSpecialties(st)
 			o.annotateNeeds(ss, st)
+			o.warnMigrationChecks(ss, st)
 		case stage.Specialist:
 			o.applySpecialist(st, ref, stage, resp)
 		case stage.Gate:
@@ -1157,6 +1180,9 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 		return true
 	}
 	title := o.stepTitle(ref)
+	// Removing a versioned file can be the task (a feature taken out), so it
+	// is not refused; it is never silent either, for the review to weigh.
+	deleted, _ := ss.git.DeletedPaths(ctx)
 	c, err := ss.git.CommitAll(ctx, fmt.Sprintf("faztudo(%s): %s", storyLabel(st.sc.Story), title), dependencyPaths(ss.git.Nested())...)
 	switch {
 	case err != nil:
@@ -1164,6 +1190,11 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 	case c != nil:
 		o.updateStep(ref, func(s *Step) { s.Commit = c })
 		o.logf(LevelInfo, "Commit %s: %s (%d arquivo(s)).", c.Hash, title, len(c.Files))
+		if len(deleted) > 0 {
+			note := fmt.Sprintf("removeu %d arquivo(s) versionado(s): %s", len(deleted), strings.Join(clipList(deleted, 5), ", "))
+			o.updateStep(ref, func(s *Step) { s.Note = strings.TrimPrefix(s.Note+"; "+note, "; ") })
+			o.logf(LevelWarn, "%s %s.", title, note)
+		}
 	}
 	if head, err := ss.git.Head(ctx); err == nil && ref.story >= 0 {
 		o.updateStory(ref.story, func(r *StoryRun) { r.Head = head })
@@ -1185,4 +1216,35 @@ func (o *Orchestrator) guardInputs(ss *session, ref stepRef) bool {
 	}
 	o.failStep(ref, 0, err)
 	return false
+}
+
+// storyPending is the story's pendingCount as the run holds it now.
+func (o *Orchestrator) storyPending(si int) int {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if si < 0 || si >= len(o.run.Stories) {
+		return 0
+	}
+	return pendingCount(o.run.Stories[si])
+}
+
+// pruneStaleBranches removes the branches of stories that start over, when
+// they hold no commit of their own; one with work stays for review.
+func (o *Orchestrator) pruneStaleBranches(ctx context.Context, ss *session) {
+	o.mu.Lock()
+	stale := o.staleBranches
+	o.staleBranches = nil
+	o.mu.Unlock()
+	if ss.git == nil {
+		return
+	}
+	for _, b := range stale {
+		removed, err := ss.git.DeleteEmptyBranch(ctx, b, ss.bases)
+		switch {
+		case err != nil:
+			o.logf(LevelWarn, "Branch %s não foi removida: %v.", b, err)
+		case removed:
+			o.logf(LevelInfo, "Branch %s removida: a US recomeça em outra e ela não tinha commits próprios.", b)
+		}
+	}
 }

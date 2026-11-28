@@ -56,10 +56,8 @@ func storyMetrics(st StoryRun, promotions []Promotion) StoryMetrics {
 		case len(s.Calls) > 0:
 			m.AgentMS += s.DurationMS
 		}
-		if s.Status == StepWarning || s.Status == StepFailed {
-			m.Pending += len(s.Issues)
-		}
 	}
+	m.Pending = pendingCount(st)
 	label := st.ID
 	for _, p := range promotions {
 		for _, s := range p.Stories {

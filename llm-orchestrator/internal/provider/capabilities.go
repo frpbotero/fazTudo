@@ -100,6 +100,12 @@ func (r *Router) Preflight(ctx context.Context, need Requirements) ([]string, er
 			continue
 		}
 		capable++
+		if capable > 1 {
+			// A reserve only serves on failover, and Execute warns when one
+			// weaker than the primary takes a task: naming it here would
+			// warn about a provider the run may never use.
+			continue
+		}
 		if need.MaxTurns && !p.cli.Caps.MaxTurns {
 			warnings = append(warnings, fmt.Sprintf("%s não aplica limite de turnos; o limite da política não vale para ele.", p.cli.Name))
 		}

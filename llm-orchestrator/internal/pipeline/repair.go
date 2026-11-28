@@ -44,18 +44,21 @@ const (
 // its fingerprint, so a failure that returns is recognised instead of treated
 // as new.
 type Cause struct {
-	Fingerprint string   `json:"fingerprint"`
-	Title       string   `json:"title"`
-	Owner       string   `json:"owner,omitempty"`
-	Status      string   `json:"status"`
-	Attempts    int      `json:"attempts,omitempty"`
-	RootCause   string   `json:"root_cause,omitempty"`
-	Evidence    string   `json:"evidence,omitempty"`
-	Strategy    []string `json:"strategy,omitempty"`
-	Regression  string   `json:"regression_test,omitempty"`
-	Risk        string   `json:"risk,omitempty"`
-	Proof       string   `json:"proof,omitempty"`
-	Reason      string   `json:"reason,omitempty"`
+	Fingerprint string `json:"fingerprint"`
+	Title       string `json:"title"`
+	// Source is where the failure came from (a command, "aceitação", a
+	// file): the causes of one source are reported together.
+	Source     string   `json:"source,omitempty"`
+	Owner      string   `json:"owner,omitempty"`
+	Status     string   `json:"status"`
+	Attempts   int      `json:"attempts,omitempty"`
+	RootCause  string   `json:"root_cause,omitempty"`
+	Evidence   string   `json:"evidence,omitempty"`
+	Strategy   []string `json:"strategy,omitempty"`
+	Regression string   `json:"regression_test,omitempty"`
+	Risk       string   `json:"risk,omitempty"`
+	Proof      string   `json:"proof,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
 	// History records what each attempt did, so the next one does not repeat it.
 	History    []string `json:"history,omitempty"`
 	Reassigned bool     `json:"reassigned,omitempty"`
@@ -67,6 +70,15 @@ func issueCauses(is Issue) []string {
 		return is.Fingerprints
 	}
 	return []string{quality.TextFingerprint(is.Location, is.Description)}
+}
+
+// causeTitle is the title of the issue's i-th cause: a command's failures
+// each have their own; an issue with one title gives it to all its causes.
+func causeTitle(is Issue, i int) string {
+	if len(is.Titles) == len(issueCauses(is)) && i < len(is.Titles) {
+		return is.Titles[i]
+	}
+	return issueTitle(is)
 }
 
 func issueTitle(is Issue) string {
@@ -129,9 +141,10 @@ func (o *Orchestrator) triage(ss *session, st *storyState, issues []Issue) []Iss
 	var fixable []Issue
 	for _, is := range issues {
 		status, reason := o.classify(st, is, changed)
-		for _, fingerprint := range issueCauses(is) {
+		for i, fingerprint := range issueCauses(is) {
 			o.updateCause(st.si, fingerprint, func(c *Cause) {
-				c.Title = cmp.Or(c.Title, issueTitle(is))
+				c.Title = cmp.Or(c.Title, causeTitle(is, i))
+				c.Source = cmp.Or(c.Source, is.Location)
 				c.Owner = cmp.Or(c.Owner, is.Agent)
 				if c.Status != causeBlocked {
 					c.Status = status
@@ -150,7 +163,7 @@ func (o *Orchestrator) triage(ss *session, st *storyState, issues []Issue) []Iss
 
 func (o *Orchestrator) classify(st *storyState, is Issue, changed []string) (status, reason string) {
 	if is.Infra {
-		return causeInfra, "Comando excedeu o tempo limite; não indica erro no código."
+		return causeInfra, cmp.Or(is.InfraReason, "Comando excedeu o tempo limite; não indica erro no código.")
 	}
 	known := o.causes(st.si)
 	fingerprints := issueCauses(is)
@@ -249,7 +262,7 @@ func (o *Orchestrator) settleNote(st *storyState, issues []Issue) string {
 	}
 	var parts []string
 	for _, kind := range []struct{ status, label string }{
-		{causeInfra, "excedeu o tempo limite"},
+		{causeInfra, "infraestrutura (tempo limite ou ambiente indisponível)"},
 		{causeInherited, "herdada de US anterior"},
 		{causeBlocked, "bloqueada"},
 		{causePending, "persistiu após as tentativas"},

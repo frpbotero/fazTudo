@@ -2,14 +2,15 @@ package pipeline
 
 import (
 	"context"
-
-	"llm-orchestrator/internal/provider"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"llm-orchestrator/internal/provider"
 	"llm-orchestrator/internal/workspace"
 )
 
@@ -137,22 +138,53 @@ func severityRank(s string) int {
 // point at problems, the implementers fix them. The CLI's read-only mode
 // should prevent it; this is the check that it did.
 func (o *Orchestrator) undoReviewerEdits(ctx context.Context, ss *session, ref stepRef) {
-	stage, ok := o.lookupStage(retryStageID(o.stepAt(ref)))
+	at := o.stepAt(ref)
+	if at.Kind == "fix" {
+		// A fix step names its gate but is run by an implementer: its edits
+		// are the fix, not a reviewer's overreach.
+		return
+	}
+	stage, ok := o.lookupStage(retryStageID(at))
 	if !ok || !stage.ReadOnly || stage.Diagnose || ss.dry {
 		return
 	}
-	started := o.stepAt(ref).StartedAt
+	started := at.StartedAt
 	if started == nil {
 		return
 	}
-	changed := o.changedFiles(ss, started.Add(-time.Second))
+	since := *started
+	if ss.git != nil {
+		// A second of slack for coarse file clocks: git confirms below.
+		since = since.Add(-time.Second)
+	}
+	changed := o.changedFiles(ss, since)
+	if ss.git != nil {
+		// Every agent step ends in a commit, so what the reviewer touched is
+		// what differs from HEAD now. The clock alone also catches the
+		// implementer's files committed just before the review started.
+		dirty, err := ss.git.ChangedPaths(ctx)
+		if err != nil {
+			o.logf(LevelWarn, "%s: não foi possível conferir se o revisor alterou arquivos (%v).", stage.Title, err)
+			return
+		}
+		changed = slices.DeleteFunc(changed, func(f string) bool { return !slices.Contains(dirty, f) })
+		// A deleted file has no clock to read: git alone tells it is gone.
+		protected := ss.guard.Files()
+		for _, f := range dirty {
+			if _, err := os.Lstat(filepath.Join(ss.repo, f)); os.IsNotExist(err) && !slices.Contains(protected, f) {
+				changed = append(changed, f)
+			}
+		}
+	}
 	if len(changed) == 0 {
 		return
 	}
-	note := "revisor alterou arquivos, desfeito: " + strings.Join(clipList(changed, 5), ", ")
+	list := strings.Join(clipList(changed, 5), ", ")
+	note := "revisor alterou arquivos e, sem git, não foi possível desfazer; confira: " + list
 	if ss.git != nil {
+		note = "revisor alterou arquivos, desfeito: " + list
 		if err := ss.git.RestoreFiles(ctx, changed); err != nil {
-			note = "revisor alterou arquivos e não foi possível desfazer (" + err.Error() + "): " + strings.Join(clipList(changed, 5), ", ")
+			note = "revisor alterou arquivos e não foi possível desfazer (" + err.Error() + "): " + list
 		}
 	}
 	o.updateStep(ref, func(s *Step) { s.Error = strings.TrimPrefix(s.Error+"; "+note, "; ") })
