@@ -75,7 +75,7 @@ jobs:
       - name: Linux (.deb, .rpm, .tar.gz)
         if: matrix.target == 'linux'
         run: |
-          make desktop-linux VERSION=${{ steps.version.outputs.value }}
+          make desktop-linux VERSION=${{ steps.version.outputs.value }} APP_VERSION=${{ steps.version.outputs.value }}
           ./scripts/package-linux.sh ${{ steps.version.outputs.value }} amd64
 
       - uses: actions/upload-artifact@v4
