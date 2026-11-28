@@ -610,7 +610,7 @@ func (o *Orchestrator) closeStory(ss *session, st *storyState, total int) {
 		o.logf(LevelWarn, "%s bloqueada no Passo 0: %s", st.sc.Story.Title, st.blocked)
 	case st.pending > 0:
 		status = StepWarning
-		o.logf(LevelWarn, "%s entregue com %d pendência(s) não resolvida(s).", st.sc.Story.Title, st.pending)
+		o.logf(LevelWarn, "%s entregue com %d pendência(s) não resolvida(s).", st.sc.Story.Title, cmp.Or(o.storyPending(st.si), st.pending))
 	case st.inconclusive > 0:
 		status = StepWarning
 		o.logf(LevelWarn, "%s entregue sem veredito válido em %d portão(ões); validação inconclusiva.", st.sc.Story.Title, st.inconclusive)
@@ -1193,4 +1193,14 @@ func (o *Orchestrator) guardInputs(ss *session, ref stepRef) bool {
 	}
 	o.failStep(ref, 0, err)
 	return false
+}
+
+// storyPending is the story's pendingCount as the run holds it now.
+func (o *Orchestrator) storyPending(si int) int {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if si < 0 || si >= len(o.run.Stories) {
+		return 0
+	}
+	return pendingCount(o.run.Stories[si])
 }

@@ -1,8 +1,10 @@
 package pipeline
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"llm-orchestrator/internal/quality"
 )
@@ -145,4 +147,82 @@ func TestFailureOriginComparesFingerprints(t *testing.T) {
 	if none.failureOrigin("unit", nil) != "" {
 		t.Error("no baseline, no origin")
 	}
+}
+
+// postgresDown is what Jest prints for a suite whose database is not running.
+const postgresDown = "FAIL test/backups.e2e-spec.ts\n  ● Backups (e2e) › status\n\n    AggregateError:\n\n    connect ECONNREFUSED 127.0.0.1:5432\n"
+
+func TestServiceDownIsTheEnvironmentAndCallsNoFix(t *testing.T) {
+	o, exec := newBaselineTest(t, func(int) quality.Result {
+		return quality.Result{ExitCode: 1, Output: postgresDown}
+	})
+	_ = o.Start(realStory("Carrinho"))
+	run := waitDone(t, o)
+
+	st := run.Stories[0]
+	if st.Baseline == nil || !strings.Contains(st.Baseline.Unavailable["unit"], "ECONNREFUSED 127.0.0.1:5432") {
+		t.Fatalf("baseline = %+v", st.Baseline)
+	}
+	is := checksIssue(t, run)
+	if !is.Infra || !strings.Contains(is.InfraReason, "suba o banco") || !strings.Contains(is.Description, "[Ambiente indisponível") {
+		t.Errorf("issue = %+v", is)
+	}
+	if n := exec.count("fe"); n != 1 {
+		t.Errorf("the implementer was called %d time(s); a database that is down is no code to fix", n)
+	}
+	if n := exec.count(InvestigatorStage.Role); n != 0 {
+		t.Errorf("the investigator was called %d time(s)", n)
+	}
+	for _, c := range st.Causes {
+		if c.Status != causeInfra || !strings.Contains(c.Reason, "Serviço do ambiente indisponível") {
+			t.Errorf("cause = %+v", c)
+		}
+	}
+	if s := step(st.Steps, "checks"); s.FailureClass != FailureInfra {
+		t.Errorf("checks failure class = %q", s.FailureClass)
+	}
+	if !hasLog(run, "Ambiente indisponível na linha de base: unit") {
+		t.Errorf("no environment warning: %+v", run.Logs)
+	}
+	if st.Validation != ValidationFailed {
+		t.Errorf("nothing was proven with the database down: validation %s", st.Validation)
+	}
+}
+
+func TestBaselineTakenWithTheEnvironmentDownRunsAgain(t *testing.T) {
+	calls := 0
+	exec := &fakeExecutor{}
+	o, repo := newParallelStoryTest(t, exec)
+	policy := o.ws.Policy()
+	policy.SkipBaseline = false
+	policy.Checks = []quality.Command{{Name: "unit", Run: "npm test"}}
+	if _, err := o.ws.SetPolicy(policy); err != nil {
+		t.Fatal(err)
+	}
+	o.runCheck = func(_ context.Context, _ string, c quality.Command, _ time.Duration) quality.Result {
+		calls++
+		return quality.Result{Name: c.Name, Command: c.Run, Passed: true}
+	}
+	initRepo(t, repo)
+	head := gitOut(t, repo, "rev-parse", "HEAD")
+	o.baselines.Store(baselineKey(head, policy.Checks), &Baseline{Commit: head, Failing: map[string][]string{"unit": nil}, Unavailable: map[string]string{"unit": "connect ECONNREFUSED 127.0.0.1:5432"}})
+
+	_ = o.Start(StartOptions{Stories: threeStories[:1], Source: "Markdown"})
+	run := waitDone(t, o)
+	b := run.Stories[0].Baseline
+	if b == nil || len(b.Unavailable) != 0 || len(b.Failing) != 0 {
+		t.Fatalf("the stale baseline was reused: %+v", b)
+	}
+	if !hasLog(run, "encontrou o ambiente indisponível; rodando de novo") || hasLog(run, "reutilizada") {
+		t.Errorf("logs = %+v", run.Logs)
+	}
+}
+
+func hasLog(run Run, part string) bool {
+	for _, l := range run.Logs {
+		if strings.Contains(l.Message, part) {
+			return true
+		}
+	}
+	return false
 }

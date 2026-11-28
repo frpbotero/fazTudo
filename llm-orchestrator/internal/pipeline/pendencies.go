@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -18,6 +19,11 @@ func renderPendencies(run Run) string {
 	var b bytes.Buffer
 	count := 0
 	section := func(title string) { fmt.Fprintf(&b, "\n## %s\n", title) }
+	var pendingCauses map[string]bool
+	covered := func(is Issue) bool {
+		fps := issueCauses(is)
+		return len(fps) > 0 && !slices.ContainsFunc(fps, func(f string) bool { return !pendingCauses[f] })
+	}
 
 	addStep := func(prefix string, s Step) {
 		switch s.Status {
@@ -31,6 +37,9 @@ func renderPendencies(run Run) string {
 			fmt.Fprintf(&b, "\n%s\n", s.Error)
 		}
 		for _, is := range s.Issues {
+			if covered(is) {
+				continue // listed once, grouped, under Causas
+			}
 			fmt.Fprintf(&b, "- %s%s%s\n", severityTag(is.Severity), is.Description, locationSuffix(is.Location))
 		}
 		for _, f := range s.Findings {
@@ -49,6 +58,12 @@ func renderPendencies(run Run) string {
 
 	for _, st := range run.Stories {
 		before := b.Len()
+		pendingCauses = map[string]bool{}
+		for _, c := range st.Causes {
+			if _, pending := causeLabels[c.Status]; pending {
+				pendingCauses[c.Fingerprint] = true
+			}
+		}
 		section(fmt.Sprintf("%s — %s", cmp.Or(st.ID, st.Title), st.Title))
 		header := b.Len()
 		for _, s := range st.Steps {
@@ -103,30 +118,87 @@ var causeLabels = map[string]string{
 	causeUnverified: "não reverificada",
 }
 
-// writePendingCauses hands over what the investigation learned, so nobody
-// starts the diagnosis again. It returns how many causes it listed.
-func writePendingCauses(b *bytes.Buffer, causes []Cause) int {
-	count := 0
+// causeGroup is the pending causes of one source with one status: the many
+// tests a database outage fails are one item to act on, not one each.
+type causeGroup struct {
+	source, status string
+	causes         []Cause
+}
+
+// pendingCauseGroups groups the unresolved causes by source and status, in
+// the order they first appeared. A cause without a source stands alone.
+func pendingCauseGroups(causes []Cause) []causeGroup {
+	var groups []causeGroup
 	for _, c := range causes {
-		label, pending := causeLabels[c.Status]
-		if !pending {
+		if _, pending := causeLabels[c.Status]; !pending {
 			continue
 		}
-		if count == 0 {
-			b.WriteString("\n### Causas\n")
+		i := -1
+		if c.Source != "" {
+			i = slices.IndexFunc(groups, func(g causeGroup) bool { return g.source == c.Source && g.status == c.Status })
 		}
-		count++
-		fmt.Fprintf(b, "\n- **%s** (%s, `%s`)\n", c.Title, label, c.Fingerprint)
-		for _, field := range []struct{ name, value string }{
-			{"Causa raiz", c.RootCause}, {"Evidência", c.Evidence}, {"Estratégia", strings.Join(c.Strategy, "; ")},
-			{"Teste de regressão", c.Regression}, {"Motivo", c.Reason},
+		if i < 0 {
+			groups = append(groups, causeGroup{source: c.Source, status: c.Status})
+			i = len(groups) - 1
+		}
+		groups[i].causes = append(groups[i].causes, c)
+	}
+	return groups
+}
+
+// pendingCount is the story's unresolved items, the one number the log, the
+// metrics and the reports give: a group of causes counts once.
+func pendingCount(st StoryRun) int {
+	if n := len(pendingCauseGroups(st.Causes)); n > 0 {
+		return n
+	}
+	return len(pendingIssues(st.Steps))
+}
+
+// maxGroupTitles bounds how many failures one group names.
+const maxGroupTitles = 8
+
+// writePendingCauses hands over what the investigation learned, so nobody
+// starts the diagnosis again. It returns how many items it listed.
+func writePendingCauses(b *bytes.Buffer, causes []Cause) int {
+	groups := pendingCauseGroups(causes)
+	if len(groups) > 0 {
+		b.WriteString("\n### Causas\n")
+	}
+	for _, g := range groups {
+		label := causeLabels[g.status]
+		first := g.causes[0]
+		if len(g.causes) == 1 {
+			fmt.Fprintf(b, "\n- **%s** (%s, `%s`)\n", first.Title, label, first.Fingerprint)
+		} else {
+			fmt.Fprintf(b, "\n- **%s: %d falha(s)** (%s)\n", g.source, len(g.causes), label)
+			var titles []string
+			for _, c := range g.causes {
+				titles = append(titles, c.Title)
+			}
+			fmt.Fprintf(b, "  - Casos: %s\n", strings.Join(clipList(titles, maxGroupTitles), "; "))
+		}
+		// What one investigation learned holds for the group: show the first
+		// value of each field, not one copy per failure.
+		for _, field := range []struct {
+			name  string
+			value func(Cause) string
+		}{
+			{"Causa raiz", func(c Cause) string { return c.RootCause }},
+			{"Evidência", func(c Cause) string { return c.Evidence }},
+			{"Estratégia", func(c Cause) string { return strings.Join(c.Strategy, "; ") }},
+			{"Teste de regressão", func(c Cause) string { return c.Regression }},
+			{"Motivo", func(c Cause) string { return c.Reason }},
 		} {
-			if field.value != "" {
-				fmt.Fprintf(b, "  - %s: %s\n", field.name, field.value)
+			for _, c := range g.causes {
+				if v := field.value(c); v != "" {
+					fmt.Fprintf(b, "  - %s: %s\n", field.name, v)
+					break
+				}
 			}
 		}
 	}
-	return count
+	return len(groups)
 }
 
 // notDelivered explains why a story was left undelivered: blocked in Passo 0,
