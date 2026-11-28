@@ -860,20 +860,111 @@ func BranchName(storyID string, at time.Time) string {
 }
 
 // RestoreFiles puts paths back as HEAD has them: a tracked file gets its
-// committed content, a file HEAD does not have is removed.
+// committed content, a file HEAD does not have is removed. Each path is
+// resolved in the repository that owns it: the parent's HEAD does not hold
+// the files of a nested repository, and asking it would delete them.
 func (r *Repo) RestoreFiles(ctx context.Context, paths []string) error {
 	for _, p := range paths {
-		if _, err := r.git(ctx, "cat-file", "-e", "HEAD:"+filepath.ToSlash(p)); err == nil {
-			if _, err := r.git(ctx, "checkout", "HEAD", "--", p); err != nil {
+		repo, rel, err := r.owner(p)
+		if err != nil {
+			return err
+		}
+		if _, err := repo.git(ctx, "cat-file", "-e", "HEAD:"+filepath.ToSlash(rel)); err == nil {
+			if _, err := repo.git(ctx, "checkout", "HEAD", "--", rel); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := os.Remove(filepath.Join(r.dir, p)); err != nil && !os.IsNotExist(err) {
+		// Absent from HEAD but known to the index is someone's staged work, not
+		// a stray file: refuse rather than lose it.
+		if _, err := repo.git(ctx, "ls-files", "--error-unmatch", "--", rel); err == nil {
+			return fmt.Errorf("%s: arquivo no índice e fora do HEAD; não foi removido", p)
+		}
+		if err := os.Remove(filepath.Join(repo.dir, rel)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+// ChangedPaths lists the files that differ from HEAD (modified, deleted or
+// untracked and not ignored), in the directory and in its nested
+// repositories, relative to the directory.
+func (r *Repo) ChangedPaths(ctx context.Context) ([]string, error) {
+	return r.changed(ctx, func(string) bool { return true })
+}
+
+// DeletedPaths lists the tracked files missing from the working tree, in the
+// directory and in its nested repositories, relative to the directory.
+func (r *Repo) DeletedPaths(ctx context.Context) ([]string, error) {
+	return r.changed(ctx, func(code string) bool { return strings.Contains(code, "D") })
+}
+
+func (r *Repo) changed(ctx context.Context, keep func(code string) bool) ([]string, error) {
+	var out []string
+	add := func(prefix string, entries []statusEntry) {
+		for _, e := range entries {
+			if keep(e.code) {
+				out = append(out, prefix+e.path)
+			}
+		}
+	}
+	entries, err := r.status(ctx, "--ignore-submodules=all")
+	if err != nil {
+		return nil, err
+	}
+	add("", entries)
+	for _, n := range r.nested {
+		entries, err := r.sub(n).status(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", n, err)
+		}
+		add(n+"/", entries)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+type statusEntry struct{ code, path string }
+
+func (r *Repo) status(ctx context.Context, flags ...string) ([]statusEntry, error) {
+	args := append([]string{"status", "--porcelain", "-z", "--untracked-files=all"}, flags...)
+	out, err := r.git(ctx, append(args, "--", ".")...)
+	if err != nil {
+		return nil, err
+	}
+	var entries []statusEntry
+	fields := strings.Split(out, "\x00")
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if len(f) < 4 {
+			continue
+		}
+		entries = append(entries, statusEntry{code: f[:2], path: f[3:]})
+		if f[0] == 'R' || f[0] == 'C' {
+			i++ // the rename's source follows; it is gone from the tree
+		}
+	}
+	return entries, nil
+}
+
+// owner returns the repository that versions path (the deepest nested one
+// containing it, or r) and path relative to it.
+func (r *Repo) owner(path string) (*Repo, string, error) {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || filepath.IsAbs(path) {
+		return nil, "", fmt.Errorf("%s: caminho fora do repositório", path)
+	}
+	best := ""
+	for _, n := range r.nested {
+		if strings.HasPrefix(clean, n+"/") && len(n) > len(best) {
+			best = n
+		}
+	}
+	if best == "" {
+		return r, clean, nil
+	}
+	return r.sub(best), strings.TrimPrefix(clean, best+"/"), nil
 }
 
 // Rev resolves a revision (a branch, a tag, a commit) to its full hash.

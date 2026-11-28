@@ -666,3 +666,132 @@ func TestPartialMergeIntoBasesKeepsWhatWasMergedAndSaysSo(t *testing.T) {
 		t.Error("the nested repository moved again")
 	}
 }
+
+// newNestedRepo builds a parent repository with api/ as a nested repository
+// (a gitlink without .gitmodules), both committed.
+func newNestedRepo(t *testing.T) (*Repo, string) {
+	t.Helper()
+	requireGit(t)
+	root := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	api := filepath.Join(root, "api")
+	write(t, api, "src/service.ts", "original\n")
+	run(api, "init", "-q")
+	run(api, "add", "-A")
+	run(api, "commit", "-q", "-m", "api")
+	write(t, root, "README.md", "pai\n")
+	run(root, "init", "-q")
+	run(root, "add", "-A")
+	run(root, "commit", "-q", "-m", "pai")
+	r, _, err := Open(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, root
+}
+
+func TestRestoreFilesResolvesTheNestedRepository(t *testing.T) {
+	r, root := newNestedRepo(t)
+	ctx := context.Background()
+	write(t, root, "api/src/service.ts", "alterado\n")
+	write(t, root, "api/src/novo.ts", "x\n")
+	write(t, root, "README.md", "alterado\n")
+	write(t, root, "solto.txt", "x\n")
+
+	if err := r.RestoreFiles(ctx, []string{"api/src/service.ts", "api/src/novo.ts", "README.md", "solto.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	// The nested file tracked there is restored, never deleted.
+	if data, err := os.ReadFile(filepath.Join(root, "api/src/service.ts")); err != nil || string(data) != "original\n" {
+		t.Fatalf("api/src/service.ts = %q, %v", data, err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, "README.md")); string(data) != "pai\n" {
+		t.Errorf("README.md = %q", data)
+	}
+	for _, gone := range []string{"api/src/novo.ts", "solto.txt"} {
+		if _, err := os.Stat(filepath.Join(root, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s must be removed: %v", gone, err)
+		}
+	}
+	if dirty, _ := r.DirtyPaths(ctx); len(dirty) != 0 {
+		t.Errorf("dirty after restore = %v", dirty)
+	}
+}
+
+func TestRestoreFilesKeepsStagedWork(t *testing.T) {
+	r, root := newNestedRepo(t)
+	ctx := context.Background()
+	write(t, root, "api/src/staged.ts", "x\n")
+	if _, err := r.sub("api").git(ctx, "add", "src/staged.ts"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RestoreFiles(ctx, []string{"api/src/staged.ts"}); err == nil {
+		t.Fatal("a staged file outside HEAD must not be removed silently")
+	}
+	if _, err := os.Stat(filepath.Join(root, "api/src/staged.ts")); err != nil {
+		t.Errorf("staged file lost: %v", err)
+	}
+}
+
+func TestOwnerRejectsPathsOutsideTheRepository(t *testing.T) {
+	r := &Repo{dir: "/repo", nested: []string{"api", "api/lib"}}
+	for _, tc := range []struct{ path, dir, rel string }{
+		{"api/src/a.ts", "/repo/api", "src/a.ts"},
+		{"api/lib/b.ts", "/repo/api/lib", "b.ts"},
+		{"apix/c.ts", "/repo", "apix/c.ts"},
+		{"./README.md", "/repo", "README.md"},
+	} {
+		repo, rel, err := r.owner(tc.path)
+		if err != nil || repo.dir != tc.dir || rel != tc.rel {
+			t.Errorf("owner(%q) = %v %q %v, want %s %s", tc.path, repo, rel, err, tc.dir, tc.rel)
+		}
+	}
+	for _, bad := range []string{"../fora.txt", "/etc/passwd", "."} {
+		if _, _, err := r.owner(bad); err == nil {
+			t.Errorf("owner(%q) must fail", bad)
+		}
+	}
+}
+
+func TestChangedPathsCoversNestedDeletedAndUntracked(t *testing.T) {
+	r, root := newNestedRepo(t)
+	ctx := context.Background()
+	if got, err := r.ChangedPaths(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("clean tree = %v, %v", got, err)
+	}
+	write(t, root, "README.md", "alterado\n")
+	write(t, root, "novo dir/a b.txt", "x\n")
+	if err := os.Remove(filepath.Join(root, "api/src/service.ts")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "api/src/novo.ts", "x\n")
+	got, err := r.ChangedPaths(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "README.md,api/src/novo.ts,api/src/service.ts,novo dir/a b.txt"
+	if strings.Join(got, ",") != want {
+		t.Errorf("changed = %v, want %s", got, want)
+	}
+}
+
+func TestDeletedPathsListsOnlyRemovedTrackedFiles(t *testing.T) {
+	r, root := newNestedRepo(t)
+	ctx := context.Background()
+	write(t, root, "README.md", "alterado\n")
+	write(t, root, "api/src/novo.ts", "x\n")
+	if err := os.Remove(filepath.Join(root, "api/src/service.ts")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.DeletedPaths(ctx)
+	if err != nil || strings.Join(got, ",") != "api/src/service.ts" {
+		t.Errorf("deleted = %v, %v", got, err)
+	}
+}

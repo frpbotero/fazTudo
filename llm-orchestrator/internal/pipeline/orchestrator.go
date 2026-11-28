@@ -1157,6 +1157,9 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 		return true
 	}
 	title := o.stepTitle(ref)
+	// Removing a versioned file can be the task (a feature taken out), so it
+	// is not refused; it is never silent either, for the review to weigh.
+	deleted, _ := ss.git.DeletedPaths(ctx)
 	c, err := ss.git.CommitAll(ctx, fmt.Sprintf("faztudo(%s): %s", storyLabel(st.sc.Story), title), dependencyPaths(ss.git.Nested())...)
 	switch {
 	case err != nil:
@@ -1164,6 +1167,11 @@ func (o *Orchestrator) afterAgent(ctx context.Context, ss *session, st *storySta
 	case c != nil:
 		o.updateStep(ref, func(s *Step) { s.Commit = c })
 		o.logf(LevelInfo, "Commit %s: %s (%d arquivo(s)).", c.Hash, title, len(c.Files))
+		if len(deleted) > 0 {
+			note := fmt.Sprintf("removeu %d arquivo(s) versionado(s): %s", len(deleted), strings.Join(clipList(deleted, 5), ", "))
+			o.updateStep(ref, func(s *Step) { s.Note = strings.TrimPrefix(s.Note+"; "+note, "; ") })
+			o.logf(LevelWarn, "%s %s.", title, note)
+		}
 	}
 	if head, err := ss.git.Head(ctx); err == nil && ref.story >= 0 {
 		o.updateStory(ref.story, func(r *StoryRun) { r.Head = head })
