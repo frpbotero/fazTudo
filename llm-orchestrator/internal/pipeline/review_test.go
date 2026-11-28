@@ -283,6 +283,13 @@ func TestReviewerEditsWithoutGitAreReportedNotUndone(t *testing.T) {
 			writeFile(t, req.WorkDir, "impl.txt", "x\n")
 		case "rev":
 			writeFile(t, req.WorkDir, "rev.txt", "x\n")
+			// Linux stamps files with a coarse clock that can lag time.Now()
+			// by a few milliseconds; a real reviewer writes seconds after the
+			// step starts, so the file is dated as such.
+			later := time.Now().Add(time.Second)
+			if err := os.Chtimes(filepath.Join(req.WorkDir, "rev.txt"), later, later); err != nil {
+				t.Error(err)
+			}
 		}
 	}
 	_ = o.Start(realStory("Carrinho"))
